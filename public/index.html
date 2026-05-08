@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Protocol Proxy - 协议转换代理管理</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Protocol Proxy</h1>
+      <p>OpenAI / Anthropic 协议转换透明代理</p>
+    </header>
+
+    <div class="stats" id="stats">
+      <div class="stat-item">
+        <span class="stat-value" id="stat-total">0</span>
+        <span class="stat-label">代理配置</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-value" id="stat-running">0</span>
+        <span class="stat-label">运行中</span>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>代理列表</h2>
+        <button class="btn btn-primary" onclick="openModal()">+ 新建代理</button>
+      </div>
+      <div id="proxy-list" class="proxy-list">
+        <div class="empty">加载中...</div>
+      </div>
+    </section>
+
+    <!-- 编辑/创建弹窗 -->
+    <div class="modal" id="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="modal-title">新建代理</h3>
+          <button class="btn-close" onclick="closeModal()">&times;</button>
+        </div>
+        <form id="proxy-form" onsubmit="handleSubmit(event)">
+          <input type="hidden" id="proxy-id">
+          
+          <div class="form-group">
+            <label>代理名称</label>
+            <input type="text" id="proxy-name" required placeholder="例如：OpenAI 代理">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>监听端口</label>
+              <input type="number" id="proxy-port" required placeholder="8080" min="1000" max="65535">
+            </div>
+            <div class="form-group">
+              <label>Agent 认证</label>
+              <select id="proxy-auth">
+                <option value="false">不启用</option>
+                <option value="true">启用</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" id="auth-token-group" style="display:none">
+            <label>认证 Token</label>
+            <input type="text" id="proxy-auth-token" placeholder="Bearer Token">
+          </div>
+
+          <div class="target-section">
+            <h4>目标供应商配置</h4>
+            <div class="target-item">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>供应商地址</label>
+                  <input type="url" id="target-url" required placeholder="https://api.openai.com">
+                </div>
+                <div class="form-group">
+                  <label>目标协议</label>
+                  <select id="target-protocol">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>默认 Model（可选）</label>
+                  <input type="hidden" id="target-model">
+                  <div class="model-dropdown" id="model-dropdown">
+                    <div class="model-dropdown-trigger" id="model-dropdown-trigger">
+                      <span id="model-dropdown-value">选择模型...</span>
+                      <span class="model-dropdown-arrow">&#9662;</span>
+                    </div>
+                    <div class="model-dropdown-menu" id="model-dropdown-menu">
+                      <div class="model-dropdown-options" id="model-dropdown-options"></div>
+                      <div class="model-add-section">
+                        <input type="text" class="model-add-input" id="model-add-input" placeholder="输入模型名称">
+                        <button type="button" class="btn btn-primary btn-sm" id="model-add-btn">添加</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>API Key</label>
+                  <input type="password" id="target-key" placeholder="sk-...">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn" onclick="closeModal()">取消</button>
+            <button type="submit" class="btn btn-primary">保存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- 确认弹窗 -->
+  <div class="modal confirm-modal" id="confirm-modal">
+    <div class="confirm-box">
+      <div class="confirm-icon" id="confirm-icon">!</div>
+      <p class="confirm-text" id="confirm-text"></p>
+      <div class="confirm-actions">
+        <button class="btn" id="confirm-cancel">取消</button>
+        <button class="btn btn-danger" id="confirm-ok">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

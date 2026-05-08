@@ -1,0 +1,53 @@
+{
+  "name": "protocol-proxy",
+  "version": "1.0.3",
+  "description": "OpenAI / Anthropic 协议转换透明代理",
+  "main": "server.js",
+  "bin": {
+    "protocol-proxy": "server.js"
+  },
+  "files": [
+    "server.js",
+    "lib/",
+    "public/",
+    "config/",
+    "README.md"
+  ],
+  "keywords": [
+    "proxy",
+    "openai",
+    "anthropic",
+    "api",
+    "protocol-converter"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "build": "pkg . --out-path=dist"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "scripts": [
+      "lib/**/*.js"
+    ],
+    "assets": [
+      "public/**/*"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "dist",
+    "options": [
+      "--experimental-fetch"
+    ]
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

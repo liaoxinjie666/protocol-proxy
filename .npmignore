@@ -1,0 +1,8 @@
+dist/
+node_modules/
+*.log
+stderr.log
+stdout.log
+proxy.log
+test-*.js
+.git/

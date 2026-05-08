@@ -1,0 +1,354 @@
+#!/usr/bin/env node
+const path = require('path');
+const { exec, spawn } = require('child_process');
+const os = require('os');
+const fs = require('fs');
+
+// ==================== CLI ====================
+
+const PID_FILE = path.join(os.tmpdir(), 'protocol-proxy.pid');
+const pkg = require('./package.json');
+
+function writePid() {
+  try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
+}
+
+function readPid() {
+  try { return parseInt(fs.readFileSync(PID_FILE, 'utf8').trim()); } catch { return null; }
+}
+
+function removePid() {
+  try { fs.unlinkSync(PID_FILE); } catch {}
+}
+
+function isProcessAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function showHelp() {
+  console.log(`
+protocol-proxy - OpenAI / Anthropic 协议转换透明代理
+
+用法:
+  protocol-proxy              前台启动服务（Ctrl+C 停止）
+  protocol-proxy start        后台启动服务
+  protocol-proxy stop         停止后台服务
+  protocol-proxy status       查看运行状态
+  protocol-proxy help         显示帮助信息
+  protocol-proxy -v, --version 显示版本号
+  protocol-proxy update       更新到最新版本
+`);
+}
+
+function startDaemon() {
+  const pid = readPid();
+  if (pid && isProcessAlive(pid)) {
+    console.log(`服务已在运行 (PID: ${pid})`);
+    return;
+  }
+
+  const child = spawn(process.execPath, [__filename, '--daemon'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  fs.writeFileSync(PID_FILE, String(child.pid));
+  child.unref();
+  console.log(`服务已在后台启动 (PID: ${child.pid})`);
+}
+
+function showVersion() {
+  console.log(pkg.version);
+}
+
+function showStatus() {
+  const pid = readPid();
+  if (pid && isProcessAlive(pid)) {
+    console.log(`服务正在运行 (PID: ${pid})`);
+    const configStore = require('./lib/config-store');
+    const proxies = configStore.getProxies();
+    if (proxies.length > 0) {
+      console.log(`\n已配置的代理 (${proxies.length} 个):`);
+      for (const p of proxies) {
+        console.log(`  - ${p.name}: 端口 ${p.port} → ${p.target?.providerUrl || '未设置'}`);
+      }
+    }
+  } else {
+    removePid();
+    console.log('服务未运行');
+  }
+}
+
+function stopService() {
+  const pid = readPid();
+  if (!pid || !isProcessAlive(pid)) {
+    removePid();
+    console.log('服务未运行');
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+    removePid();
+    console.log(`服务已停止 (PID: ${pid})`);
+  } catch (err) {
+    console.error('停止服务失败:', err.message);
+    removePid();
+  }
+}
+
+function updateService() {
+  console.log('正在更新 protocol-proxy...');
+  exec('npm install -g protocol-proxy@latest', (err, stdout, stderr) => {
+    if (err) {
+      console.error('更新失败:', err.message);
+      process.exit(1);
+    }
+    if (stdout) console.log(stdout);
+    if (stderr) console.error(stderr);
+    console.log('更新完成');
+  });
+}
+
+// ==================== 启动 ====================
+
+async function init() {
+  const express = require('express');
+  const cors = require('cors');
+  const configStore = require('./lib/config-store');
+  const proxyManager = require('./lib/proxy-manager');
+
+  const app = express();
+  const PORT = process.env.ADMIN_PORT || 3000;
+
+  function openBrowser(url) {
+    const platform = os.platform();
+    let command;
+    if (platform === 'win32') {
+      command = `start "" "${url}"`;
+    } else if (platform === 'darwin') {
+      command = `open "${url}"`;
+    } else {
+      command = `xdg-open "${url}"`;
+    }
+    exec(command, (err) => {
+      if (err) console.error('[Browser] 打开浏览器失败:', err.message);
+    });
+  }
+
+  app.use(cors());
+  app.use(express.json());
+  app.use(express.static(path.join(__dirname, 'public')));
+
+  // ==================== 管理 API ====================
+
+  // 获取所有代理配置
+  app.get('/api/proxies', (req, res) => {
+    const proxies = configStore.getProxies().map(p => ({
+      ...p,
+      target: p.target ? {
+        ...p.target,
+        apiKey: p.target.apiKey ? '***' : '',
+      } : null,
+      running: proxyManager.isRunning(p.id),
+    }));
+    res.json(proxies);
+  });
+
+  // 获取单个代理配置（含敏感信息）
+  app.get('/api/proxies/:id', (req, res) => {
+    const proxy = configStore.getProxyById(req.params.id);
+    if (!proxy) return res.status(404).json({ error: 'Proxy not found' });
+    res.json(proxy);
+  });
+
+  // 创建代理
+  app.post('/api/proxies', async (req, res) => {
+    const { name, port, requireAuth, authToken, target } = req.body;
+
+    if (!name || !port || !target) {
+      return res.status(400).json({ error: 'name, port and target are required' });
+    }
+
+    const parsedPort = parseInt(port);
+
+    // 端口冲突校验
+    const existing = configStore.getProxies().find(p => p.port === parsedPort);
+    if (existing) {
+      return res.status(409).json({
+        error: `端口 ${parsedPort} 已被代理「${existing.name}」占用，请更换端口`,
+      });
+    }
+
+    const proxy = configStore.addProxy({
+      name,
+      port: parsedPort,
+      requireAuth: !!requireAuth,
+      authToken: authToken || null,
+      target,
+    });
+
+    try {
+      await proxyManager.startProxy(proxy);
+      res.status(201).json({ ...proxy, running: true });
+    } catch (err) {
+      // 启动失败，回滚已保存的配置
+      configStore.removeProxy(proxy.id);
+      res.status(500).json({ error: `代理启动失败: ${err.message}` });
+    }
+  });
+
+  // 更新代理
+  app.put('/api/proxies/:id', async (req, res) => {
+    const { name, port, requireAuth, authToken, target } = req.body;
+    const existing = configStore.getProxyById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Proxy not found' });
+
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (port !== undefined) updates.port = parseInt(port);
+    if (requireAuth !== undefined) updates.requireAuth = !!requireAuth;
+    if (authToken !== undefined) updates.authToken = authToken || null;
+    if (target !== undefined) updates.target = target;
+
+    // 端口变更时校验冲突
+    const needRestart = updates.port !== undefined && updates.port !== existing.port;
+    if (needRestart) {
+      const conflict = configStore.getProxies().find(p => p.id !== req.params.id && p.port === updates.port);
+      if (conflict) {
+        return res.status(409).json({
+          error: `端口 ${updates.port} 已被代理「${conflict.name}」占用，请更换端口`,
+        });
+      }
+    }
+
+    const updated = configStore.updateProxy(req.params.id, updates);
+
+    if (needRestart) {
+      try {
+        await proxyManager.restartProxy(updated);
+      } catch (err) {
+        return res.status(500).json({ error: `代理重启失败: ${err.message}` });
+      }
+    } else {
+      proxyManager.updateProxyConfig(updated);
+    }
+
+    res.json({ ...updated, running: proxyManager.isRunning(updated.id) });
+  });
+
+  // 删除代理
+  app.delete('/api/proxies/:id', async (req, res) => {
+    const existing = configStore.getProxyById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Proxy not found' });
+
+    await proxyManager.stopProxy(req.params.id);
+    configStore.removeProxy(req.params.id);
+    res.json({ success: true });
+  });
+
+  // 启动/停止代理
+  app.post('/api/proxies/:id/start', async (req, res) => {
+    const proxy = configStore.getProxyById(req.params.id);
+    if (!proxy) return res.status(404).json({ error: 'Proxy not found' });
+
+    try {
+      await proxyManager.startProxy(proxy);
+      res.json({ success: true, running: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to start proxy', message: err.message });
+    }
+  });
+
+  app.post('/api/proxies/:id/stop', async (req, res) => {
+    await proxyManager.stopProxy(req.params.id);
+    res.json({ success: true, running: false });
+  });
+
+  // 获取运行状态
+  app.get('/api/status', (req, res) => {
+    res.json({
+      running: proxyManager.getRunningPorts(),
+      total: configStore.getProxies().length,
+    });
+  });
+
+  // 前端首页
+  app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
+
+  // 启动
+  writePid();
+
+  // 启动所有已配置的代理
+  const proxies = configStore.getProxies();
+  for (const proxy of proxies) {
+    try {
+      await proxyManager.startProxy(proxy);
+    } catch (err) {
+      console.error(`[Init] Failed to start proxy ${proxy.name}:`, err.message);
+    }
+  }
+
+  app.listen(PORT, () => {
+    const adminUrl = `http://localhost:${PORT}`;
+    console.log(`[Admin] Management server running on ${adminUrl}`);
+    console.log(`[Admin] ${proxies.length} proxy config(s) loaded`);
+    openBrowser(adminUrl);
+  });
+}
+
+// 优雅关闭
+process.on('SIGINT', async () => {
+  console.log('\nShutting down...');
+  removePid();
+  try {
+    const proxyManager = require('./lib/proxy-manager');
+    await proxyManager.stopAll();
+  } catch {}
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  removePid();
+  try {
+    const proxyManager = require('./lib/proxy-manager');
+    await proxyManager.stopAll();
+  } catch {}
+  process.exit(0);
+});
+
+// ==================== CLI Dispatch ====================
+
+const cmd = process.argv[2];
+
+switch (cmd) {
+  case 'help':
+    showHelp();
+    break;
+  case '-v':
+  case '--version':
+    showVersion();
+    break;
+  case 'update':
+    updateService();
+    break;
+  case 'stop':
+    stopService();
+    break;
+  case 'status':
+    showStatus();
+    break;
+  case 'start':
+    startDaemon();
+    break;
+  case '--daemon':
+    init();
+    break;
+  case undefined:
+    init();
+    break;
+  default:
+    console.error(`未知命令: ${cmd}`);
+    showHelp();
+    process.exit(1);
+}
