@@ -40,7 +40,6 @@ function initProviderDropdown() {
   const dropdown = document.getElementById('provider-dropdown');
   const addNameInput = document.getElementById('provider-add-name');
   const addUrlInput = document.getElementById('provider-add-url');
-  const addKeyInput = document.getElementById('provider-add-key');
   const addBtn = document.getElementById('provider-add-btn');
 
   trigger.addEventListener('click', (e) => {
@@ -50,7 +49,6 @@ function initProviderDropdown() {
       editingProviderId = null;
       addNameInput.value = '';
       addUrlInput.value = '';
-      addKeyInput.value = '';
       addUrlInput.disabled = false;
       addBtn.textContent = '添加';
       renderProviderOptions();
@@ -67,7 +65,6 @@ function initProviderDropdown() {
   addBtn.addEventListener('click', async () => {
     const name = addNameInput.value.trim();
     const url = addUrlInput.value.trim();
-    const apiKey = addKeyInput.value.trim();
     if (!name || !url) {
       showToast('请填写供应商名称和地址', true);
       return;
@@ -79,14 +76,14 @@ function initProviderDropdown() {
         res = await fetch(`/api/providers/${editingProviderId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, apiKey }),
+          body: JSON.stringify({ name }),
         });
       } else {
         // 新增模式
         res = await fetch('/api/providers', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, url, apiKey }),
+          body: JSON.stringify({ name, url }),
         });
       }
       if (!res.ok) {
