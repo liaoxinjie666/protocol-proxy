@@ -527,6 +527,7 @@ function closeModal() {
   document.getElementById('model-dropdown').classList.remove('open');
   document.getElementById('provider-dropdown').classList.remove('open');
   editingId = null;
+  editingProviderId = null;
 }
 
 async function handleSubmit(e) {
@@ -556,13 +557,19 @@ async function handleSubmit(e) {
   if (protocol) providerUpdates.protocol = protocol;
   if (Object.keys(providerUpdates).length > 0) {
     try {
-      await fetch(`/api/providers/${providerId}`, {
+      const res = await fetch(`/api/providers/${providerId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(providerUpdates),
       });
+      if (!res.ok) {
+        const err = await res.json();
+        showToast('供应商配置保存失败: ' + (err.error || '未知错误'), true);
+      }
       await loadProviders();
-    } catch {}
+    } catch (err) {
+      showToast('供应商配置保存失败: ' + err.message, true);
+    }
   }
 
   const payload = {
@@ -606,7 +613,7 @@ async function startProxy(id) {
     await fetch(`/api/proxies/${id}/start`, { method: 'POST' });
     await loadProxies();
   } catch (err) {
-    alert('启动失败: ' + err.message);
+    showToast('启动失败: ' + err.message, true);
   }
 }
 
@@ -615,7 +622,7 @@ async function stopProxy(id) {
     await fetch(`/api/proxies/${id}/stop`, { method: 'POST' });
     await loadProxies();
   } catch (err) {
-    alert('停止失败: ' + err.message);
+    showToast('停止失败: ' + err.message, true);
   }
 }
 

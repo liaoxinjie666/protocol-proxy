@@ -10,7 +10,9 @@ const PID_FILE = path.join(os.tmpdir(), 'protocol-proxy.pid');
 const pkg = require('./package.json');
 
 function writePid() {
-  try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch {}
+  try { fs.writeFileSync(PID_FILE, String(process.pid)); } catch (err) {
+    console.error('[PID] 写入失败:', err.message);
+  }
 }
 
 function readPid() {
@@ -18,7 +20,9 @@ function readPid() {
 }
 
 function removePid() {
-  try { fs.unlinkSync(PID_FILE); } catch {}
+  try { fs.unlinkSync(PID_FILE); } catch (err) {
+    console.error('[PID] 删除失败:', err.message);
+  }
 }
 
 function isProcessAlive(pid) {
@@ -136,6 +140,17 @@ async function init() {
 
   app.use(cors());
   app.use(express.json());
+
+  // 访问日志
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      console.log(`[HTTP] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+    });
+    next();
+  });
+
   app.use(express.static(path.join(__dirname, 'public')));
 
   // ==================== 辅助函数 ====================
@@ -380,6 +395,19 @@ async function init() {
     res.json({
       running: proxyManager.getRunningPorts(),
       total: configStore.getProxies().length,
+    });
+  });
+
+  // 健康检查
+  app.get('/api/health', (req, res) => {
+    res.json({
+      status: 'ok',
+      version: pkg.version,
+      uptime: process.uptime(),
+      proxies: {
+        total: configStore.getProxies().length,
+        running: proxyManager.getRunningPorts().length,
+      },
     });
   });
 
