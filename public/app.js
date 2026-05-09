@@ -25,7 +25,8 @@ function findProviderByUrl(url) {
   return loadProviders().find(p => p.url === url);
 }
 
-function getProviderDisplayName(url) {
+function getProviderDisplayName(url, serverName) {
+  if (serverName && serverName !== url) return serverName;
   const p = findProviderByUrl(url);
   return p ? p.name : url;
 }
@@ -405,7 +406,7 @@ function renderProxies() {
 
   container.innerHTML = proxies.map(p => {
     const t = p.target || {};
-    const providerName = getProviderDisplayName(t.providerUrl || '');
+    const providerName = getProviderDisplayName(t.providerUrl || '', t.providerName);
     return `
     <div class="proxy-item">
       <div class="proxy-header">
@@ -541,8 +542,10 @@ async function handleSubmit(e) {
     return;
   }
 
+  const provider = findProviderByUrl(providerUrl);
   const target = {
     providerUrl,
+    providerName: provider?.name || providerUrl,
     protocol: detectProtocol(providerUrl),
     defaultModel: document.getElementById('target-model').value.trim() || undefined,
     models: getSelectedModels(),
