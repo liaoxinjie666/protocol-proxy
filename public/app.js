@@ -1,63 +1,188 @@
 let proxies = [];
 let editingId = null;
 
-// ==================== Model 管理（按代理独立） ====================
-function getLegacyModelKey(proxyId) {
-  return `protocol-proxy-models-${proxyId || '__new'}`;
+// ==================== 供应商管理（全局共享） ====================
+const PROVIDERS_KEY = 'protocol-proxy-providers';
+
+function loadProviders() {
+  try {
+    return JSON.parse(localStorage.getItem(PROVIDERS_KEY)) || [];
+  } catch { return []; }
 }
 
-function getModelKey(proxyId) {
-  return getLegacyModelKey(proxyId);
+function saveProviders(providers) {
+  localStorage.setItem(PROVIDERS_KEY, JSON.stringify(providers));
 }
 
-function loadLegacyModels(proxyId) {
-  const saved = localStorage.getItem(getLegacyModelKey(proxyId));
+function addProvider(name, url) {
+  const providers = loadProviders();
+  if (providers.some(p => p.url === url)) return;
+  providers.push({ id: 'p-' + Date.now(), name, url, protocol: detectProtocol(url) });
+  saveProviders(providers);
+}
+
+function findProviderByUrl(url) {
+  return loadProviders().find(p => p.url === url);
+}
+
+function getProviderDisplayName(url) {
+  const p = findProviderByUrl(url);
+  return p ? p.name : url;
+}
+
+function detectProtocol(url) {
+  return /anthropic/i.test(url) ? 'anthropic' : 'openai';
+}
+
+// ==================== Model 管理（按供应商 URL） ====================
+function getModelKey(providerUrl) {
+  return providerUrl ? `protocol-proxy-models-${providerUrl}` : 'protocol-proxy-models-__new';
+}
+
+function loadModelsByProvider(providerUrl) {
+  const saved = localStorage.getItem(getModelKey(providerUrl));
   if (saved) {
     try { return JSON.parse(saved); } catch { /* fall through */ }
   }
   return [];
 }
 
-function loadModels(proxyId) {
-  const proxy = proxyId ? proxies.find(p => p.id === proxyId) : null;
-  const serverModels = proxy?.target?.models;
-  if (Array.isArray(serverModels)) {
-    return serverModels.filter(Boolean);
-  }
-
-  return loadLegacyModels(proxyId);
-}
-
-function saveModels(proxyId, models) {
+function saveModelsByProvider(providerUrl, models) {
   const normalized = Array.from(new Set((models || []).map(m => m.trim()).filter(Boolean)));
-  if (proxyId) {
-    const proxy = proxies.find(p => p.id === proxyId);
-    if (proxy) {
-      proxy.target = proxy.target || {};
-      proxy.target.models = normalized;
-    }
-    return;
-  }
-  localStorage.setItem(getLegacyModelKey(proxyId), JSON.stringify(normalized));
+  localStorage.setItem(getModelKey(providerUrl), JSON.stringify(normalized));
 }
 
-function addModel(proxyId, name) {
-  const models = loadModels(proxyId);
+function addModel(providerUrl, name) {
+  if (!providerUrl) return;
+  const models = loadModelsByProvider(providerUrl);
   if (!models.includes(name)) {
     models.push(name);
-    saveModels(proxyId, models);
+    saveModelsByProvider(providerUrl, models);
   }
 }
 
-function removeModel(proxyId, name) {
-  const models = loadModels(proxyId).filter(m => m !== name);
-  saveModels(proxyId, models);
+function removeModel(providerUrl, name) {
+  const models = loadModelsByProvider(providerUrl).filter(m => m !== name);
+  saveModelsByProvider(providerUrl, models);
 }
 
 function getCurrentProxyId() {
   return document.getElementById('modal').dataset.proxyId || null;
 }
 
+function getSelectedProviderUrl() {
+  return document.getElementById('target-url').value || '';
+}
+
+// ==================== 供应商下拉框 ====================
+function initProviderDropdown() {
+  const trigger = document.getElementById('provider-dropdown-trigger');
+  const dropdown = document.getElementById('provider-dropdown');
+  const addNameInput = document.getElementById('provider-add-name');
+  const addUrlInput = document.getElementById('provider-add-url');
+  const addBtn = document.getElementById('provider-add-btn');
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+    if (dropdown.classList.contains('open')) {
+      addNameInput.value = '';
+      addUrlInput.value = '';
+      renderProviderOptions();
+      addNameInput.focus();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target)) {
+      dropdown.classList.remove('open');
+    }
+  });
+
+  addBtn.addEventListener('click', () => {
+    const name = addNameInput.value.trim();
+    const url = addUrlInput.value.trim();
+    if (!name || !url) {
+      showToast('请填写供应商名称和地址', true);
+      return;
+    }
+    addProvider(name, url);
+    selectProvider(url);
+    dropdown.classList.remove('open');
+  });
+
+  addUrlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addBtn.click();
+    }
+    if (e.key === 'Escape') {
+      dropdown.classList.remove('open');
+    }
+  });
+
+  addNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      dropdown.classList.remove('open');
+    }
+  });
+}
+
+function renderProviderOptions() {
+  const container = document.getElementById('provider-dropdown-options');
+  const providers = loadProviders();
+  const currentUrl = getSelectedProviderUrl();
+
+  container.innerHTML = providers.map(p => `
+    <div class="model-option${p.url === currentUrl ? ' selected' : ''}" data-url="${escapeHtml(p.url)}">
+      <span class="model-option-name">${escapeHtml(p.name)}</span>
+      <span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>
+      <button type="button" class="model-option-delete" data-delete-url="${escapeHtml(p.url)}" title="删除此供应商">&times;</button>
+    </div>
+  `).join('');
+
+  if (providers.length === 0) {
+    container.innerHTML = '<div style="padding:8px 12px;color:#64748b;font-size:13px">暂无供应商，请在下方添加</div>';
+  }
+
+  container.querySelectorAll('.model-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      if (e.target.closest('.model-option-delete')) return;
+      selectProvider(opt.dataset.url);
+      document.getElementById('provider-dropdown').classList.remove('open');
+    });
+  });
+
+  container.querySelectorAll('.model-option-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const url = btn.dataset.deleteUrl;
+      const p = findProviderByUrl(url);
+      const ok = await showConfirm(`确定要删除供应商 <strong>${escapeHtml(p?.name || url)}</strong> 吗？`);
+      if (!ok) return;
+      const providers = loadProviders().filter(pr => pr.url !== url);
+      saveProviders(providers);
+      if (getSelectedProviderUrl() === url) {
+        selectProvider('');
+      }
+      renderProviderOptions();
+    });
+  });
+}
+
+function selectProvider(url) {
+  document.getElementById('target-url').value = url || '';
+  const provider = findProviderByUrl(url);
+  document.getElementById('target-protocol').value = url ? (provider?.protocol || detectProtocol(url)) : '';
+  document.getElementById('provider-dropdown-value').textContent = url
+    ? (provider ? `${provider.name} - ${url}` : url)
+    : '选择供应商...';
+  // 切换供应商后刷新模型列表
+  renderModelOptions();
+  updateModelAddState();
+}
+
+// ==================== Model 下拉框 ====================
 function initModelDropdown() {
   const trigger = document.getElementById('model-dropdown-trigger');
   const dropdown = document.getElementById('model-dropdown');
@@ -80,10 +205,14 @@ function initModelDropdown() {
   });
 
   addBtn.addEventListener('click', () => {
+    const providerUrl = getSelectedProviderUrl();
+    if (!providerUrl) {
+      showToast('请先选择供应商地址', true);
+      return;
+    }
     const name = addInput.value.trim();
     if (!name) return;
-    const proxyId = getCurrentProxyId();
-    addModel(proxyId, name);
+    addModel(providerUrl, name);
     selectModel(name);
     renderModelOptions();
     addInput.value = '';
@@ -103,8 +232,8 @@ function initModelDropdown() {
 
 function renderModelOptions() {
   const container = document.getElementById('model-dropdown-options');
-  const proxyId = getCurrentProxyId();
-  const models = loadModels(proxyId);
+  const providerUrl = getSelectedProviderUrl();
+  const models = providerUrl ? loadModelsByProvider(providerUrl) : [];
   const current = document.getElementById('target-model').value;
 
   container.innerHTML = models.map(m => `
@@ -113,6 +242,12 @@ function renderModelOptions() {
       <button type="button" class="model-option-delete" data-delete="${escapeHtml(m)}" title="删除此模型">&times;</button>
     </div>
   `).join('');
+
+  if (!providerUrl) {
+    container.innerHTML = '<div style="padding:8px 12px;color:#64748b;font-size:13px">请先选择供应商</div>';
+  } else if (models.length === 0) {
+    container.innerHTML = '<div style="padding:8px 12px;color:#64748b;font-size:13px">暂无模型，请在下方添加</div>';
+  }
 
   container.querySelectorAll('.model-option').forEach(opt => {
     opt.addEventListener('click', (e) => {
@@ -128,8 +263,7 @@ function renderModelOptions() {
       const name = btn.dataset.delete;
       const ok = await showConfirm(`确定要删除模型 <strong>${escapeHtml(name)}</strong> 吗？`);
       if (!ok) return;
-      const pid = getCurrentProxyId();
-      removeModel(pid, name);
+      removeModel(getSelectedProviderUrl(), name);
       if (document.getElementById('target-model').value === name) {
         selectModel('');
       }
@@ -144,9 +278,25 @@ function selectModel(value) {
   renderModelOptions();
 }
 
+function updateModelAddState() {
+  const section = document.getElementById('model-add-section');
+  const providerUrl = getSelectedProviderUrl();
+  const addInput = document.getElementById('model-add-input');
+  const addBtn = document.getElementById('model-add-btn');
+  if (providerUrl) {
+    addInput.disabled = false;
+    addBtn.disabled = false;
+    addInput.placeholder = '输入模型名称';
+  } else {
+    addInput.disabled = true;
+    addBtn.disabled = true;
+    addInput.placeholder = '请先选择供应商';
+  }
+}
+
 function getSelectedModels() {
-  const proxyId = getCurrentProxyId();
-  const models = [...loadModels(proxyId), ...loadLegacyModels(proxyId)];
+  const providerUrl = getSelectedProviderUrl();
+  const models = providerUrl ? [...loadModelsByProvider(providerUrl)] : [];
   const current = document.getElementById('target-model').value.trim();
   if (current && !models.includes(current)) {
     models.unshift(current);
@@ -163,6 +313,7 @@ function generateToken() {
 
 async function init() {
   await loadProxies();
+  initProviderDropdown();
   initModelDropdown();
   document.getElementById('proxy-auth').addEventListener('change', (e) => {
     const enabled = e.target.value === 'true';
@@ -253,6 +404,7 @@ function renderProxies() {
 
   container.innerHTML = proxies.map(p => {
     const t = p.target || {};
+    const providerName = getProviderDisplayName(t.providerUrl || '');
     return `
     <div class="proxy-item">
       <div class="proxy-header">
@@ -277,17 +429,17 @@ function renderProxies() {
       <table class="target-table">
         <thead>
           <tr>
-            <th>供应商地址</th>
+            <th>供应商</th>
             <th>协议</th>
             <th>默认 Model</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>${escapeHtml(t.providerUrl)}</td>
+            <td>${escapeHtml(providerName)}${providerName !== t.providerUrl ? ` <span style="color:#64748b;font-size:12px">(${escapeHtml(t.providerUrl)})</span>` : ''}</td>
             <td>
               <span class="badge" style="background:${t.protocol==='openai'?'#0c4a6e':'#581c87'};color:${t.protocol==='openai'?'#7dd3fc':'#e9d5ff'}">
-                ${t.protocol}
+                ${t.protocol || '-'}
               </span>
             </td>
             <td><code>${escapeHtml(t.defaultModel) || '-'}</code></td>
@@ -323,35 +475,40 @@ function openModal(id = null) {
     document.getElementById('proxy-auth').value = p.requireAuth ? 'true' : 'false';
     document.getElementById('proxy-auth-token').value = p.authToken || '';
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
-    document.getElementById('target-url').value = t.providerUrl || '';
-    document.getElementById('target-protocol').value = t.protocol || 'openai';
     document.getElementById('target-key').value = t.apiKey || '';
-    if ((!Array.isArray(t.models) || t.models.length === 0)) {
-      const legacyModels = loadModels(id);
-      if (legacyModels.length > 0) {
-        p.target = p.target || {};
-        p.target.models = legacyModels;
-      }
+
+    // 自动注册供应商到全局列表
+    if (t.providerUrl && !findProviderByUrl(t.providerUrl)) {
+      addProvider(getProviderDisplayName(t.providerUrl), t.providerUrl);
     }
+    selectProvider(t.providerUrl || '');
     selectModel(t.defaultModel || '');
   } else {
     document.getElementById('proxy-id').value = '';
     document.getElementById('auth-token-group').style.display = 'none';
-    const models = loadModels(null);
-    selectModel(models[0] || '');
+    selectProvider('');
+    selectModel('');
   }
 
+  updateModelAddState();
   document.getElementById('modal').classList.add('active');
 }
 
 function closeModal() {
   document.getElementById('modal').classList.remove('active');
   document.getElementById('model-dropdown').classList.remove('open');
+  document.getElementById('provider-dropdown').classList.remove('open');
   editingId = null;
 }
 
 async function handleSubmit(e) {
   e.preventDefault();
+
+  const providerUrl = getSelectedProviderUrl();
+  if (!providerUrl) {
+    showToast('请选择供应商地址', true);
+    return;
+  }
 
   const port = parseInt(document.getElementById('proxy-port').value);
 
@@ -363,8 +520,8 @@ async function handleSubmit(e) {
   }
 
   const target = {
-    providerUrl: document.getElementById('target-url').value.trim(),
-    protocol: document.getElementById('target-protocol').value,
+    providerUrl,
+    protocol: detectProtocol(providerUrl),
     defaultModel: document.getElementById('target-model').value.trim() || undefined,
     models: getSelectedModels(),
     apiKey: document.getElementById('target-key').value.trim(),
@@ -393,15 +550,6 @@ async function handleSubmit(e) {
       showToast(result.error || '操作失败', true);
       await loadProxies();
       return;
-    }
-
-    // 新建代理后，将临时模型列表迁移到真实 ID 下
-    if (!editingId && result.id) {
-      const tempModels = loadModels(null);
-      if (tempModels.length > 0) {
-        saveModels(result.id, tempModels);
-      }
-      localStorage.removeItem(getModelKey(null));
     }
 
     closeModal();
@@ -437,7 +585,6 @@ async function deleteProxy(id) {
   if (!ok) return;
   try {
     await fetch(`/api/proxies/${id}`, { method: 'DELETE' });
-    localStorage.removeItem(getModelKey(id));
     await loadProxies();
   } catch (err) {
     showToast('删除失败: ' + err.message, true);
@@ -449,7 +596,6 @@ async function editProxy(id) {
     const res = await fetch(`/api/proxies/${id}`);
     if (!res.ok) throw new Error('加载失败');
     const full = await res.json();
-    // 用完整数据替换列表中的掩码数据
     const idx = proxies.findIndex(p => p.id === id);
     if (idx !== -1) proxies[idx] = { ...proxies[idx], ...full };
     openModal(id);

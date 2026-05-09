@@ -74,14 +74,25 @@
               <div class="form-row">
                 <div class="form-group">
                   <label>供应商地址</label>
-                  <input type="url" id="target-url" required placeholder="https://api.openai.com">
+                  <input type="hidden" id="target-url">
+                  <div class="model-dropdown" id="provider-dropdown">
+                    <div class="model-dropdown-trigger" id="provider-dropdown-trigger">
+                      <span id="provider-dropdown-value">选择供应商...</span>
+                      <span class="model-dropdown-arrow">&#9662;</span>
+                    </div>
+                    <div class="model-dropdown-menu" id="provider-dropdown-menu">
+                      <div class="model-dropdown-options" id="provider-dropdown-options"></div>
+                      <div class="model-add-section">
+                        <input type="text" class="model-add-input" id="provider-add-name" placeholder="供应商名称">
+                        <input type="url" class="model-add-input" id="provider-add-url" placeholder="https://api.example.com">
+                        <button type="button" class="btn btn-primary btn-sm" id="provider-add-btn">添加</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="form-group">
                   <label>目标协议</label>
-                  <select id="target-protocol">
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                  </select>
+                  <input type="text" id="target-protocol" readonly placeholder="自动识别" style="background:#1e293b;color:#94a3b8;cursor:not-allowed">
                 </div>
               </div>
               <div class="form-row">
@@ -95,7 +106,7 @@
                     </div>
                     <div class="model-dropdown-menu" id="model-dropdown-menu">
                       <div class="model-dropdown-options" id="model-dropdown-options"></div>
-                      <div class="model-add-section">
+                      <div class="model-add-section" id="model-add-section">
                         <input type="text" class="model-add-input" id="model-add-input" placeholder="输入模型名称">
                         <button type="button" class="btn btn-primary btn-sm" id="model-add-btn">添加</button>
                       </div>
