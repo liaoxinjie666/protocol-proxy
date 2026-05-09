@@ -201,14 +201,6 @@ function selectProvider(id) {
   const models = provider?.models || [];
   selectModel(models[0] || '');
   updateModelAddState();
-  // 加载供应商的 API Key
-  if (id) {
-    fetch(`/api/providers/${id}`).then(r => r.json()).then(p => {
-      document.getElementById('target-key').value = p.apiKey || '';
-    }).catch(() => {});
-  } else {
-    document.getElementById('target-key').value = '';
-  }
 }
 
 // ==================== Model 下拉框 ====================
@@ -498,12 +490,6 @@ function openModal(id = null) {
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
     selectProvider(p.providerId || '');
     selectModel(p.defaultModel || '');
-    // 加载供应商的 API Key
-    if (p.providerId) {
-      fetch(`/api/providers/${p.providerId}`).then(r => r.json()).then(provider => {
-        document.getElementById('target-key').value = provider.apiKey || '';
-      }).catch(() => {});
-    }
   } else {
     document.getElementById('proxy-id').value = '';
     document.getElementById('auth-token-group').style.display = 'none';

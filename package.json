@@ -1,6 +1,6 @@
 {
   "name": "protocol-proxy",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "OpenAI / Anthropic 协议转换透明代理",
   "main": "server.js",
   "bin": {

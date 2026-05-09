@@ -190,7 +190,7 @@ async function init() {
   app.get('/api/providers/:id', (req, res) => {
     const provider = configStore.getProviderById(req.params.id);
     if (!provider) return res.status(404).json({ error: 'Provider not found' });
-    res.json(provider);
+    res.json({ ...provider, apiKey: provider.apiKey ? '***' : '' });
   });
 
   app.post('/api/providers', (req, res) => {
