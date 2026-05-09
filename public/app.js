@@ -75,6 +75,27 @@ function getSelectedProviderUrl() {
   return document.getElementById('target-url').value || '';
 }
 
+// ==================== API Key 管理（按供应商 URL） ====================
+function getApiKeyKey(providerUrl) {
+  return providerUrl ? `protocol-proxy-apikey-${providerUrl}` : null;
+}
+
+function loadApiKey(providerUrl) {
+  const key = getApiKeyKey(providerUrl);
+  if (!key) return '';
+  return localStorage.getItem(key) || '';
+}
+
+function saveApiKey(providerUrl, apiKey) {
+  const key = getApiKeyKey(providerUrl);
+  if (!key) return;
+  if (apiKey) {
+    localStorage.setItem(key, apiKey);
+  } else {
+    localStorage.removeItem(key);
+  }
+}
+
 // ==================== 供应商下拉框 ====================
 function initProviderDropdown() {
   const trigger = document.getElementById('provider-dropdown-trigger');
@@ -191,9 +212,13 @@ function selectProvider(url) {
   } else {
     document.getElementById('provider-dropdown-value').textContent = '选择供应商...';
   }
-  // 切换供应商后刷新模型列表
+  // 切换供应商后刷新模型列表和 API Key
   renderModelOptions();
   updateModelAddState();
+  if (url) {
+    const savedKey = loadApiKey(url);
+    if (savedKey) document.getElementById('target-key').value = savedKey;
+  }
 }
 
 // ==================== Model 下拉框 ====================
@@ -490,6 +515,10 @@ function openModal(id = null) {
     document.getElementById('proxy-auth-token').value = p.authToken || '';
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
     document.getElementById('target-key').value = t.apiKey || '';
+    // 迁移：服务端有 API Key 但 localStorage 没有，同步到 localStorage
+    if (t.providerUrl && t.apiKey && !loadApiKey(t.providerUrl)) {
+      saveApiKey(t.providerUrl, t.apiKey);
+    }
 
     // 自动注册供应商到全局列表
     if (t.providerUrl && !findProviderByUrl(t.providerUrl)) {
@@ -589,6 +618,7 @@ async function handleSubmit(e) {
       return;
     }
 
+    saveApiKey(providerUrl, target.apiKey);
     closeModal();
     await loadProxies();
   } catch (err) {
