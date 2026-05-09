@@ -481,6 +481,27 @@ function openModal(id = null) {
     if (t.providerUrl && !findProviderByUrl(t.providerUrl)) {
       addProvider(getProviderDisplayName(t.providerUrl), t.providerUrl);
     }
+
+    // 迁移旧模型数据：从按代理ID存储 → 按供应商URL存储
+    if (t.providerUrl) {
+      const existingByProvider = loadModelsByProvider(t.providerUrl);
+      if (existingByProvider.length === 0) {
+        // 优先用服务端的模型列表
+        let modelsToMigrate = Array.isArray(t.models) ? t.models.filter(Boolean) : [];
+        // 兼容旧版 localStorage（按代理ID存储）
+        if (modelsToMigrate.length === 0) {
+          const legacyKey = `protocol-proxy-models-${id}`;
+          try {
+            const legacy = JSON.parse(localStorage.getItem(legacyKey));
+            if (Array.isArray(legacy)) modelsToMigrate = legacy;
+          } catch {}
+        }
+        if (modelsToMigrate.length > 0) {
+          saveModelsByProvider(t.providerUrl, modelsToMigrate);
+        }
+      }
+    }
+
     selectProvider(t.providerUrl || '');
     selectModel(t.defaultModel || '');
   } else {
