@@ -490,11 +490,13 @@ function openModal(id = null) {
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
     selectProvider(p.providerId || '');
     selectModel(p.defaultModel || '');
+    document.getElementById('target-key').placeholder = p.hasApiKey ? '已设置（留空则不修改）' : 'sk-...';
   } else {
     document.getElementById('proxy-id').value = '';
     document.getElementById('auth-token-group').style.display = 'none';
     selectProvider('');
     selectModel('');
+    document.getElementById('target-key').placeholder = 'sk-...';
   }
 
   updateModelAddState();

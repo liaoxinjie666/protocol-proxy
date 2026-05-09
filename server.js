@@ -262,6 +262,7 @@ async function init() {
         providerUrl: provider?.url || '',
         protocol: provider?.protocol || '',
         defaultModel: p.defaultModel || '',
+        hasApiKey: !!provider?.apiKey,
         running: proxyManager.isRunning(p.id),
       };
     });
@@ -278,6 +279,7 @@ async function init() {
       providerName: provider?.name || '',
       providerUrl: provider?.url || '',
       protocol: provider?.protocol || '',
+      hasApiKey: !!provider?.apiKey,
     });
   });
 
