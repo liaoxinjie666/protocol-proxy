@@ -40,7 +40,6 @@ function initProviderDropdown() {
   const dropdown = document.getElementById('provider-dropdown');
   const addNameInput = document.getElementById('provider-add-name');
   const addUrlInput = document.getElementById('provider-add-url');
-  const addKeyInput = document.getElementById('provider-add-key');
   const addBtn = document.getElementById('provider-add-btn');
 
   trigger.addEventListener('click', (e) => {
@@ -50,7 +49,6 @@ function initProviderDropdown() {
       editingProviderId = null;
       addNameInput.value = '';
       addUrlInput.value = '';
-      addKeyInput.value = '';
       addUrlInput.disabled = false;
       addBtn.textContent = '添加';
       renderProviderOptions();
@@ -82,13 +80,10 @@ function initProviderDropdown() {
         });
       } else {
         // 新增模式
-        const body = { name, url };
-        const key = addKeyInput.value.trim();
-        if (key) body.apiKey = key;
         res = await fetch('/api/providers', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ name, url }),
         });
       }
       if (!res.ok) {
@@ -102,7 +97,6 @@ function initProviderDropdown() {
       addBtn.textContent = '添加';
       addNameInput.value = '';
       addUrlInput.value = '';
-      addKeyInput.value = '';
       await loadProviders();
       selectProvider(provider.id);
       renderProviderOptions();
@@ -161,7 +155,6 @@ function renderProviderOptions() {
         editingProviderId = id;
         document.getElementById('provider-add-name').value = p.name;
         document.getElementById('provider-add-url').value = p.url;
-        document.getElementById('provider-add-key').value = p.apiKey || '';
         document.getElementById('provider-add-url').disabled = true;
         document.getElementById('provider-add-btn').textContent = '更新';
       } catch (err) {
