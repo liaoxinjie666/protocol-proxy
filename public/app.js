@@ -129,7 +129,7 @@ function renderProviderOptions() {
       <span class="model-option-name">${escapeHtml(p.name)}</span>
       ${p.name !== p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
       <span style="margin-left:auto;display:flex;gap:4px">
-        <button type="button" class="model-option-delete" data-edit-id="${escapeHtml(p.id)}" title="编辑此供应商" style="color:#60a5fa">&times;</button>
+        <button type="button" class="model-option-delete" data-edit-id="${escapeHtml(p.id)}" title="编辑此供应商" style="color:#60a5fa;font-size:14px">&#9998;</button>
         <button type="button" class="model-option-delete" data-delete-id="${escapeHtml(p.id)}" title="删除此供应商">&times;</button>
       </span>
     </div>
@@ -493,6 +493,12 @@ function openModal(id = null) {
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
     selectProvider(p.providerId || '');
     selectModel(p.defaultModel || '');
+    // 加载供应商的 API Key
+    if (p.providerId) {
+      fetch(`/api/providers/${p.providerId}`).then(r => r.json()).then(provider => {
+        document.getElementById('target-key').value = provider.apiKey || '';
+      }).catch(() => {});
+    }
   } else {
     document.getElementById('proxy-id').value = '';
     document.getElementById('auth-token-group').style.display = 'none';
@@ -528,13 +534,35 @@ async function handleSubmit(e) {
     return;
   }
 
+  const apiKey = document.getElementById('target-key').value.trim();
+  const protocol = document.getElementById('target-protocol').value;
+  const defaultModel = document.getElementById('target-model').value.trim() || '';
+
+  // 同步更新供应商配置
+  const providerUpdates = {};
+  if (apiKey) providerUpdates.apiKey = apiKey;
+  if (protocol) providerUpdates.protocol = protocol;
+  const selectedModels = [];
+  const modelDropdown = document.getElementById('model-dropdown-value').textContent;
+  if (defaultModel) selectedModels.push(defaultModel);
+  if (Object.keys(providerUpdates).length > 0 || selectedModels.length > 0) {
+    try {
+      await fetch(`/api/providers/${providerId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(providerUpdates),
+      });
+      await loadProviders();
+    } catch {}
+  }
+
   const payload = {
     name: document.getElementById('proxy-name').value.trim(),
     port,
     requireAuth: document.getElementById('proxy-auth').value === 'true',
     authToken: document.getElementById('proxy-auth-token').value.trim() || null,
     providerId,
-    defaultModel: document.getElementById('target-model').value.trim() || '',
+    defaultModel,
   };
 
   try {
