@@ -190,7 +190,7 @@ async function init() {
     res.status(201).json(provider);
   });
 
-  app.put('/api/providers/:id', (req, res) => {
+  app.put('/api/providers/:id', async (req, res) => {
     const existing = configStore.getProviderById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Provider not found' });
 
@@ -202,6 +202,21 @@ async function init() {
     if (req.body.models !== undefined) updates.models = req.body.models;
 
     const updated = configStore.updateProvider(req.params.id, updates);
+
+    // 同步更新引用此供应商的运行中代理
+    const urlChanged = updates.url !== undefined && updates.url !== existing.url;
+    const affectedProxies = configStore.getProxies().filter(p => p.providerId === req.params.id);
+    for (const proxy of affectedProxies) {
+      if (!proxyManager.isRunning(proxy.id)) continue;
+      const target = resolveTarget(proxy);
+      if (!target) continue;
+      if (urlChanged) {
+        try { await proxyManager.restartProxy({ ...proxy, target }); } catch {}
+      } else {
+        proxyManager.updateProxyConfig({ ...proxy, target });
+      }
+    }
+
     res.json(updated);
   });
 
