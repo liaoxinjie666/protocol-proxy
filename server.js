@@ -121,6 +121,7 @@ async function init() {
   const cors = require('cors');
   const configStore = require('./lib/config-store');
   const proxyManager = require('./lib/proxy-manager');
+  const statsStore = require('./lib/stats-store');
 
   const app = express();
   const PORT = process.env.ADMIN_PORT || 3000;
@@ -167,6 +168,8 @@ async function init() {
       apiKey: provider.apiKey,
       defaultModel: proxy.defaultModel,
       models: provider.models,
+      azureDeployment: provider.azureDeployment || '',
+      azureApiVersion: provider.azureApiVersion || '',
     };
   }
 
@@ -194,7 +197,7 @@ async function init() {
   });
 
   app.post('/api/providers', (req, res) => {
-    const { name, url, protocol, apiKey, models } = req.body;
+    const { name, url, protocol, apiKey, models, azureDeployment, azureApiVersion } = req.body;
     if (!name || !url) {
       return res.status(400).json({ error: 'name and url are required' });
     }
@@ -203,6 +206,8 @@ async function init() {
       protocol: protocol || (/anthropic/i.test(url) ? 'anthropic' : 'openai'),
       apiKey: apiKey || '',
       models: models || [],
+      azureDeployment: azureDeployment || '',
+      azureApiVersion: azureApiVersion || '',
     });
     res.status(201).json(provider);
   });
@@ -217,6 +222,8 @@ async function init() {
     if (req.body.protocol !== undefined) updates.protocol = req.body.protocol;
     if (req.body.apiKey !== undefined && req.body.apiKey !== '') updates.apiKey = req.body.apiKey;
     if (req.body.models !== undefined) updates.models = req.body.models;
+    if (req.body.azureDeployment !== undefined) updates.azureDeployment = req.body.azureDeployment;
+    if (req.body.azureApiVersion !== undefined) updates.azureApiVersion = req.body.azureApiVersion;
 
     const updated = configStore.updateProvider(req.params.id, updates);
 
@@ -411,6 +418,148 @@ async function init() {
       proxies: {
         total: configStore.getProxies().length,
         running: proxyManager.getRunningPorts().length,
+      },
+    });
+  });
+
+  // Token 用量统计
+  app.get('/api/stats', (req, res) => {
+    const { range, startDate, endDate, proxyId } = req.query;
+    const stats = statsStore.getStats({
+      range: range || 'daily',
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      proxyId: proxyId || undefined,
+    });
+    const proxies = configStore.getProxies().map(p => ({
+      id: p.id,
+      name: p.name,
+      providerName: configStore.getProviderById(p.providerId)?.name || '',
+    }));
+    res.json({ ...stats, proxies });
+  });
+
+  // ==================== 配置导入/导出 ====================
+
+  app.get('/api/config/export', (req, res) => {
+    const providers = configStore.getProviders();
+    const proxies = configStore.getProxies().map(p => {
+      const provider = configStore.getProviderById(p.providerId);
+      return {
+        id: p.id,
+        name: p.name,
+        port: p.port,
+        requireAuth: p.requireAuth,
+        authToken: p.authToken,
+        providerId: p.providerId,
+        defaultModel: p.defaultModel || '',
+        providerName: provider?.name || '',
+      };
+    });
+    res.json({ providers, proxies, exportedAt: new Date().toISOString() });
+  });
+
+  app.post('/api/config/import', async (req, res) => {
+    const { config, mode } = req.body;
+
+    if (!config || !mode || !['overwrite', 'merge'].includes(mode)) {
+      return res.status(400).json({ error: '需要 config 和 mode（overwrite/merge）' });
+    }
+
+    // 校验结构
+    if (!Array.isArray(config.providers) || !Array.isArray(config.proxies)) {
+      return res.status(400).json({ error: '配置格式错误：需要 providers 和 proxies 数组' });
+    }
+
+    for (const p of config.providers) {
+      if (!p.name || !p.url || !p.protocol) {
+        return res.status(400).json({ error: `供应商 "${p.name || '?'}" 缺少必要字段（name/url/protocol）` });
+      }
+    }
+
+    for (const p of config.proxies) {
+      if (!p.name || !p.port || !p.providerId) {
+        return res.status(400).json({ error: `代理 "${p.name || '?'}" 缺少必要字段（name/port/providerId）` });
+      }
+    }
+
+    if (mode === 'overwrite') {
+      // 覆盖模式：直接替换整个配置
+      const newConfig = {
+        providers: config.providers.map(p => ({
+          id: p.id,
+          name: p.name,
+          url: p.url,
+          protocol: p.protocol,
+          apiKey: p.apiKey || '',
+          models: Array.isArray(p.models) ? p.models : [],
+        })),
+        proxies: config.proxies.map(p => ({
+          id: p.id,
+          name: p.name,
+          port: p.port,
+          requireAuth: !!p.requireAuth,
+          authToken: p.authToken || null,
+          providerId: p.providerId,
+          defaultModel: p.defaultModel || '',
+        })),
+      };
+      configStore.saveConfig(newConfig);
+      return res.json({ success: true, mode, providers: newConfig.providers.length, proxies: newConfig.proxies.length });
+    }
+
+    // 合并模式：按 ID 去重
+    const existingProviders = configStore.getProviders();
+    const existingProxies = configStore.getProxies();
+
+    const providerMap = new Map(existingProviders.map(p => [p.id, p]));
+    for (const p of config.providers) {
+      providerMap.set(p.id, {
+        id: p.id,
+        name: p.name,
+        url: p.url,
+        protocol: p.protocol,
+        apiKey: p.apiKey || '',
+        models: Array.isArray(p.models) ? p.models : [],
+      });
+    }
+
+    const proxyMap = new Map(existingProxies.map(p => [p.id, p]));
+    for (const p of config.proxies) {
+      // 检查端口冲突：导入的代理端口不能和现有代理或其他导入代理重复
+      const conflict = proxyMap.get(p.id)
+        ? null // 同 ID 是覆盖，不算冲突
+        : Array.from(proxyMap.values()).find(ep => ep.port === p.port);
+      if (conflict) {
+        return res.status(409).json({
+          error: `端口 ${p.port} 已被代理「${conflict.name}」占用，无法导入代理「${p.name}」`,
+        });
+      }
+      proxyMap.set(p.id, {
+        id: p.id,
+        name: p.name,
+        port: p.port,
+        requireAuth: !!p.requireAuth,
+        authToken: p.authToken || null,
+        providerId: p.providerId,
+        defaultModel: p.defaultModel || '',
+      });
+    }
+
+    const merged = {
+      providers: Array.from(providerMap.values()),
+      proxies: Array.from(proxyMap.values()),
+    };
+    configStore.saveConfig(merged);
+
+    res.json({
+      success: true,
+      mode,
+      providers: merged.providers.length,
+      proxies: merged.proxies.length,
+      added: {
+        providers: merged.providers.length - existingProviders.length,
+        proxies: merged.proxies.length - existingProxies.length,
       },
     });
   });

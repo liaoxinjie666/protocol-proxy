@@ -24,10 +24,59 @@
       </div>
     </div>
 
+    <!-- Token 用量统计 -->
+    <section class="card stats-panel">
+      <div class="card-header">
+        <h2>Token 用量统计 <span class="stats-estimated-badge" id="stats-estimated-badge" style="display:none">含估算</span></h2>
+        <div class="stats-controls">
+          <div class="model-dropdown" id="stats-proxy-dropdown">
+            <div class="model-dropdown-trigger stats-filter-trigger" id="stats-proxy-dropdown-trigger">
+              <span id="stats-proxy-dropdown-value">全部代理</span>
+              <span class="model-dropdown-arrow">&#9662;</span>
+            </div>
+            <div class="model-dropdown-menu" id="stats-proxy-dropdown-menu">
+              <div class="model-dropdown-options" id="stats-proxy-dropdown-options"></div>
+            </div>
+          </div>
+          <div class="stats-range-btns">
+            <button class="btn btn-sm stats-range-btn active" data-range="daily">每日</button>
+            <button class="btn btn-sm stats-range-btn" data-range="monthly">每月</button>
+            <button class="btn btn-sm stats-range-btn" data-range="yearly">每年</button>
+          </div>
+        </div>
+      </div>
+      <div class="stats-summary" id="stats-summary">
+        <div class="stats-summary-item">
+          <span class="stats-summary-value" id="stats-total-tokens">-</span>
+          <span class="stats-summary-label">总 Token</span>
+        </div>
+        <div class="stats-summary-item">
+          <span class="stats-summary-value" id="stats-prompt-tokens">-</span>
+          <span class="stats-summary-label">输入 Token</span>
+        </div>
+        <div class="stats-summary-item">
+          <span class="stats-summary-value" id="stats-completion-tokens">-</span>
+          <span class="stats-summary-label">输出 Token</span>
+        </div>
+        <div class="stats-summary-item">
+          <span class="stats-summary-value" id="stats-total-requests">-</span>
+          <span class="stats-summary-label">请求数</span>
+        </div>
+      </div>
+      <div id="stats-breakdown" class="stats-breakdown">
+        <div class="empty">暂无数据</div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="card-header">
         <h2>代理列表</h2>
-        <button class="btn btn-primary" onclick="openModal()">+ 新建代理</button>
+        <div class="card-header-actions">
+          <button class="btn" onclick="exportConfig()">导出配置</button>
+          <button class="btn" onclick="document.getElementById('import-file').click()">导入配置</button>
+          <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
+          <button class="btn btn-primary" onclick="openModal()">+ 新建代理</button>
+        </div>
       </div>
       <div id="proxy-list" class="proxy-list">
         <div class="empty">加载中...</div>
@@ -139,6 +188,16 @@
                   <input type="password" id="target-key" placeholder="sk-...">
                 </div>
               </div>
+              <div class="form-row" id="azure-fields" style="display:none">
+                <div class="form-group">
+                  <label>Azure Deployment</label>
+                  <input type="text" id="target-azure-deployment" placeholder="gpt-4o">
+                </div>
+                <div class="form-group">
+                  <label>Azure API Version</label>
+                  <input type="text" id="target-azure-version" placeholder="2024-02-01">
+                </div>
+              </div>
             </div>
           </div>
 
@@ -159,6 +218,51 @@
       <div class="confirm-actions">
         <button class="btn" id="confirm-cancel">取消</button>
         <button class="btn btn-danger" id="confirm-ok">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导入预览弹窗 -->
+  <div class="modal" id="import-modal">
+    <div class="modal-content" style="max-width:500px">
+      <div class="modal-header">
+        <h3>导入配置</h3>
+        <button class="btn-close" onclick="closeImportModal()">&times;</button>
+      </div>
+      <div class="import-preview" id="import-preview">
+        <div class="import-stats">
+          <div class="import-stat">
+            <span class="import-stat-value" id="import-providers-count">0</span>
+            <span class="import-stat-label">供应商</span>
+          </div>
+          <div class="import-stat">
+            <span class="import-stat-value" id="import-proxies-count">0</span>
+            <span class="import-stat-label">代理</span>
+          </div>
+        </div>
+        <div class="import-mode">
+          <label>导入模式</label>
+          <div class="import-mode-options">
+            <label class="import-mode-option">
+              <input type="radio" name="import-mode" value="merge" checked>
+              <span>
+                <strong>合并</strong>
+                <small>按 ID 去重：新增导入项，同 ID 覆盖</small>
+              </span>
+            </label>
+            <label class="import-mode-option">
+              <input type="radio" name="import-mode" value="overwrite">
+              <span>
+                <strong>覆盖</strong>
+                <small>完全替换现有配置</small>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeImportModal()">取消</button>
+        <button class="btn btn-primary" onclick="confirmImport()">确认导入</button>
       </div>
     </div>
   </div>

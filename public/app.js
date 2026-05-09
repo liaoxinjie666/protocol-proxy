@@ -211,6 +211,10 @@ function selectProvider(id) {
   const models = provider?.models || [];
   selectModel(models[0] || '');
   updateModelAddState();
+  // 同步 Azure 字段
+  document.getElementById('target-azure-deployment').value = provider?.azureDeployment || '';
+  document.getElementById('target-azure-version').value = provider?.azureApiVersion || '';
+  document.getElementById('azure-fields').style.display = protocol === 'openai' ? '' : 'none';
 }
 
 // ==================== Model 下拉框 ====================
@@ -345,7 +349,238 @@ function updateModelAddState() {
   }
 }
 
+// ==================== 配置导入/导出 ====================
+
+let importData = null;
+
+async function exportConfig() {
+  try {
+    const res = await fetch('/api/config/export');
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    a.href = url;
+    a.download = `config-backup-${date}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('配置已导出');
+  } catch (err) {
+    showToast('导出失败: ' + err.message, true);
+  }
+}
+
+function handleImportFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  e.target.value = '';
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!Array.isArray(data.providers) || !Array.isArray(data.proxies)) {
+        showToast('配置格式错误：需要 providers 和 proxies 数组', true);
+        return;
+      }
+      importData = data;
+      document.getElementById('import-providers-count').textContent = data.providers.length;
+      document.getElementById('import-proxies-count').textContent = data.proxies.length;
+      document.getElementById('import-modal').classList.add('active');
+    } catch (err) {
+      showToast('文件解析失败: ' + err.message, true);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function closeImportModal() {
+  document.getElementById('import-modal').classList.remove('active');
+  importData = null;
+}
+
+async function confirmImport() {
+  if (!importData) return;
+  const mode = document.querySelector('input[name="import-mode"]:checked')?.value || 'merge';
+
+  if (mode === 'overwrite') {
+    const ok = await showConfirm('确认<strong>覆盖</strong>现有配置？此操作不可撤销。');
+    if (!ok) return;
+  }
+
+  try {
+    const res = await fetch('/api/config/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: importData, mode }),
+    });
+    const result = await res.json();
+
+    if (!res.ok) {
+      showToast(result.error || '导入失败', true);
+      return;
+    }
+
+    closeImportModal();
+    await Promise.all([loadProxies(), loadProviders()]);
+
+    const added = result.added;
+    let msg = `导入成功（${mode === 'overwrite' ? '覆盖' : '合并'}）`;
+    if (added) msg += `：新增 ${added.providers} 供应商、${added.proxies} 代理`;
+
+    const restart = await showConfirm(`${msg}。<br><br>运行中的代理需要重启才能应用变更，新增的代理需要手动启动。<br><br>是否立即重启所有代理？`);
+    if (restart) {
+      await restartAllProxies();
+    }
+  } catch (err) {
+    showToast('导入失败: ' + err.message, true);
+  }
+}
+
+async function restartAllProxies() {
+  try {
+    for (const p of proxies) {
+      if (p.running) {
+        await fetch(`/api/proxies/${p.id}/stop`, { method: 'POST' });
+      }
+    }
+    for (const p of proxies) {
+      await fetch(`/api/proxies/${p.id}/start`, { method: 'POST' });
+    }
+    await loadProxies();
+    showToast('所有代理已重启');
+  } catch (err) {
+    showToast('重启失败: ' + err.message, true);
+  }
+}
+
 // ==================== 初始化 ====================
+
+// ==================== Token 用量统计 ====================
+
+let statsRange = 'daily';
+let statsProxyId = '';
+
+async function loadStats() {
+  try {
+    const params = new URLSearchParams({ range: statsRange });
+    if (statsProxyId) params.set('proxyId', statsProxyId);
+    const res = await fetch('/api/stats?' + params);
+    const data = await res.json();
+    renderStatsSummary(data.summary);
+    renderStatsBreakdown(data);
+    renderStatsProxyOptions(data.proxies || []);
+  } catch (err) {
+    console.error('加载统计失败:', err);
+  }
+}
+
+function renderStatsSummary(summary) {
+  document.getElementById('stats-total-tokens').textContent = formatTokens(summary.total);
+  document.getElementById('stats-prompt-tokens').textContent = formatTokens(summary.prompt);
+  document.getElementById('stats-completion-tokens').textContent = formatTokens(summary.completion);
+  document.getElementById('stats-total-requests').textContent = summary.requests.toLocaleString();
+  const badge = document.getElementById('stats-estimated-badge');
+  if (badge) badge.style.display = summary.hasEstimated ? 'inline' : 'none';
+}
+
+function formatTokens(n) {
+  if (!n || n === 0) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return n.toLocaleString();
+}
+
+function renderStatsBreakdown(data) {
+  const container = document.getElementById('stats-breakdown');
+  const { byProvider, byModel, summary } = data;
+
+  if (!byProvider || byProvider.length === 0) {
+    container.innerHTML = '<div class="empty">暂无数据</div>';
+    return;
+  }
+
+  let html = '<table class="stats-table"><thead><tr>';
+  html += '<th>供应商</th><th>模型</th><th style="text-align:right">请求数</th>';
+  html += '<th style="text-align:right">输入 Token</th><th style="text-align:right">输出 Token</th>';
+  html += '<th style="text-align:right">合计</th>';
+  html += '</tr></thead><tbody>';
+
+  for (const item of byModel) {
+    const prefix = item.hasEstimated ? '~' : '';
+    html += '<tr>';
+    html += `<td class="provider-cell">${escapeHtml(item.provider)}</td>`;
+    html += `<td class="model-cell"><code>${escapeHtml(item.model)}</code></td>`;
+    html += `<td class="num">${item.requests.toLocaleString()}</td>`;
+    html += `<td class="num">${prefix ? `<span class="num-estimated" title="估算值">~</span>` : ''}${formatTokens(item.prompt)}</td>`;
+    html += `<td class="num">${prefix ? `<span class="num-estimated" title="估算值">~</span>` : ''}${formatTokens(item.completion)}</td>`;
+    html += `<td class="num">${prefix ? `<span class="num-estimated" title="估算值">~</span>` : ''}${formatTokens(item.total)}</td>`;
+    html += '</tr>';
+  }
+
+  html += '</tbody>';
+  html += '<tfoot><tr>';
+  html += '<td colspan="2">合计</td>';
+  html += `<td class="num">${summary.requests.toLocaleString()}</td>`;
+  html += `<td class="num">${formatTokens(summary.prompt)}</td>`;
+  html += `<td class="num">${formatTokens(summary.completion)}</td>`;
+  html += `<td class="num">${formatTokens(summary.total)}</td>`;
+  html += '</tr></tfoot></table>';
+
+  container.innerHTML = html;
+}
+
+function renderStatsProxyOptions(proxyList) {
+  const container = document.getElementById('stats-proxy-dropdown-options');
+  container.innerHTML = `<div class="model-option${!statsProxyId ? ' selected' : ''}" data-proxy-id="">
+    <span class="model-option-name">全部代理</span>
+  </div>` + proxyList.map(p => `
+    <div class="model-option${p.id === statsProxyId ? ' selected' : ''}" data-proxy-id="${escapeHtml(p.id)}">
+      <span class="model-option-name">${escapeHtml(p.name)}</span>
+      ${p.providerName ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.providerName)}</span>` : ''}
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.model-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      statsProxyId = opt.dataset.proxyId;
+      document.getElementById('stats-proxy-dropdown-value').textContent =
+        statsProxyId ? (proxyList.find(p => p.id === statsProxyId)?.name || '全部代理') : '全部代理';
+      document.getElementById('stats-proxy-dropdown').classList.remove('open');
+      container.querySelectorAll('.model-option').forEach(o => o.classList.remove('selected'));
+      opt.classList.add('selected');
+      loadStats();
+    });
+  });
+}
+
+function initStatsDropdown() {
+  const trigger = document.getElementById('stats-proxy-dropdown-trigger');
+  const dropdown = document.getElementById('stats-proxy-dropdown');
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target)) {
+      dropdown.classList.remove('open');
+    }
+  });
+}
+
+function initStatsRangeBtns() {
+  document.querySelectorAll('.stats-range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.stats-range-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      statsRange = btn.dataset.range;
+      loadStats();
+    });
+  });
+}
 
 function generateToken() {
   const arr = new Uint8Array(24);
@@ -385,9 +620,11 @@ function initSimpleDropdown(dropdownId, onChange) {
 }
 
 async function init() {
-  await Promise.all([loadProxies(), loadProviders()]);
+  await Promise.all([loadProxies(), loadProviders(), loadStats()]);
   initProviderDropdown();
   initModelDropdown();
+  initStatsDropdown();
+  initStatsRangeBtns();
   initSimpleDropdown('auth-dropdown', (val) => {
     const enabled = val === 'true';
     document.getElementById('auth-token-group').style.display = enabled ? 'block' : 'none';
@@ -395,7 +632,9 @@ async function init() {
       document.getElementById('proxy-auth-token').value = generateToken();
     }
   });
-  initSimpleDropdown('protocol-dropdown');
+  initSimpleDropdown('protocol-dropdown', (val) => {
+    document.getElementById('azure-fields').style.display = val === 'openai' ? '' : 'none';
+  });
 }
 
 // ==================== 代理地址复制 ====================
@@ -541,6 +780,11 @@ function openModal(id = null) {
     selectProvider(p.providerId || '');
     selectModel(p.defaultModel || '');
     document.getElementById('target-key').placeholder = p.hasApiKey ? '已设置（留空则不修改）' : 'sk-...';
+    // Azure 字段从供应商配置读取
+    const provider = providers.find(pr => pr.id === p.providerId);
+    document.getElementById('target-azure-deployment').value = provider?.azureDeployment || '';
+    document.getElementById('target-azure-version').value = provider?.azureApiVersion || '';
+    document.getElementById('azure-fields').style.display = p.protocol === 'openai' ? '' : 'none';
   } else {
     document.getElementById('proxy-id').value = '';
     // 重置认证下拉框
@@ -552,6 +796,9 @@ function openModal(id = null) {
     selectProvider('');
     selectModel('');
     document.getElementById('target-key').placeholder = 'sk-...';
+    document.getElementById('target-azure-deployment').value = '';
+    document.getElementById('target-azure-version').value = '';
+    document.getElementById('azure-fields').style.display = 'none';
   }
 
   updateModelAddState();
@@ -593,6 +840,10 @@ async function handleSubmit(e) {
   const providerUpdates = {};
   if (apiKey) providerUpdates.apiKey = apiKey;
   if (protocol) providerUpdates.protocol = protocol;
+  const azureDeployment = document.getElementById('target-azure-deployment').value.trim();
+  const azureApiVersion = document.getElementById('target-azure-version').value.trim();
+  providerUpdates.azureDeployment = azureDeployment || '';
+  providerUpdates.azureApiVersion = azureApiVersion || '';
   if (Object.keys(providerUpdates).length > 0) {
     try {
       const res = await fetch(`/api/providers/${providerId}`, {
