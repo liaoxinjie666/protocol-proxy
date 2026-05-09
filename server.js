@@ -393,13 +393,13 @@ async function init() {
 
   // 启动所有已配置的代理
   const proxies = configStore.getProxies();
-  for (const proxy of proxies) {
+  await Promise.all(proxies.map(async (proxy) => {
     try {
       await startProxyWithProvider(proxy);
     } catch (err) {
       console.error(`[Init] Failed to start proxy ${proxy.name}:`, err.message);
     }
-  }
+  }));
 
   app.listen(PORT, () => {
     const adminUrl = `http://localhost:${PORT}`;
@@ -416,7 +416,9 @@ process.on('SIGINT', async () => {
   try {
     const proxyManager = require('./lib/proxy-manager');
     await proxyManager.stopAll();
-  } catch {}
+  } catch (err) {
+    console.error('[Shutdown] stopAll error:', err.message);
+  }
   process.exit(0);
 });
 
@@ -425,7 +427,9 @@ process.on('SIGTERM', async () => {
   try {
     const proxyManager = require('./lib/proxy-manager');
     await proxyManager.stopAll();
-  } catch {}
+  } catch (err) {
+    console.error('[Shutdown] stopAll error:', err.message);
+  }
   process.exit(0);
 });
 
