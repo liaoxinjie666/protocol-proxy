@@ -204,17 +204,11 @@ async function init() {
     const updated = configStore.updateProvider(req.params.id, updates);
 
     // 同步更新引用此供应商的运行中代理
-    const urlChanged = updates.url !== undefined && updates.url !== existing.url;
     const affectedProxies = configStore.getProxies().filter(p => p.providerId === req.params.id);
     for (const proxy of affectedProxies) {
       if (!proxyManager.isRunning(proxy.id)) continue;
       const target = resolveTarget(proxy);
-      if (!target) continue;
-      if (urlChanged) {
-        try { await proxyManager.restartProxy({ ...proxy, target }); } catch {}
-      } else {
-        proxyManager.updateProxyConfig({ ...proxy, target });
-      }
+      if (target) proxyManager.updateProxyConfig({ ...proxy, target });
     }
 
     res.json(updated);
