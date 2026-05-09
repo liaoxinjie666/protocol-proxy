@@ -21,7 +21,9 @@ function readPid() {
 
 function removePid() {
   try { fs.unlinkSync(PID_FILE); } catch (err) {
-    console.error('[PID] 删除失败:', err.message);
+    if (err.code !== 'ENOENT') {
+      console.error('[PID] 删除失败:', err.message);
+    }
   }
 }
 
