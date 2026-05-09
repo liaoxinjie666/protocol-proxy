@@ -199,7 +199,9 @@ function selectProvider(id) {
   document.getElementById('provider-dropdown-value').textContent = provider
     ? (provider.name !== provider.url ? `${provider.name} - ${provider.url}` : provider.url)
     : '选择供应商...';
-  renderModelOptions();
+  // 切换供应商后模型自动选为该供应商模型列表的第一个
+  const models = provider?.models || [];
+  selectModel(models[0] || '');
   updateModelAddState();
   // 加载供应商的 API Key
   if (id) {
