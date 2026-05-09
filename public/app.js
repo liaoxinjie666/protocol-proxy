@@ -201,6 +201,14 @@ function selectProvider(id) {
     : '选择供应商...';
   renderModelOptions();
   updateModelAddState();
+  // 加载供应商的 API Key
+  if (id) {
+    fetch(`/api/providers/${id}`).then(r => r.json()).then(p => {
+      document.getElementById('target-key').value = p.apiKey || '';
+    }).catch(() => {});
+  } else {
+    document.getElementById('target-key').value = '';
+  }
 }
 
 // ==================== Model 下拉框 ====================
