@@ -40,6 +40,7 @@ function initProviderDropdown() {
   const dropdown = document.getElementById('provider-dropdown');
   const addNameInput = document.getElementById('provider-add-name');
   const addUrlInput = document.getElementById('provider-add-url');
+  const addKeyInput = document.getElementById('provider-add-key');
   const addBtn = document.getElementById('provider-add-btn');
 
   trigger.addEventListener('click', (e) => {
@@ -48,6 +49,7 @@ function initProviderDropdown() {
     if (dropdown.classList.contains('open')) {
       addNameInput.value = '';
       addUrlInput.value = '';
+      addKeyInput.value = '';
       renderProviderOptions();
       addNameInput.focus();
     }
@@ -62,6 +64,7 @@ function initProviderDropdown() {
   addBtn.addEventListener('click', async () => {
     const name = addNameInput.value.trim();
     const url = addUrlInput.value.trim();
+    const apiKey = addKeyInput.value.trim();
     if (!name || !url) {
       showToast('请填写供应商名称和地址', true);
       return;
@@ -70,7 +73,7 @@ function initProviderDropdown() {
       const res = await fetch('/api/providers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, url }),
+        body: JSON.stringify({ name, url, apiKey }),
       });
       if (!res.ok) {
         const err = await res.json();
