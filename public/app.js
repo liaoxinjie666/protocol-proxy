@@ -444,8 +444,18 @@ async function deleteProxy(id) {
   }
 }
 
-function editProxy(id) {
-  openModal(id);
+async function editProxy(id) {
+  try {
+    const res = await fetch(`/api/proxies/${id}`);
+    if (!res.ok) throw new Error('加载失败');
+    const full = await res.json();
+    // 用完整数据替换列表中的掩码数据
+    const idx = proxies.findIndex(p => p.id === id);
+    if (idx !== -1) proxies[idx] = { ...proxies[idx], ...full };
+    openModal(id);
+  } catch (err) {
+    showToast('加载代理配置失败: ' + err.message, true);
+  }
 }
 
 // ==================== 工具函数 ====================
