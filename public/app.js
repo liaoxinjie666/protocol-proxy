@@ -134,13 +134,19 @@ function renderProviderOptions() {
   const providers = loadProviders();
   const currentUrl = getSelectedProviderUrl();
 
-  container.innerHTML = providers.map(p => `
+  container.innerHTML = providers.map(p => {
+    // 优先从服务端配置取供应商名称
+    const serverProxy = proxies.find(pr => pr.target?.providerUrl === p.url);
+    const displayName = (p.name && p.name !== p.url) ? p.name
+      : (serverProxy?.target?.providerName && serverProxy.target.providerName !== p.url) ? serverProxy.target.providerName
+      : p.url;
+    return `
     <div class="model-option${p.url === currentUrl ? ' selected' : ''}" data-url="${escapeHtml(p.url)}">
-      <span class="model-option-name">${escapeHtml(p.name)}</span>
-      ${p.name !== p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
+      <span class="model-option-name">${escapeHtml(displayName)}</span>
+      ${displayName !== p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
       <button type="button" class="model-option-delete" data-delete-url="${escapeHtml(p.url)}" title="删除此供应商">&times;</button>
     </div>
-  `).join('');
+  `}).join('');
 
   if (providers.length === 0) {
     container.innerHTML = '<div style="padding:8px 12px;color:#64748b;font-size:13px">暂无供应商，请在下方添加</div>';
@@ -176,9 +182,15 @@ function selectProvider(url) {
   document.getElementById('target-url').value = url || '';
   const provider = findProviderByUrl(url);
   document.getElementById('target-protocol').value = url ? (provider?.protocol || detectProtocol(url)) : '';
-  document.getElementById('provider-dropdown-value').textContent = url
-    ? (provider ? `${provider.name} - ${url}` : url)
-    : '选择供应商...';
+  if (url) {
+    const serverProxy = proxies.find(pr => pr.target?.providerUrl === url);
+    const name = (provider?.name && provider.name !== url) ? provider.name
+      : (serverProxy?.target?.providerName && serverProxy.target.providerName !== url) ? serverProxy.target.providerName
+      : null;
+    document.getElementById('provider-dropdown-value').textContent = name ? `${name} - ${url}` : url;
+  } else {
+    document.getElementById('provider-dropdown-value').textContent = '选择供应商...';
+  }
   // 切换供应商后刷新模型列表
   renderModelOptions();
   updateModelAddState();
