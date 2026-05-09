@@ -193,7 +193,17 @@ function renderProviderOptions() {
 function selectProvider(id) {
   const provider = providers.find(p => p.id === id);
   document.getElementById('provider-id').value = id || '';
-  document.getElementById('target-protocol').value = provider ? provider.protocol : '';
+  const protocol = provider ? provider.protocol : '';
+  document.getElementById('target-protocol').value = protocol;
+  // 同步协议自定义下拉框
+  document.querySelectorAll('#protocol-dropdown .model-option').forEach(o => o.classList.remove('selected'));
+  const protoOpt = document.querySelector(`#protocol-dropdown .model-option[data-value="${protocol}"]`);
+  if (protoOpt) {
+    protoOpt.classList.add('selected');
+    document.getElementById('protocol-dropdown-value').textContent = protoOpt.querySelector('.model-option-name').textContent;
+  } else {
+    document.getElementById('protocol-dropdown-value').textContent = '选择协议...';
+  }
   document.getElementById('provider-dropdown-value').textContent = provider
     ? (provider.name !== provider.url ? `${provider.name} - ${provider.url}` : provider.url)
     : '选择供应商...';
@@ -343,17 +353,49 @@ function generateToken() {
   return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function initSimpleDropdown(dropdownId, onChange) {
+  const dropdown = document.getElementById(dropdownId);
+  const trigger = dropdown.querySelector('.model-dropdown-trigger');
+  const valueEl = dropdown.querySelector('[id$="-dropdown-value"]');
+  const hiddenInput = document.getElementById(dropdownId.replace('-dropdown', ''));
+  const opts = dropdown.querySelectorAll('.model-option');
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target)) {
+      dropdown.classList.remove('open');
+    }
+  });
+
+  opts.forEach(opt => {
+    opt.addEventListener('click', () => {
+      opts.forEach(o => o.classList.remove('selected'));
+      opt.classList.add('selected');
+      const val = opt.dataset.value;
+      if (hiddenInput) hiddenInput.value = val;
+      valueEl.textContent = opt.querySelector('.model-option-name').textContent;
+      onChange?.(val);
+      dropdown.classList.remove('open');
+    });
+  });
+}
+
 async function init() {
   await Promise.all([loadProxies(), loadProviders()]);
   initProviderDropdown();
   initModelDropdown();
-  document.getElementById('proxy-auth').addEventListener('change', (e) => {
-    const enabled = e.target.value === 'true';
+  initSimpleDropdown('auth-dropdown', (val) => {
+    const enabled = val === 'true';
     document.getElementById('auth-token-group').style.display = enabled ? 'block' : 'none';
     if (enabled && !document.getElementById('proxy-auth-token').value) {
       document.getElementById('proxy-auth-token').value = generateToken();
     }
   });
+  initSimpleDropdown('protocol-dropdown');
 }
 
 // ==================== 代理地址复制 ====================
@@ -485,7 +527,15 @@ function openModal(id = null) {
     document.getElementById('proxy-id').value = p.id;
     document.getElementById('proxy-name').value = p.name;
     document.getElementById('proxy-port').value = p.port;
-    document.getElementById('proxy-auth').value = p.requireAuth ? 'true' : 'false';
+    // 同步认证下拉框
+    const authVal = p.requireAuth ? 'true' : 'false';
+    document.getElementById('proxy-auth').value = authVal;
+    document.querySelectorAll('#auth-dropdown .model-option').forEach(o => o.classList.remove('selected'));
+    const authOpt = document.querySelector(`#auth-dropdown .model-option[data-value="${authVal}"]`);
+    if (authOpt) {
+      authOpt.classList.add('selected');
+      document.getElementById('auth-dropdown-value').textContent = authOpt.querySelector('.model-option-name').textContent;
+    }
     document.getElementById('proxy-auth-token').value = p.authToken || '';
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
     selectProvider(p.providerId || '');
@@ -493,6 +543,11 @@ function openModal(id = null) {
     document.getElementById('target-key').placeholder = p.hasApiKey ? '已设置（留空则不修改）' : 'sk-...';
   } else {
     document.getElementById('proxy-id').value = '';
+    // 重置认证下拉框
+    document.getElementById('proxy-auth').value = 'false';
+    document.querySelectorAll('#auth-dropdown .model-option').forEach(o => o.classList.remove('selected'));
+    document.querySelector('#auth-dropdown .model-option[data-value="false"]').classList.add('selected');
+    document.getElementById('auth-dropdown-value').textContent = '不启用';
     document.getElementById('auth-token-group').style.display = 'none';
     selectProvider('');
     selectModel('');
@@ -507,6 +562,8 @@ function closeModal() {
   document.getElementById('modal').classList.remove('active');
   document.getElementById('model-dropdown').classList.remove('open');
   document.getElementById('provider-dropdown').classList.remove('open');
+  document.getElementById('auth-dropdown').classList.remove('open');
+  document.getElementById('protocol-dropdown').classList.remove('open');
   editingId = null;
   editingProviderId = null;
 }

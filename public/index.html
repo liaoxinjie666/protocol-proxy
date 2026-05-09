@@ -56,10 +56,19 @@
             </div>
             <div class="form-group">
               <label>Agent 认证</label>
-              <select id="proxy-auth">
-                <option value="false">不启用</option>
-                <option value="true">启用</option>
-              </select>
+              <input type="hidden" id="proxy-auth" value="false">
+              <div class="model-dropdown" id="auth-dropdown">
+                <div class="model-dropdown-trigger" id="auth-dropdown-trigger">
+                  <span id="auth-dropdown-value">不启用</span>
+                  <span class="model-dropdown-arrow">&#9662;</span>
+                </div>
+                <div class="model-dropdown-menu" id="auth-dropdown-menu">
+                  <div class="model-dropdown-options" id="auth-dropdown-options">
+                    <div class="model-option selected" data-value="false"><span class="model-option-name">不启用</span></div>
+                    <div class="model-option" data-value="true"><span class="model-option-name">启用</span></div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -92,10 +101,19 @@
                 </div>
                 <div class="form-group">
                   <label>协议</label>
-                  <select id="target-protocol">
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                  </select>
+                  <input type="hidden" id="target-protocol" value="openai">
+                  <div class="model-dropdown" id="protocol-dropdown">
+                    <div class="model-dropdown-trigger" id="protocol-dropdown-trigger">
+                      <span id="protocol-dropdown-value">OpenAI</span>
+                      <span class="model-dropdown-arrow">&#9662;</span>
+                    </div>
+                    <div class="model-dropdown-menu" id="protocol-dropdown-menu">
+                      <div class="model-dropdown-options" id="protocol-dropdown-options">
+                        <div class="model-option selected" data-value="openai"><span class="model-option-name">OpenAI</span></div>
+                        <div class="model-option" data-value="anthropic"><span class="model-option-name">Anthropic</span></div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
               <div class="form-row">
