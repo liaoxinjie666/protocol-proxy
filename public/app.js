@@ -1,102 +1,40 @@
 let proxies = [];
+let providers = [];
 let editingId = null;
 
-// ==================== 供应商管理（全局共享） ====================
-const PROVIDERS_KEY = 'protocol-proxy-providers';
+// ==================== 数据加载 ====================
 
-function loadProviders() {
+async function loadProxies() {
   try {
-    return JSON.parse(localStorage.getItem(PROVIDERS_KEY)) || [];
-  } catch { return []; }
-}
-
-function saveProviders(providers) {
-  localStorage.setItem(PROVIDERS_KEY, JSON.stringify(providers));
-}
-
-function addProvider(name, url) {
-  const providers = loadProviders();
-  if (providers.some(p => p.url === url)) return;
-  providers.push({ id: 'p-' + Date.now(), name, url, protocol: detectProtocol(url) });
-  saveProviders(providers);
-}
-
-function findProviderByUrl(url) {
-  return loadProviders().find(p => p.url === url);
-}
-
-function getProviderDisplayName(url, serverName) {
-  if (serverName && serverName !== url) return serverName;
-  const p = findProviderByUrl(url);
-  return p ? p.name : url;
-}
-
-function detectProtocol(url) {
-  return /anthropic/i.test(url) ? 'anthropic' : 'openai';
-}
-
-// ==================== Model 管理（按供应商 URL） ====================
-function getModelKey(providerUrl) {
-  return providerUrl ? `protocol-proxy-models-${providerUrl}` : 'protocol-proxy-models-__new';
-}
-
-function loadModelsByProvider(providerUrl) {
-  const saved = localStorage.getItem(getModelKey(providerUrl));
-  if (saved) {
-    try { return JSON.parse(saved); } catch { /* fall through */ }
-  }
-  return [];
-}
-
-function saveModelsByProvider(providerUrl, models) {
-  const normalized = Array.from(new Set((models || []).map(m => m.trim()).filter(Boolean)));
-  localStorage.setItem(getModelKey(providerUrl), JSON.stringify(normalized));
-}
-
-function addModel(providerUrl, name) {
-  if (!providerUrl) return;
-  const models = loadModelsByProvider(providerUrl);
-  if (!models.includes(name)) {
-    models.push(name);
-    saveModelsByProvider(providerUrl, models);
+    const res = await fetch('/api/proxies');
+    proxies = await res.json();
+    renderProxies();
+    updateStats();
+  } catch (err) {
+    console.error('加载代理失败:', err);
+    document.getElementById('proxy-list').innerHTML =
+      '<div class="empty">加载失败，请刷新重试</div>';
   }
 }
 
-function removeModel(providerUrl, name) {
-  const models = loadModelsByProvider(providerUrl).filter(m => m !== name);
-  saveModelsByProvider(providerUrl, models);
-}
-
-function getCurrentProxyId() {
-  return document.getElementById('modal').dataset.proxyId || null;
-}
-
-function getSelectedProviderUrl() {
-  return document.getElementById('target-url').value || '';
-}
-
-// ==================== API Key 管理（按供应商 URL） ====================
-function getApiKeyKey(providerUrl) {
-  return providerUrl ? `protocol-proxy-apikey-${providerUrl}` : null;
-}
-
-function loadApiKey(providerUrl) {
-  const key = getApiKeyKey(providerUrl);
-  if (!key) return '';
-  return localStorage.getItem(key) || '';
-}
-
-function saveApiKey(providerUrl, apiKey) {
-  const key = getApiKeyKey(providerUrl);
-  if (!key) return;
-  if (apiKey) {
-    localStorage.setItem(key, apiKey);
-  } else {
-    localStorage.removeItem(key);
+async function loadProviders() {
+  try {
+    const res = await fetch('/api/providers');
+    providers = await res.json();
+  } catch (err) {
+    console.error('加载供应商失败:', err);
+    providers = [];
   }
+}
+
+function updateStats() {
+  document.getElementById('stat-total').textContent = proxies.length;
+  document.getElementById('stat-running').textContent =
+    proxies.filter(p => p.running).length;
 }
 
 // ==================== 供应商下拉框 ====================
+
 function initProviderDropdown() {
   const trigger = document.getElementById('provider-dropdown-trigger');
   const dropdown = document.getElementById('provider-dropdown');
@@ -121,53 +59,53 @@ function initProviderDropdown() {
     }
   });
 
-  addBtn.addEventListener('click', () => {
+  addBtn.addEventListener('click', async () => {
     const name = addNameInput.value.trim();
     const url = addUrlInput.value.trim();
     if (!name || !url) {
       showToast('请填写供应商名称和地址', true);
       return;
     }
-    addProvider(name, url);
-    selectProvider(url);
-    dropdown.classList.remove('open');
+    try {
+      const res = await fetch('/api/providers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, url }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        showToast(err.error || '添加失败', true);
+        return;
+      }
+      const provider = await res.json();
+      await loadProviders();
+      selectProvider(provider.id);
+      dropdown.classList.remove('open');
+    } catch (err) {
+      showToast('添加失败: ' + err.message, true);
+    }
   });
 
   addUrlInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      addBtn.click();
-    }
-    if (e.key === 'Escape') {
-      dropdown.classList.remove('open');
-    }
+    if (e.key === 'Enter') { e.preventDefault(); addBtn.click(); }
+    if (e.key === 'Escape') dropdown.classList.remove('open');
   });
-
   addNameInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      dropdown.classList.remove('open');
-    }
+    if (e.key === 'Escape') dropdown.classList.remove('open');
   });
 }
 
 function renderProviderOptions() {
   const container = document.getElementById('provider-dropdown-options');
-  const providers = loadProviders();
-  const currentUrl = getSelectedProviderUrl();
+  const currentId = document.getElementById('provider-id').value;
 
-  container.innerHTML = providers.map(p => {
-    // 优先从服务端配置取供应商名称
-    const serverProxy = proxies.find(pr => pr.target?.providerUrl === p.url);
-    const displayName = (p.name && p.name !== p.url) ? p.name
-      : (serverProxy?.target?.providerName && serverProxy.target.providerName !== p.url) ? serverProxy.target.providerName
-      : p.url;
-    return `
-    <div class="model-option${p.url === currentUrl ? ' selected' : ''}" data-url="${escapeHtml(p.url)}">
-      <span class="model-option-name">${escapeHtml(displayName)}</span>
-      ${displayName !== p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
-      <button type="button" class="model-option-delete" data-delete-url="${escapeHtml(p.url)}" title="删除此供应商">&times;</button>
+  container.innerHTML = providers.map(p => `
+    <div class="model-option${p.id === currentId ? ' selected' : ''}" data-id="${escapeHtml(p.id)}">
+      <span class="model-option-name">${escapeHtml(p.name)}</span>
+      ${p.name !== p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
+      <button type="button" class="model-option-delete" data-delete-id="${escapeHtml(p.id)}" title="删除此供应商">&times;</button>
     </div>
-  `}).join('');
+  `).join('');
 
   if (providers.length === 0) {
     container.innerHTML = '<div style="padding:8px 12px;color:#64748b;font-size:13px">暂无供应商，请在下方添加</div>';
@@ -176,7 +114,7 @@ function renderProviderOptions() {
   container.querySelectorAll('.model-option').forEach(opt => {
     opt.addEventListener('click', (e) => {
       if (e.target.closest('.model-option-delete')) return;
-      selectProvider(opt.dataset.url);
+      selectProvider(opt.dataset.id);
       document.getElementById('provider-dropdown').classList.remove('open');
     });
   });
@@ -184,44 +122,42 @@ function renderProviderOptions() {
   container.querySelectorAll('.model-option-delete').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const url = btn.dataset.deleteUrl;
-      const p = findProviderByUrl(url);
-      const ok = await showConfirm(`确定要删除供应商 <strong>${escapeHtml(p?.name || url)}</strong> 吗？`);
+      const id = btn.dataset.deleteId;
+      const p = providers.find(pr => pr.id === id);
+      const ok = await showConfirm(`确定要删除供应商 <strong>${escapeHtml(p?.name || '')}</strong> 吗？`);
       if (!ok) return;
-      const providers = loadProviders().filter(pr => pr.url !== url);
-      saveProviders(providers);
-      localStorage.removeItem(getModelKey(url));
-      if (getSelectedProviderUrl() === url) {
-        selectProvider('');
+      try {
+        const res = await fetch(`/api/providers/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json();
+          showToast(err.error || '删除失败', true);
+          return;
+        }
+        await loadProviders();
+        if (document.getElementById('provider-id').value === id) {
+          selectProvider('');
+        }
+        renderProviderOptions();
+      } catch (err) {
+        showToast('删除失败: ' + err.message, true);
       }
-      renderProviderOptions();
     });
   });
 }
 
-function selectProvider(url) {
-  document.getElementById('target-url').value = url || '';
-  const provider = findProviderByUrl(url);
-  document.getElementById('target-protocol').value = url ? (provider?.protocol || detectProtocol(url)) : '';
-  if (url) {
-    const serverProxy = proxies.find(pr => pr.target?.providerUrl === url);
-    const name = (provider?.name && provider.name !== url) ? provider.name
-      : (serverProxy?.target?.providerName && serverProxy.target.providerName !== url) ? serverProxy.target.providerName
-      : null;
-    document.getElementById('provider-dropdown-value').textContent = name ? `${name} - ${url}` : url;
-  } else {
-    document.getElementById('provider-dropdown-value').textContent = '选择供应商...';
-  }
-  // 切换供应商后刷新模型列表和 API Key
+function selectProvider(id) {
+  const provider = providers.find(p => p.id === id);
+  document.getElementById('provider-id').value = id || '';
+  document.getElementById('target-protocol').value = provider ? provider.protocol : '';
+  document.getElementById('provider-dropdown-value').textContent = provider
+    ? (provider.name !== provider.url ? `${provider.name} - ${provider.url}` : provider.url)
+    : '选择供应商...';
   renderModelOptions();
   updateModelAddState();
-  if (url) {
-    const savedKey = loadApiKey(url);
-    if (savedKey) document.getElementById('target-key').value = savedKey;
-  }
 }
 
 // ==================== Model 下拉框 ====================
+
 function initModelDropdown() {
   const trigger = document.getElementById('model-dropdown-trigger');
   const dropdown = document.getElementById('model-dropdown');
@@ -243,49 +179,57 @@ function initModelDropdown() {
     }
   });
 
-  addBtn.addEventListener('click', () => {
-    const providerUrl = getSelectedProviderUrl();
-    if (!providerUrl) {
-      showToast('请先选择供应商地址', true);
+  addBtn.addEventListener('click', async () => {
+    const providerId = document.getElementById('provider-id').value;
+    if (!providerId) {
+      showToast('请先选择供应商', true);
       return;
     }
     const name = addInput.value.trim();
     if (!name) return;
-    addModel(providerUrl, name);
-    selectModel(name);
-    renderModelOptions();
-    addInput.value = '';
-    addInput.focus();
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider) return;
+    const models = [...(provider.models || []), name];
+    try {
+      await fetch(`/api/providers/${providerId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ models }),
+      });
+      await loadProviders();
+      selectModel(name);
+      renderModelOptions();
+      addInput.value = '';
+      addInput.focus();
+    } catch (err) {
+      showToast('添加模型失败: ' + err.message, true);
+    }
   });
 
   addInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      addBtn.click();
-    }
-    if (e.key === 'Escape') {
-      dropdown.classList.remove('open');
-    }
+    if (e.key === 'Enter') { e.preventDefault(); addBtn.click(); }
+    if (e.key === 'Escape') dropdown.classList.remove('open');
   });
 }
 
 function renderModelOptions() {
   const container = document.getElementById('model-dropdown-options');
-  const providerUrl = getSelectedProviderUrl();
-  const models = providerUrl ? loadModelsByProvider(providerUrl) : [];
+  const providerId = document.getElementById('provider-id').value;
+  const provider = providers.find(p => p.id === providerId);
+  const models = provider?.models || [];
   const current = document.getElementById('target-model').value;
 
-  container.innerHTML = models.map(m => `
-    <div class="model-option${m === current ? ' selected' : ''}" data-model="${escapeHtml(m)}">
-      <span class="model-option-name">${escapeHtml(m)}</span>
-      <button type="button" class="model-option-delete" data-delete="${escapeHtml(m)}" title="删除此模型">&times;</button>
-    </div>
-  `).join('');
-
-  if (!providerUrl) {
+  if (!providerId) {
     container.innerHTML = '<div style="padding:8px 12px;color:#64748b;font-size:13px">请先选择供应商</div>';
   } else if (models.length === 0) {
     container.innerHTML = '<div style="padding:8px 12px;color:#64748b;font-size:13px">暂无模型，请在下方添加</div>';
+  } else {
+    container.innerHTML = models.map(m => `
+      <div class="model-option${m === current ? ' selected' : ''}" data-model="${escapeHtml(m)}">
+        <span class="model-option-name">${escapeHtml(m)}</span>
+        <button type="button" class="model-option-delete" data-delete="${escapeHtml(m)}" title="删除此模型">&times;</button>
+      </div>
+    `).join('');
   }
 
   container.querySelectorAll('.model-option').forEach(opt => {
@@ -302,11 +246,23 @@ function renderModelOptions() {
       const name = btn.dataset.delete;
       const ok = await showConfirm(`确定要删除模型 <strong>${escapeHtml(name)}</strong> 吗？`);
       if (!ok) return;
-      removeModel(getSelectedProviderUrl(), name);
-      if (document.getElementById('target-model').value === name) {
-        selectModel('');
+      const provider = providers.find(p => p.id === providerId);
+      if (!provider) return;
+      const models = (provider.models || []).filter(m => m !== name);
+      try {
+        await fetch(`/api/providers/${providerId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ models }),
+        });
+        await loadProviders();
+        if (document.getElementById('target-model').value === name) {
+          selectModel('');
+        }
+        renderModelOptions();
+      } catch (err) {
+        showToast('删除模型失败: ' + err.message, true);
       }
-      renderModelOptions();
     });
   });
 }
@@ -318,11 +274,10 @@ function selectModel(value) {
 }
 
 function updateModelAddState() {
-  const section = document.getElementById('model-add-section');
-  const providerUrl = getSelectedProviderUrl();
+  const providerId = document.getElementById('provider-id').value;
   const addInput = document.getElementById('model-add-input');
   const addBtn = document.getElementById('model-add-btn');
-  if (providerUrl) {
+  if (providerId) {
     addInput.disabled = false;
     addBtn.disabled = false;
     addInput.placeholder = '输入模型名称';
@@ -333,17 +288,8 @@ function updateModelAddState() {
   }
 }
 
-function getSelectedModels() {
-  const providerUrl = getSelectedProviderUrl();
-  const models = providerUrl ? [...loadModelsByProvider(providerUrl)] : [];
-  const current = document.getElementById('target-model').value.trim();
-  if (current && !models.includes(current)) {
-    models.unshift(current);
-  }
-  return Array.from(new Set(models));
-}
-
 // ==================== 初始化 ====================
+
 function generateToken() {
   const arr = new Uint8Array(24);
   crypto.getRandomValues(arr);
@@ -351,7 +297,7 @@ function generateToken() {
 }
 
 async function init() {
-  await loadProxies();
+  await Promise.all([loadProxies(), loadProviders()]);
   initProviderDropdown();
   initModelDropdown();
   document.getElementById('proxy-auth').addEventListener('change', (e) => {
@@ -363,26 +309,8 @@ async function init() {
   });
 }
 
-async function loadProxies() {
-  try {
-    const res = await fetch('/api/proxies');
-    proxies = await res.json();
-    renderProxies();
-    updateStats();
-  } catch (err) {
-    console.error('加载代理失败:', err);
-    document.getElementById('proxy-list').innerHTML =
-      '<div class="empty">加载失败，请刷新重试</div>';
-  }
-}
-
-function updateStats() {
-  document.getElementById('stat-total').textContent = proxies.length;
-  document.getElementById('stat-running').textContent =
-    proxies.filter(p => p.running).length;
-}
-
 // ==================== 代理地址复制 ====================
+
 function getProxyUrl(port) {
   return `http://localhost:${port}`;
 }
@@ -434,6 +362,7 @@ function showToast(msg, isError) {
 }
 
 // ==================== 渲染代理列表 ====================
+
 function renderProxies() {
   const container = document.getElementById('proxy-list');
   if (proxies.length === 0) {
@@ -442,8 +371,6 @@ function renderProxies() {
   }
 
   container.innerHTML = proxies.map(p => {
-    const t = p.target || {};
-    const providerName = getProviderDisplayName(t.providerUrl || '', t.providerName);
     return `
     <div class="proxy-item">
       <div class="proxy-header">
@@ -475,13 +402,13 @@ function renderProxies() {
         </thead>
         <tbody>
           <tr>
-            <td>${escapeHtml(providerName)}${providerName !== t.providerUrl ? ` <span style="color:#64748b;font-size:12px">(${escapeHtml(t.providerUrl)})</span>` : ''}</td>
+            <td>${escapeHtml(p.providerName || p.providerUrl || '-')}</td>
             <td>
-              <span class="badge" style="background:${t.protocol==='openai'?'#0c4a6e':'#581c87'};color:${t.protocol==='openai'?'#7dd3fc':'#e9d5ff'}">
-                ${t.protocol || '-'}
+              <span class="badge" style="background:${p.protocol==='openai'?'#0c4a6e':'#581c87'};color:${p.protocol==='openai'?'#7dd3fc':'#e9d5ff'}">
+                ${p.protocol || '-'}
               </span>
             </td>
-            <td><code>${escapeHtml(t.defaultModel) || '-'}</code></td>
+            <td><code>${escapeHtml(p.defaultModel) || '-'}</code></td>
           </tr>
         </tbody>
       </table>
@@ -498,6 +425,7 @@ function renderProxies() {
 }
 
 // ==================== 弹窗操作 ====================
+
 function openModal(id = null) {
   editingId = id;
   document.getElementById('modal').dataset.proxyId = id || '';
@@ -507,46 +435,14 @@ function openModal(id = null) {
   if (id) {
     const p = proxies.find(x => x.id === id);
     if (!p) return;
-    const t = p.target || {};
     document.getElementById('proxy-id').value = p.id;
     document.getElementById('proxy-name').value = p.name;
     document.getElementById('proxy-port').value = p.port;
     document.getElementById('proxy-auth').value = p.requireAuth ? 'true' : 'false';
     document.getElementById('proxy-auth-token').value = p.authToken || '';
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
-    document.getElementById('target-key').value = t.apiKey || '';
-    // 迁移：服务端有 API Key 但 localStorage 没有，同步到 localStorage
-    if (t.providerUrl && t.apiKey && !loadApiKey(t.providerUrl)) {
-      saveApiKey(t.providerUrl, t.apiKey);
-    }
-
-    // 自动注册供应商到全局列表
-    if (t.providerUrl && !findProviderByUrl(t.providerUrl)) {
-      addProvider(getProviderDisplayName(t.providerUrl), t.providerUrl);
-    }
-
-    // 迁移旧模型数据：从按代理ID存储 → 按供应商URL存储
-    if (t.providerUrl) {
-      const existingByProvider = loadModelsByProvider(t.providerUrl);
-      if (existingByProvider.length === 0) {
-        // 优先用服务端的模型列表
-        let modelsToMigrate = Array.isArray(t.models) ? t.models.filter(Boolean) : [];
-        // 兼容旧版 localStorage（按代理ID存储）
-        if (modelsToMigrate.length === 0) {
-          const legacyKey = `protocol-proxy-models-${id}`;
-          try {
-            const legacy = JSON.parse(localStorage.getItem(legacyKey));
-            if (Array.isArray(legacy)) modelsToMigrate = legacy;
-          } catch {}
-        }
-        if (modelsToMigrate.length > 0) {
-          saveModelsByProvider(t.providerUrl, modelsToMigrate);
-        }
-      }
-    }
-
-    selectProvider(t.providerUrl || '');
-    selectModel(t.defaultModel || '');
+    selectProvider(p.providerId || '');
+    selectModel(p.defaultModel || '');
   } else {
     document.getElementById('proxy-id').value = '';
     document.getElementById('auth-token-group').style.display = 'none';
@@ -568,37 +464,27 @@ function closeModal() {
 async function handleSubmit(e) {
   e.preventDefault();
 
-  const providerUrl = getSelectedProviderUrl();
-  if (!providerUrl) {
-    showToast('请选择供应商地址', true);
+  const providerId = document.getElementById('provider-id').value;
+  if (!providerId) {
+    showToast('请选择供应商', true);
     return;
   }
 
   const port = parseInt(document.getElementById('proxy-port').value);
 
-  // 前端端口冲突校验
   const conflict = proxies.find(p => p.id !== editingId && p.port === port);
   if (conflict) {
     showToast(`端口 ${port} 已被代理「${conflict.name}」占用`, true);
     return;
   }
 
-  const provider = findProviderByUrl(providerUrl);
-  const target = {
-    providerUrl,
-    providerName: provider?.name || providerUrl,
-    protocol: detectProtocol(providerUrl),
-    defaultModel: document.getElementById('target-model').value.trim() || undefined,
-    models: getSelectedModels(),
-    apiKey: document.getElementById('target-key').value.trim(),
-  };
-
   const payload = {
     name: document.getElementById('proxy-name').value.trim(),
     port,
     requireAuth: document.getElementById('proxy-auth').value === 'true',
     authToken: document.getElementById('proxy-auth-token').value.trim() || null,
-    target,
+    providerId,
+    defaultModel: document.getElementById('target-model').value.trim() || '',
   };
 
   try {
@@ -618,7 +504,6 @@ async function handleSubmit(e) {
       return;
     }
 
-    saveApiKey(providerUrl, target.apiKey);
     closeModal();
     await loadProxies();
   } catch (err) {
@@ -628,6 +513,7 @@ async function handleSubmit(e) {
 }
 
 // ==================== 代理操作 ====================
+
 async function startProxy(id) {
   try {
     await fetch(`/api/proxies/${id}/start`, { method: 'POST' });
@@ -672,6 +558,7 @@ async function editProxy(id) {
 }
 
 // ==================== 工具函数 ====================
+
 function escapeHtml(text) {
   if (!text) return '';
   const div = document.createElement('div');

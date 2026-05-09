@@ -138,39 +138,131 @@ async function init() {
   app.use(express.json());
   app.use(express.static(path.join(__dirname, 'public')));
 
-  // ==================== 管理 API ====================
+  // ==================== 辅助函数 ====================
+
+  function resolveTarget(proxy) {
+    const provider = configStore.getProviderById(proxy.providerId);
+    if (!provider) return null;
+    return {
+      providerUrl: provider.url,
+      providerName: provider.name,
+      protocol: provider.protocol,
+      apiKey: provider.apiKey,
+      defaultModel: proxy.defaultModel,
+      models: provider.models,
+    };
+  }
+
+  async function startProxyWithProvider(proxy) {
+    const target = resolveTarget(proxy);
+    if (!target) throw new Error(`供应商 ${proxy.providerId} 不存在`);
+    const proxyConfig = { ...proxy, target };
+    return proxyManager.startProxy(proxyConfig);
+  }
+
+  // ==================== 供应商 API ====================
+
+  app.get('/api/providers', (req, res) => {
+    const providers = configStore.getProviders().map(p => ({
+      ...p,
+      apiKey: p.apiKey ? '***' : '',
+    }));
+    res.json(providers);
+  });
+
+  app.get('/api/providers/:id', (req, res) => {
+    const provider = configStore.getProviderById(req.params.id);
+    if (!provider) return res.status(404).json({ error: 'Provider not found' });
+    res.json(provider);
+  });
+
+  app.post('/api/providers', (req, res) => {
+    const { name, url, protocol, apiKey, models } = req.body;
+    if (!name || !url) {
+      return res.status(400).json({ error: 'name and url are required' });
+    }
+    const provider = configStore.addProvider({
+      name, url,
+      protocol: protocol || (/anthropic/i.test(url) ? 'anthropic' : 'openai'),
+      apiKey: apiKey || '',
+      models: models || [],
+    });
+    res.status(201).json(provider);
+  });
+
+  app.put('/api/providers/:id', (req, res) => {
+    const existing = configStore.getProviderById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Provider not found' });
+
+    const updates = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.url !== undefined) updates.url = req.body.url;
+    if (req.body.protocol !== undefined) updates.protocol = req.body.protocol;
+    if (req.body.apiKey !== undefined) updates.apiKey = req.body.apiKey;
+    if (req.body.models !== undefined) updates.models = req.body.models;
+
+    const updated = configStore.updateProvider(req.params.id, updates);
+    res.json(updated);
+  });
+
+  app.delete('/api/providers/:id', (req, res) => {
+    const existing = configStore.getProviderById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Provider not found' });
+
+    // 检查是否有代理在使用此供应商
+    const inUse = configStore.getProxies().some(p => p.providerId === req.params.id);
+    if (inUse) {
+      return res.status(409).json({ error: '该供应商正在被代理使用，无法删除' });
+    }
+
+    configStore.removeProvider(req.params.id);
+    res.json({ success: true });
+  });
+
+  // ==================== 代理 API ====================
 
   // 获取所有代理配置
   app.get('/api/proxies', (req, res) => {
-    const proxies = configStore.getProxies().map(p => ({
-      ...p,
-      target: p.target ? {
-        ...p.target,
-        apiKey: p.target.apiKey ? '***' : '',
-      } : null,
-      running: proxyManager.isRunning(p.id),
-    }));
+    const proxies = configStore.getProxies().map(p => {
+      const provider = configStore.getProviderById(p.providerId);
+      return {
+        ...p,
+        providerName: provider?.name || '',
+        providerUrl: provider?.url || '',
+        protocol: provider?.protocol || '',
+        defaultModel: p.defaultModel || '',
+        running: proxyManager.isRunning(p.id),
+      };
+    });
     res.json(proxies);
   });
 
-  // 获取单个代理配置（含敏感信息）
+  // 获取单个代理配置
   app.get('/api/proxies/:id', (req, res) => {
     const proxy = configStore.getProxyById(req.params.id);
     if (!proxy) return res.status(404).json({ error: 'Proxy not found' });
-    res.json(proxy);
+    const provider = configStore.getProviderById(proxy.providerId);
+    res.json({
+      ...proxy,
+      providerName: provider?.name || '',
+      providerUrl: provider?.url || '',
+      protocol: provider?.protocol || '',
+    });
   });
 
   // 创建代理
   app.post('/api/proxies', async (req, res) => {
-    const { name, port, requireAuth, authToken, target } = req.body;
+    const { name, port, requireAuth, authToken, providerId, defaultModel } = req.body;
 
-    if (!name || !port || !target) {
-      return res.status(400).json({ error: 'name, port and target are required' });
+    if (!name || !port || !providerId) {
+      return res.status(400).json({ error: 'name, port and providerId are required' });
     }
+
+    const provider = configStore.getProviderById(providerId);
+    if (!provider) return res.status(400).json({ error: '供应商不存在' });
 
     const parsedPort = parseInt(port);
 
-    // 端口冲突校验
     const existing = configStore.getProxies().find(p => p.port === parsedPort);
     if (existing) {
       return res.status(409).json({
@@ -183,14 +275,14 @@ async function init() {
       port: parsedPort,
       requireAuth: !!requireAuth,
       authToken: authToken || null,
-      target,
+      providerId,
+      defaultModel: defaultModel || '',
     });
 
     try {
-      await proxyManager.startProxy(proxy);
+      await startProxyWithProvider(proxy);
       res.status(201).json({ ...proxy, running: true });
     } catch (err) {
-      // 启动失败，回滚已保存的配置
       configStore.removeProxy(proxy.id);
       res.status(500).json({ error: `代理启动失败: ${err.message}` });
     }
@@ -198,18 +290,22 @@ async function init() {
 
   // 更新代理
   app.put('/api/proxies/:id', async (req, res) => {
-    const { name, port, requireAuth, authToken, target } = req.body;
     const existing = configStore.getProxyById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Proxy not found' });
 
     const updates = {};
-    if (name !== undefined) updates.name = name;
-    if (port !== undefined) updates.port = parseInt(port);
-    if (requireAuth !== undefined) updates.requireAuth = !!requireAuth;
-    if (authToken !== undefined) updates.authToken = authToken || null;
-    if (target !== undefined) updates.target = target;
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.port !== undefined) updates.port = parseInt(req.body.port);
+    if (req.body.requireAuth !== undefined) updates.requireAuth = !!req.body.requireAuth;
+    if (req.body.authToken !== undefined) updates.authToken = req.body.authToken || null;
+    if (req.body.providerId !== undefined) {
+      if (!configStore.getProviderById(req.body.providerId)) {
+        return res.status(400).json({ error: '供应商不存在' });
+      }
+      updates.providerId = req.body.providerId;
+    }
+    if (req.body.defaultModel !== undefined) updates.defaultModel = req.body.defaultModel;
 
-    // 端口变更时校验冲突
     const needRestart = updates.port !== undefined && updates.port !== existing.port;
     if (needRestart) {
       const conflict = configStore.getProxies().find(p => p.id !== req.params.id && p.port === updates.port);
@@ -224,12 +320,14 @@ async function init() {
 
     if (needRestart) {
       try {
-        await proxyManager.restartProxy(updated);
+        await startProxyWithProvider(updated);
       } catch (err) {
         return res.status(500).json({ error: `代理重启失败: ${err.message}` });
       }
     } else {
-      proxyManager.updateProxyConfig(updated);
+      // 更新供应商配置引用
+      const target = resolveTarget(updated);
+      if (target) proxyManager.updateProxyConfig({ ...updated, target });
     }
 
     res.json({ ...updated, running: proxyManager.isRunning(updated.id) });
@@ -251,7 +349,7 @@ async function init() {
     if (!proxy) return res.status(404).json({ error: 'Proxy not found' });
 
     try {
-      await proxyManager.startProxy(proxy);
+      await startProxyWithProvider(proxy);
       res.json({ success: true, running: true });
     } catch (err) {
       res.status(500).json({ error: 'Failed to start proxy', message: err.message });
@@ -283,7 +381,7 @@ async function init() {
   const proxies = configStore.getProxies();
   for (const proxy of proxies) {
     try {
-      await proxyManager.startProxy(proxy);
+      await startProxyWithProvider(proxy);
     } catch (err) {
       console.error(`[Init] Failed to start proxy ${proxy.name}:`, err.message);
     }
