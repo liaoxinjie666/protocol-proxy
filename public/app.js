@@ -162,6 +162,7 @@ function renderProviderOptions() {
       if (!ok) return;
       const providers = loadProviders().filter(pr => pr.url !== url);
       saveProviders(providers);
+      localStorage.removeItem(getModelKey(url));
       if (getSelectedProviderUrl() === url) {
         selectProvider('');
       }
