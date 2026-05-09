@@ -235,7 +235,12 @@ async function init() {
     const proxies = configStore.getProxies().map(p => {
       const provider = configStore.getProviderById(p.providerId);
       return {
-        ...p,
+        id: p.id,
+        name: p.name,
+        port: p.port,
+        requireAuth: p.requireAuth,
+        authToken: p.authToken,
+        providerId: p.providerId,
         providerName: provider?.name || '',
         providerUrl: provider?.url || '',
         protocol: provider?.protocol || '',
