@@ -137,7 +137,7 @@ function renderProviderOptions() {
   container.innerHTML = providers.map(p => `
     <div class="model-option${p.url === currentUrl ? ' selected' : ''}" data-url="${escapeHtml(p.url)}">
       <span class="model-option-name">${escapeHtml(p.name)}</span>
-      <span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>
+      ${p.name !== p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
       <button type="button" class="model-option-delete" data-delete-url="${escapeHtml(p.url)}" title="删除此供应商">&times;</button>
     </div>
   `).join('');
