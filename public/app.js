@@ -47,9 +47,12 @@ function initProviderDropdown() {
     e.stopPropagation();
     dropdown.classList.toggle('open');
     if (dropdown.classList.contains('open')) {
+      editingProviderId = null;
       addNameInput.value = '';
       addUrlInput.value = '';
       addKeyInput.value = '';
+      addUrlInput.disabled = false;
+      addBtn.textContent = '添加';
       renderProviderOptions();
       addNameInput.focus();
     }
@@ -70,22 +73,39 @@ function initProviderDropdown() {
       return;
     }
     try {
-      const res = await fetch('/api/providers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, url, apiKey }),
-      });
+      let res;
+      if (editingProviderId) {
+        // 更新模式
+        res = await fetch(`/api/providers/${editingProviderId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, apiKey }),
+        });
+      } else {
+        // 新增模式
+        res = await fetch('/api/providers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, url, apiKey }),
+        });
+      }
       if (!res.ok) {
         const err = await res.json();
-        showToast(err.error || '添加失败', true);
+        showToast(err.error || '操作失败', true);
         return;
       }
       const provider = await res.json();
+      editingProviderId = null;
+      addUrlInput.disabled = false;
+      addBtn.textContent = '添加';
+      addNameInput.value = '';
+      addUrlInput.value = '';
+      addKeyInput.value = '';
       await loadProviders();
       selectProvider(provider.id);
-      dropdown.classList.remove('open');
+      renderProviderOptions();
     } catch (err) {
-      showToast('添加失败: ' + err.message, true);
+      showToast('操作失败: ' + err.message, true);
     }
   });
 
@@ -98,6 +118,8 @@ function initProviderDropdown() {
   });
 }
 
+let editingProviderId = null;
+
 function renderProviderOptions() {
   const container = document.getElementById('provider-dropdown-options');
   const currentId = document.getElementById('provider-id').value;
@@ -106,7 +128,10 @@ function renderProviderOptions() {
     <div class="model-option${p.id === currentId ? ' selected' : ''}" data-id="${escapeHtml(p.id)}">
       <span class="model-option-name">${escapeHtml(p.name)}</span>
       ${p.name !== p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
-      <button type="button" class="model-option-delete" data-delete-id="${escapeHtml(p.id)}" title="删除此供应商">&times;</button>
+      <span style="margin-left:auto;display:flex;gap:4px">
+        <button type="button" class="model-option-delete" data-edit-id="${escapeHtml(p.id)}" title="编辑此供应商" style="color:#60a5fa">&times;</button>
+        <button type="button" class="model-option-delete" data-delete-id="${escapeHtml(p.id)}" title="删除此供应商">&times;</button>
+      </span>
     </div>
   `).join('');
 
@@ -122,7 +147,29 @@ function renderProviderOptions() {
     });
   });
 
-  container.querySelectorAll('.model-option-delete').forEach(btn => {
+  // 编辑供应商
+  container.querySelectorAll('[data-edit-id]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.editId;
+      try {
+        const res = await fetch(`/api/providers/${id}`);
+        if (!res.ok) throw new Error('加载失败');
+        const p = await res.json();
+        editingProviderId = id;
+        document.getElementById('provider-add-name').value = p.name;
+        document.getElementById('provider-add-url').value = p.url;
+        document.getElementById('provider-add-key').value = p.apiKey || '';
+        document.getElementById('provider-add-url').disabled = true;
+        document.getElementById('provider-add-btn').textContent = '更新';
+      } catch (err) {
+        showToast('加载供应商失败: ' + err.message, true);
+      }
+    });
+  });
+
+  // 删除供应商
+  container.querySelectorAll('[data-delete-id]').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const id = btn.dataset.deleteId;

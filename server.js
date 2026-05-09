@@ -198,7 +198,7 @@ async function init() {
     if (req.body.name !== undefined) updates.name = req.body.name;
     if (req.body.url !== undefined) updates.url = req.body.url;
     if (req.body.protocol !== undefined) updates.protocol = req.body.protocol;
-    if (req.body.apiKey !== undefined) updates.apiKey = req.body.apiKey;
+    if (req.body.apiKey !== undefined && req.body.apiKey !== '') updates.apiKey = req.body.apiKey;
     if (req.body.models !== undefined) updates.models = req.body.models;
 
     const updated = configStore.updateProvider(req.params.id, updates);
