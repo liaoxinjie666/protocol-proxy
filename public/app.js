@@ -547,10 +547,7 @@ async function handleSubmit(e) {
   const providerUpdates = {};
   if (apiKey) providerUpdates.apiKey = apiKey;
   if (protocol) providerUpdates.protocol = protocol;
-  const selectedModels = [];
-  const modelDropdown = document.getElementById('model-dropdown-value').textContent;
-  if (defaultModel) selectedModels.push(defaultModel);
-  if (Object.keys(providerUpdates).length > 0 || selectedModels.length > 0) {
+  if (Object.keys(providerUpdates).length > 0) {
     try {
       await fetch(`/api/providers/${providerId}`, {
         method: 'PUT',
