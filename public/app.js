@@ -440,11 +440,16 @@ async function confirmImport() {
 
 async function restartAllProxies() {
   try {
-    for (const p of proxies) {
-      if (p.running) {
-        await fetch(`/api/proxies/${p.id}/stop`, { method: 'POST' });
-      }
+    // 先停掉所有运行中的代理（不管 ID 是否匹配新配置）
+    const statusRes = await fetch('/api/status');
+    const status = await statusRes.json();
+    const runningIds = (status.running || []).map(r => r.id);
+    for (const id of runningIds) {
+      await fetch(`/api/proxies/${id}/stop`, { method: 'POST' });
     }
+    // 重新加载配置
+    await loadProxies();
+    // 按新配置启动所有代理
     for (const p of proxies) {
       await fetch(`/api/proxies/${p.id}/start`, { method: 'POST' });
     }

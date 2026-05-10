@@ -1,6 +1,6 @@
 {
   "name": "protocol-proxy",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "OpenAI / Anthropic 协议转换透明代理",
   "main": "server.js",
   "bin": {
@@ -27,8 +27,7 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "puppeteer-core": "^24.43.0"
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "pkg": "^5.8.1"

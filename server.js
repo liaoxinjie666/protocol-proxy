@@ -596,6 +596,8 @@ process.on('SIGINT', async () => {
   removePid();
   try {
     const proxyManager = require('./lib/proxy-manager');
+    const statsStore = require('./lib/stats-store');
+    statsStore.flush();
     await proxyManager.stopAll();
   } catch (err) {
     console.error('[Shutdown] stopAll error:', err.message);
@@ -607,6 +609,8 @@ process.on('SIGTERM', async () => {
   removePid();
   try {
     const proxyManager = require('./lib/proxy-manager');
+    const statsStore = require('./lib/stats-store');
+    statsStore.flush();
     await proxyManager.stopAll();
   } catch (err) {
     console.error('[Shutdown] stopAll error:', err.message);
