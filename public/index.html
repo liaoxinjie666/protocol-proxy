@@ -160,6 +160,7 @@
                       <div class="model-dropdown-options" id="protocol-dropdown-options">
                         <div class="model-option selected" data-value="openai"><span class="model-option-name">OpenAI</span></div>
                         <div class="model-option" data-value="anthropic"><span class="model-option-name">Anthropic</span></div>
+                        <div class="model-option" data-value="gemini"><span class="model-option-name">Gemini</span></div>
                       </div>
                     </div>
                   </div>
@@ -190,12 +191,12 @@
               </div>
               <div class="form-row" id="azure-fields" style="display:none">
                 <div class="form-group">
-                  <label>Azure Deployment</label>
-                  <input type="text" id="target-azure-deployment" placeholder="gpt-4o">
+                  <label>Azure Deployment <span style="color:#64748b;font-size:0.75rem">（仅 Azure 用户填写）</span></label>
+                  <input type="text" id="target-azure-deployment" placeholder="仅 Azure 用户填写">
                 </div>
                 <div class="form-group">
-                  <label>Azure API Version</label>
-                  <input type="text" id="target-azure-version" placeholder="2024-02-01">
+                  <label>Azure API Version <span style="color:#64748b;font-size:0.75rem">（仅 Azure 用户填写）</span></label>
+                  <input type="text" id="target-azure-version" placeholder="仅 Azure 用户填写">
                 </div>
               </div>
             </div>

@@ -635,6 +635,9 @@ async function init() {
   initSimpleDropdown('protocol-dropdown', (val) => {
     document.getElementById('azure-fields').style.display = val === 'openai' ? '' : 'none';
   });
+  // 初始状态：根据当前协议值决定 Azure 字段显示
+  const initProto = document.getElementById('target-protocol').value;
+  document.getElementById('azure-fields').style.display = initProto === 'openai' ? '' : 'none';
 }
 
 // ==================== 代理地址复制 ====================
