@@ -954,7 +954,8 @@ form {
 .stats-controls {
   display: flex;
   gap: 12px;
-  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;  align-items: center;
 }
 
 .stats-controls .model-dropdown {
@@ -970,6 +971,7 @@ form {
 .stats-range-btns {
   display: flex;
   gap: 4px;
+  align-items: center;
   background: rgba(6, 8, 15, 0.4);
   border-radius: 10px;
   padding: 3px;
@@ -995,7 +997,38 @@ form {
 .stats-range-btn.active {
   background: rgba(59, 130, 246, 0.2) !important;
   color: #60a5fa !important;
-  box-shadow: 0 0 8px rgba(59, 130, 246, 0.15) !important;
+}
+
+.stats-date-range {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stats-date-input {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 125px;
+}
+
+.stats-date-input:focus {
+  border-color: #3b82f6;
+}
+
+.stats-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
+.stats-date-sep {
+  color: #475569;
+  font-size: 0.85rem;
 }
 
 .stats-summary {
@@ -1122,6 +1155,15 @@ form {
 
   .stats-controls .model-dropdown {
     width: 100%;
+  }
+
+  .stats-date-range {
+    width: 100%;
+  }
+
+  .stats-date-input {
+    flex: 1;
+    min-width: 0;
   }
 }
 

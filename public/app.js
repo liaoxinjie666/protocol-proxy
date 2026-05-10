@@ -211,6 +211,8 @@ function selectProvider(id) {
   const models = provider?.models || [];
   selectModel(models[0] || '');
   updateModelAddState();
+  // 同步 API Key placeholder
+  document.getElementById('target-key').placeholder = provider?.apiKey ? '已设置（留空则不修改）' : 'sk-...';
   // 同步 Azure 字段
   document.getElementById('target-azure-deployment').value = provider?.azureDeployment || '';
   document.getElementById('target-azure-version').value = provider?.azureApiVersion || '';
@@ -471,6 +473,10 @@ async function loadStats() {
   try {
     const params = new URLSearchParams({ range: statsRange });
     if (statsProxyId) params.set('proxyId', statsProxyId);
+    const startDate = document.getElementById('stats-start-date')?.value;
+    const endDate = document.getElementById('stats-end-date')?.value;
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
     const res = await fetch('/api/stats?' + params);
     const data = await res.json();
     renderStatsSummary(data.summary);
@@ -582,9 +588,15 @@ function initStatsRangeBtns() {
       document.querySelectorAll('.stats-range-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       statsRange = btn.dataset.range;
+      // 清空日期选择器，显示全部数据
+      document.getElementById('stats-start-date').value = '';
+      document.getElementById('stats-end-date').value = '';
       loadStats();
     });
   });
+  // 日期选择器变化时自动加载
+  document.getElementById('stats-start-date').addEventListener('change', loadStats);
+  document.getElementById('stats-end-date').addEventListener('change', loadStats);
 }
 
 function generateToken() {
