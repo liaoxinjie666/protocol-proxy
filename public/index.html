@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -191,6 +191,45 @@
                 <div class="form-group">
                   <label>API Key</label>
                   <input type="password" id="target-key" placeholder="sk-...">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>路由策略</label>
+                  <input type="hidden" id="routing-strategy" value="primary_fallback">
+                  <div class="model-dropdown" id="routing-dropdown">
+                    <div class="model-dropdown-trigger" id="routing-dropdown-trigger">
+                      <span id="routing-dropdown-value">主备切换</span>
+                      <span class="model-dropdown-arrow">&#9662;</span>
+                    </div>
+                    <div class="model-dropdown-menu" id="routing-dropdown-menu">
+                      <div class="model-dropdown-options" id="routing-dropdown-options">
+                        <div class="model-option selected" data-value="primary_fallback"><span class="model-option-name">主备切换</span></div>
+                        <div class="model-option" data-value="round_robin"><span class="model-option-name">轮询</span></div>
+                        <div class="model-option" data-value="weighted"><span class="model-option-name">加权</span></div>
+                        <div class="model-option" data-value="fastest"><span class="model-option-name">最快优先</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-group" style="max-width:120px">
+                  <label>主供应商权重</label>
+                  <input type="number" id="provider-weight" min="1" step="1" value="1" placeholder="1">
+                </div>
+                <div class="form-group provider-pool-group">
+                  <label>备选供应商</label>
+                  <div class="provider-pool-picker">
+                    <div class="model-dropdown" id="provider-pool-dropdown">
+                      <div class="model-dropdown-trigger" id="provider-pool-dropdown-trigger">
+                        <span id="provider-pool-dropdown-value">从供应商列表添加</span>
+                        <span class="model-dropdown-arrow">&#9662;</span>
+                      </div>
+                      <div class="model-dropdown-menu" id="provider-pool-dropdown-menu">
+                        <div class="model-dropdown-options" id="provider-pool-dropdown-options"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="provider-pool-list" id="provider-pool-list"></div>
                 </div>
               </div>
               <div class="form-row" id="azure-fields" style="display:none">

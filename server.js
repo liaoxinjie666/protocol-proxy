@@ -3,6 +3,7 @@ const path = require('path');
 const { exec, spawn } = require('child_process');
 const os = require('os');
 const fs = require('fs');
+const logger = require('./lib/logger');
 
 // ==================== CLI ====================
 
@@ -137,7 +138,7 @@ async function init() {
       command = `xdg-open "${url}"`;
     }
     exec(command, (err) => {
-      if (err) console.error('[Browser] 打开浏览器失败:', err.message);
+      if (err) logger.error('[Browser] 打开浏览器失败:', err.message);
     });
   }
 
@@ -149,7 +150,7 @@ async function init() {
     const start = Date.now();
     res.on('finish', () => {
       const duration = Date.now() - start;
-      console.log(`[HTTP] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+      logger.log(`[HTTP] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
     });
     next();
   });
@@ -159,18 +160,88 @@ async function init() {
   // ==================== 辅助函数 ====================
 
   function resolveTarget(proxy) {
-    const provider = configStore.getProviderById(proxy.providerId);
-    if (!provider) return null;
+    const primaryProvider = configStore.getProviderById(proxy.providerId);
+    if (!primaryProvider) return null;
+
+    const pool = [];
+    const seen = new Set();
+
+    // Primary provider (no model override)
+    const primaryKey = `${primaryProvider.id}\0`;
+    seen.add(primaryKey);
+    pool.push({
+      providerId: primaryProvider.id,
+      providerName: primaryProvider.name,
+      providerUrl: primaryProvider.url,
+      protocol: primaryProvider.protocol,
+      apiKey: primaryProvider.apiKey,
+      models: primaryProvider.models,
+      azureDeployment: primaryProvider.azureDeployment || '',
+      azureApiVersion: primaryProvider.azureApiVersion || '',
+      model: '',
+      weight: Math.max(1, parseInt(proxy.providerWeight, 10) || 1),
+    });
+
+    // Pool entries (may include model override)
+    for (const entry of (proxy.providerPool || [])) {
+      if (!entry || !entry.providerId) continue;
+      const model = typeof entry.model === 'string' ? entry.model.trim() : '';
+      const key = `${entry.providerId}\0${model}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const provider = configStore.getProviderById(entry.providerId);
+      if (!provider) continue;
+      pool.push({
+        providerId: provider.id,
+        providerName: provider.name,
+        providerUrl: provider.url,
+        protocol: provider.protocol,
+        apiKey: provider.apiKey,
+        models: provider.models,
+        azureDeployment: provider.azureDeployment || '',
+        azureApiVersion: provider.azureApiVersion || '',
+        model,
+        weight: Math.max(1, parseInt(entry.weight, 10) || 1),
+      });
+    }
+
+    if (pool.length === 0) return null;
+    const protocol = pool[0].protocol;
+    if (pool.some(p => p.protocol !== protocol)) return null;
+
     return {
-      providerUrl: provider.url,
-      providerName: provider.name,
-      protocol: provider.protocol,
-      apiKey: provider.apiKey,
+      protocol,
+      routingStrategy: proxy.routingStrategy || 'primary_fallback',
+      providerPool: pool,
       defaultModel: proxy.defaultModel,
-      models: provider.models,
-      azureDeployment: provider.azureDeployment || '',
-      azureApiVersion: provider.azureApiVersion || '',
     };
+  }
+
+  function normalizeProviderPoolInput(pool) {
+    if (!Array.isArray(pool)) return [];
+    const seen = new Set();
+    const result = [];
+    for (const item of pool) {
+      if (!item || typeof item !== 'object') continue;
+      const providerId = typeof item.providerId === 'string' ? item.providerId.trim() : '';
+      if (!providerId) continue;
+      const model = typeof item.model === 'string' ? item.model.trim() : '';
+      const key = `${providerId}\0${model}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        providerId,
+        model,
+        weight: Math.max(1, parseInt(item.weight, 10) || 1),
+      });
+    }
+    return result;
+  }
+
+  function normalizeRoutingStrategyInput(strategy) {
+    return ['primary_fallback', 'round_robin', 'weighted', 'fastest'].includes(strategy)
+      ? strategy
+      : 'primary_fallback';
   }
 
   async function startProxyWithProvider(proxy) {
@@ -269,6 +340,9 @@ async function init() {
         providerUrl: provider?.url || '',
         protocol: provider?.protocol || '',
         defaultModel: p.defaultModel || '',
+        providerWeight: Math.max(1, parseInt(p.providerWeight, 10) || 1),
+        routingStrategy: p.routingStrategy || 'primary_fallback',
+        providerPool: Array.isArray(p.providerPool) ? p.providerPool : [],
         hasApiKey: !!provider?.apiKey,
         running: proxyManager.isRunning(p.id),
       };
@@ -286,13 +360,15 @@ async function init() {
       providerName: provider?.name || '',
       providerUrl: provider?.url || '',
       protocol: provider?.protocol || '',
+      routingStrategy: proxy.routingStrategy || 'primary_fallback',
+      providerPool: Array.isArray(proxy.providerPool) ? proxy.providerPool : [],
       hasApiKey: !!provider?.apiKey,
     });
   });
 
   // 创建代理
   app.post('/api/proxies', async (req, res) => {
-    const { name, port, requireAuth, authToken, providerId, defaultModel } = req.body;
+    const { name, port, requireAuth, authToken, providerId, defaultModel, routingStrategy, providerPool, providerWeight } = req.body;
 
     if (!name || !port || !providerId) {
       return res.status(400).json({ error: 'name, port and providerId are required' });
@@ -317,6 +393,9 @@ async function init() {
       authToken: authToken || null,
       providerId,
       defaultModel: defaultModel || '',
+      providerWeight: Math.max(1, parseInt(providerWeight, 10) || 1),
+      routingStrategy: normalizeRoutingStrategyInput(routingStrategy),
+      providerPool: normalizeProviderPoolInput(providerPool),
     });
 
     try {
@@ -345,6 +424,9 @@ async function init() {
       updates.providerId = req.body.providerId;
     }
     if (req.body.defaultModel !== undefined) updates.defaultModel = req.body.defaultModel;
+    if (req.body.providerWeight !== undefined) updates.providerWeight = Math.max(1, parseInt(req.body.providerWeight, 10) || 1);
+    if (req.body.routingStrategy !== undefined) updates.routingStrategy = normalizeRoutingStrategyInput(req.body.routingStrategy);
+    if (req.body.providerPool !== undefined) updates.providerPool = normalizeProviderPoolInput(req.body.providerPool);
 
     const needRestart = updates.port !== undefined && updates.port !== existing.port;
     if (needRestart) {
@@ -453,6 +535,8 @@ async function init() {
         authToken: p.authToken,
         providerId: p.providerId,
         defaultModel: p.defaultModel || '',
+        routingStrategy: p.routingStrategy || 'primary_fallback',
+        providerPool: Array.isArray(p.providerPool) ? p.providerPool : [],
         providerName: provider?.name || '',
       };
     });
@@ -502,6 +586,8 @@ async function init() {
           authToken: p.authToken || null,
           providerId: p.providerId,
           defaultModel: p.defaultModel || '',
+          routingStrategy: normalizeRoutingStrategyInput(p.routingStrategy),
+          providerPool: normalizeProviderPoolInput(p.providerPool),
         })),
       };
       configStore.saveConfig(newConfig);
@@ -521,6 +607,8 @@ async function init() {
         protocol: p.protocol,
         apiKey: p.apiKey || '',
         models: Array.isArray(p.models) ? p.models : [],
+        routingStrategy: normalizeRoutingStrategyInput(p.routingStrategy),
+        providerPool: normalizeProviderPoolInput(p.providerPool),
       });
     }
 
@@ -535,16 +623,18 @@ async function init() {
           error: `端口 ${p.port} 已被代理「${conflict.name}」占用，无法导入代理「${p.name}」`,
         });
       }
-      proxyMap.set(p.id, {
-        id: p.id,
-        name: p.name,
-        port: p.port,
-        requireAuth: !!p.requireAuth,
-        authToken: p.authToken || null,
-        providerId: p.providerId,
-        defaultModel: p.defaultModel || '',
-      });
-    }
+        proxyMap.set(p.id, {
+          id: p.id,
+          name: p.name,
+          port: p.port,
+          requireAuth: !!p.requireAuth,
+          authToken: p.authToken || null,
+          providerId: p.providerId,
+          defaultModel: p.defaultModel || '',
+          routingStrategy: normalizeRoutingStrategyInput(p.routingStrategy),
+          providerPool: normalizeProviderPoolInput(p.providerPool),
+        });
+      }
 
     const merged = {
       providers: Array.from(providerMap.values()),
@@ -570,6 +660,7 @@ async function init() {
   });
 
   // 启动
+  logger.init();
   writePid();
 
   // 启动所有已配置的代理
@@ -578,21 +669,22 @@ async function init() {
     try {
       await startProxyWithProvider(proxy);
     } catch (err) {
-      console.error(`[Init] Failed to start proxy ${proxy.name}:`, err.message);
+      logger.error(`[Init] Failed to start proxy ${proxy.name}:`, err.message);
     }
   }));
 
   app.listen(PORT, () => {
     const adminUrl = `http://localhost:${PORT}`;
-    console.log(`[Admin] Management server running on ${adminUrl}`);
-    console.log(`[Admin] ${proxies.length} proxy config(s) loaded`);
+    logger.log(`[Admin] Management server running on ${adminUrl}`);
+    logger.log(`[Admin] ${proxies.length} proxy config(s) loaded`);
+    logger.log(`[Admin] 日志文件: ${logger.LOG_FILE}`);
     openBrowser(adminUrl);
   });
 }
 
 // 优雅关闭
 process.on('SIGINT', async () => {
-  console.log('\nShutting down...');
+  logger.log('[Shutdown] Shutting down...');
   removePid();
   try {
     const proxyManager = require('./lib/proxy-manager');
@@ -600,7 +692,7 @@ process.on('SIGINT', async () => {
     statsStore.flush();
     await proxyManager.stopAll();
   } catch (err) {
-    console.error('[Shutdown] stopAll error:', err.message);
+    logger.error('[Shutdown] stopAll error:', err.message);
   }
   process.exit(0);
 });
@@ -613,7 +705,7 @@ process.on('SIGTERM', async () => {
     statsStore.flush();
     await proxyManager.stopAll();
   } catch (err) {
-    console.error('[Shutdown] stopAll error:', err.message);
+    logger.error('[Shutdown] stopAll error:', err.message);
   }
   process.exit(0);
 });

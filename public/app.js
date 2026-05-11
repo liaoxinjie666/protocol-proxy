@@ -1,6 +1,11 @@
-let proxies = [];
+﻿let proxies = [];
 let providers = [];
 let editingId = null;
+let editingProviderId = null;
+let importData = null;
+let statsRange = 'daily';
+let statsProxyId = '';
+let providerPoolItems = [];
 
 // ==================== 数据加载 ====================
 
@@ -31,6 +36,193 @@ function updateStats() {
   document.getElementById('stat-total').textContent = proxies.length;
   document.getElementById('stat-running').textContent =
     proxies.filter(p => p.running).length;
+}
+
+function parseProviderPool(value) {
+  const text = (value || '').trim();
+  if (!text) return [];
+  const seen = new Set();
+  const items = [];
+  for (const part of text.split(/[\n,]/)) {
+    const token = part.trim();
+    if (!token) continue;
+    const [providerIdRaw, modelRaw, weightRaw] = token.split(':');
+    const providerId = (providerIdRaw || '').trim();
+    if (!providerId) continue;
+    const model = (modelRaw || '').trim();
+    const key = `${providerId}\0${model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ providerId, model, weight: Math.max(1, parseInt((weightRaw || '1').trim(), 10) || 1) });
+  }
+  return items;
+}
+
+function formatProviderPool(pool) {
+  if (!Array.isArray(pool) || pool.length === 0) return '';
+  return pool.map(item => {
+    const w = Math.max(1, parseInt(item.weight, 10) || 1);
+    return item.model ? `${item.providerId}:${item.model}:${w}` : `${item.providerId}::${w}`;
+  }).join(', ');
+}
+
+function syncSimpleDropdown(dropdownId, value, hiddenInputId) {
+  const dropdown = document.getElementById(dropdownId);
+  if (!dropdown) return value;
+  const hiddenInput = document.getElementById(hiddenInputId || dropdownId.replace('-dropdown', ''));
+  const valueEl = dropdown.querySelector('[id$="-dropdown-value"]');
+  const options = Array.from(dropdown.querySelectorAll('.model-option'));
+  const nextValue = options.some(opt => opt.dataset.value === value)
+    ? value
+    : (options[0]?.dataset.value || '');
+  options.forEach(opt => opt.classList.toggle('selected', opt.dataset.value === nextValue));
+  if (hiddenInput) hiddenInput.value = nextValue;
+  const selected = options.find(opt => opt.dataset.value === nextValue);
+  if (valueEl && selected) {
+    valueEl.textContent = selected.querySelector('.model-option-name')?.textContent || valueEl.textContent;
+  }
+  return nextValue;
+}
+
+function syncProviderPoolState(items) {
+  providerPoolItems = Array.isArray(items)
+    ? items
+        .filter(item => item && item.providerId)
+        .map(item => ({
+          providerId: item.providerId,
+          model: typeof item.model === 'string' ? item.model : '',
+          weight: Math.max(1, parseInt(item.weight, 10) || 1),
+        }))
+    : [];
+  renderProviderPoolEditor();
+}
+
+function addProviderToPool(providerId, model) {
+  if (!providerId) return;
+  const m = model || '';
+  if (providerPoolItems.some(item => item.providerId === providerId && (item.model || '') === m)) return;
+  providerPoolItems = [...providerPoolItems, { providerId, model: m, weight: 1 }];
+  renderProviderPoolEditor();
+}
+
+function removeProviderFromPool(providerId, model) {
+  const m = model || '';
+  providerPoolItems = providerPoolItems.filter(item => !(item.providerId === providerId && (item.model || '') === m));
+  renderProviderPoolEditor();
+}
+
+function updateProviderPoolWeight(providerId, model, weight) {
+  const m = model || '';
+  providerPoolItems = providerPoolItems.map(item => (
+    item.providerId === providerId && (item.model || '') === m
+      ? { ...item, weight: Math.max(1, parseInt(weight, 10) || 1) }
+      : item
+  ));
+}
+
+function renderProviderPoolEditor() {
+  const container = document.getElementById('provider-pool-list');
+  const select = document.getElementById('provider-pool-dropdown-options');
+  const valueEl = document.getElementById('provider-pool-dropdown-value');
+  const dropdown = document.getElementById('provider-pool-dropdown');
+  if (!container || !select || !valueEl || !dropdown) return;
+
+  const primaryId = document.getElementById('provider-id').value;
+  const defaultModel = document.getElementById('target-model').value;
+  // All providers available (including primary, for different models)
+  const available = providers.filter(p => p.id);
+
+  // Build dropdown: show providers, each expandable to models
+  select.innerHTML = available.length === 0
+    ? '<div class="model-option"><span class="model-option-name">暂无可添加供应商</span></div>'
+    : available.map(p => {
+        const models = p.models || [];
+        const isPrimary = p.id === primaryId;
+        // Filter out already-added provider+model combos
+        const usedModels = new Set(
+          providerPoolItems
+            .filter(item => item.providerId === p.id)
+            .map(item => item.model || '')
+        );
+        // For primary provider, also exclude its default model (already in use)
+        if (isPrimary && defaultModel) usedModels.add(defaultModel);
+        const availModels = models.filter(m => !usedModels.has(m));
+        // "any model" not available for primary (already covered by defaultModel)
+        const anyModelUsed = usedModels.has('');
+        const showAnyModel = !isPrimary && !anyModelUsed;
+        return `
+          <div class="pool-provider-group" data-pool-provider="${escapeHtml(p.id)}">
+            <div class="model-option pool-provider-trigger" data-pool-provider-id="${escapeHtml(p.id)}">
+              <span class="model-option-name">${escapeHtml(p.name)}</span>
+              ${p.url ? `<span style="color:#64748b;font-size:12px;margin-left:4px">${escapeHtml(p.url)}</span>` : ''}
+              <span class="pool-provider-arrow">&#9656;</span>
+            </div>
+            <div class="pool-model-sublist" data-pool-models-for="${escapeHtml(p.id)}">
+              ${showAnyModel ? `<div class="model-option pool-model-option" data-pool-provider-id="${escapeHtml(p.id)}" data-pool-model=""><span class="model-option-name">不指定模型（使用请求模型）</span></div>` : ''}
+              ${availModels.map(m => `<div class="model-option pool-model-option" data-pool-provider-id="${escapeHtml(p.id)}" data-pool-model="${escapeHtml(m)}"><span class="model-option-name">${escapeHtml(m)}</span></div>`).join('')}
+              ${availModels.length === 0 && !showAnyModel ? '<div class="model-option"><span class="model-option-name">该供应商所有模型已添加</span></div>' : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+  valueEl.textContent = available.length === 0 ? '暂无可添加供应商' : '从供应商列表添加';
+
+  // Provider click → toggle model sub-list
+  select.querySelectorAll('.pool-provider-trigger').forEach(trigger => {
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const group = trigger.closest('.pool-provider-group');
+      const wasOpen = group.classList.contains('open');
+      // Close all other sub-lists
+      select.querySelectorAll('.pool-provider-group').forEach(g => g.classList.remove('open'));
+      if (!wasOpen) group.classList.add('open');
+    });
+  });
+
+  // Model click → add to pool
+  select.querySelectorAll('.pool-model-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      addProviderToPool(opt.dataset.poolProviderId, opt.dataset.poolModel || '');
+      dropdown.classList.remove('open');
+      select.querySelectorAll('.pool-provider-group').forEach(g => g.classList.remove('open'));
+    });
+  });
+
+  // Render pool items
+  container.innerHTML = providerPoolItems.length === 0
+    ? '<div class="provider-pool-empty">暂无备选供应商，使用上方下拉框添加</div>'
+    : providerPoolItems.map(item => {
+        const provider = providers.find(p => p.id === item.providerId);
+        const modelLabel = item.model || '使用请求模型';
+        return `
+          <div class="provider-pool-item">
+            <div class="provider-pool-main">
+              <div class="provider-pool-name">${escapeHtml(provider?.name || item.providerId)}</div>
+              <div class="provider-pool-meta">${escapeHtml(provider?.url || '')}</div>
+            </div>
+            <div class="provider-pool-model">
+              <label>模型</label>
+              <span class="provider-pool-model-value">${escapeHtml(modelLabel)}</span>
+            </div>
+            <div class="provider-pool-weight">
+              <label>权重</label>
+              <input type="number" min="1" step="1" value="${Math.max(1, parseInt(item.weight, 10) || 1)}" data-weight-provider="${escapeHtml(item.providerId)}" data-weight-model="${escapeHtml(item.model || '')}">
+            </div>
+            <button type="button" class="provider-pool-remove" data-remove-provider="${escapeHtml(item.providerId)}" data-remove-model="${escapeHtml(item.model || '')}">移除</button>
+          </div>
+        `;
+      }).join('');
+
+  container.querySelectorAll('[data-weight-provider]').forEach(input => {
+    const handler = () => updateProviderPoolWeight(input.dataset.weightProvider, input.dataset.weightModel, input.value);
+    input.addEventListener('change', handler);
+    input.addEventListener('input', handler);
+  });
+
+  container.querySelectorAll('[data-remove-provider]').forEach(btn => {
+    btn.addEventListener('click', () => removeProviderFromPool(btn.dataset.removeProvider, btn.dataset.removeModel));
+  });
 }
 
 // ==================== 供应商下拉框 ====================
@@ -113,8 +305,6 @@ function initProviderDropdown() {
     if (e.key === 'Escape') dropdown.classList.remove('open');
   });
 }
-
-let editingProviderId = null;
 
 function renderProviderOptions() {
   const container = document.getElementById('provider-dropdown-options');
@@ -217,6 +407,10 @@ function selectProvider(id) {
   document.getElementById('target-azure-deployment').value = provider?.azureDeployment || '';
   document.getElementById('target-azure-version').value = provider?.azureApiVersion || '';
   document.getElementById('azure-fields').style.display = protocol === 'openai' ? '' : 'none';
+  // Only remove pool entries matching this provider's default model (allow other models)
+  const currentModel = models[0] || '';
+  providerPoolItems = providerPoolItems.filter(item => !(item.providerId === id && (!item.model || item.model === currentModel)));
+  renderProviderPoolEditor();
 }
 
 // ==================== Model 下拉框 ====================
@@ -353,8 +547,6 @@ function updateModelAddState() {
 
 // ==================== 配置导入/导出 ====================
 
-let importData = null;
-
 async function exportConfig() {
   try {
     const res = await fetch('/api/config/export');
@@ -465,9 +657,6 @@ async function restartAllProxies() {
 // ==================== 初始化 ====================
 
 // ==================== Token 用量统计 ====================
-
-let statsRange = 'daily';
-let statsProxyId = '';
 
 async function loadStats() {
   try {
@@ -605,11 +794,11 @@ function generateToken() {
   return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function initSimpleDropdown(dropdownId, onChange) {
+function initSimpleDropdown(dropdownId, onChange, hiddenInputId) {
   const dropdown = document.getElementById(dropdownId);
   const trigger = dropdown.querySelector('.model-dropdown-trigger');
   const valueEl = dropdown.querySelector('[id$="-dropdown-value"]');
-  const hiddenInput = document.getElementById(dropdownId.replace('-dropdown', ''));
+  const hiddenInput = document.getElementById(hiddenInputId || dropdownId.replace('-dropdown', ''));
   const opts = dropdown.querySelectorAll('.model-option');
 
   trigger.addEventListener('click', (e) => {
@@ -625,23 +814,39 @@ function initSimpleDropdown(dropdownId, onChange) {
 
   opts.forEach(opt => {
     opt.addEventListener('click', () => {
-      opts.forEach(o => o.classList.remove('selected'));
-      opt.classList.add('selected');
-      const val = opt.dataset.value;
-      if (hiddenInput) hiddenInput.value = val;
-      valueEl.textContent = opt.querySelector('.model-option-name').textContent;
+      const val = syncSimpleDropdown(dropdownId, opt.dataset.value, hiddenInput?.id);
       onChange?.(val);
       dropdown.classList.remove('open');
     });
+  });
+
+  syncSimpleDropdown(dropdownId, hiddenInput?.value || opts[0]?.dataset.value || '', hiddenInput?.id);
+}
+
+function initProviderPoolDropdown() {
+  const dropdown = document.getElementById('provider-pool-dropdown');
+  const trigger = document.getElementById('provider-pool-dropdown-trigger');
+  if (!dropdown || !trigger) return;
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    renderProviderPoolEditor();
+    dropdown.classList.toggle('open');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target)) dropdown.classList.remove('open');
   });
 }
 
 async function init() {
   await Promise.all([loadProxies(), loadProviders(), loadStats()]);
+  renderProxies();
   initProviderDropdown();
   initModelDropdown();
   initStatsDropdown();
   initStatsRangeBtns();
+  initProviderPoolDropdown();
   initSimpleDropdown('auth-dropdown', (val) => {
     const enabled = val === 'true';
     document.getElementById('auth-token-group').style.display = enabled ? 'block' : 'none';
@@ -651,7 +856,11 @@ async function init() {
   });
   initSimpleDropdown('protocol-dropdown', (val) => {
     document.getElementById('azure-fields').style.display = val === 'openai' ? '' : 'none';
-  });
+  }, 'target-protocol');
+  initSimpleDropdown('routing-dropdown', (val) => {
+    document.getElementById('routing-strategy').value = val;
+  }, 'routing-strategy');
+  renderProviderPoolEditor();
   // 初始状态：根据当前协议值决定 Azure 字段显示
   const initProto = document.getElementById('target-protocol').value;
   document.getElementById('azure-fields').style.display = initProto === 'openai' ? '' : 'none';
@@ -711,6 +920,13 @@ function showToast(msg, isError) {
 
 // ==================== 渲染代理列表 ====================
 
+const ROUTING_LABELS = {
+  primary_fallback: '主备切换',
+  round_robin: '轮询',
+  weighted: '加权',
+  fastest: '最快优先',
+};
+
 function renderProxies() {
   const container = document.getElementById('proxy-list');
   if (proxies.length === 0) {
@@ -719,6 +935,27 @@ function renderProxies() {
   }
 
   container.innerHTML = proxies.map(p => {
+    // Build unified provider rows: primary first, then pool entries
+    const primaryRow = {
+      name: p.providerName || p.providerUrl || '-',
+      tag: '',
+      protocol: p.protocol || '-',
+      model: p.defaultModel || '-',
+      weight: Math.max(1, parseInt(p.providerWeight, 10) || 1),
+    };
+    const poolRows = (p.providerPool || []).map(item => {
+      const prov = providers.find(pr => pr.id === item.providerId);
+      return {
+        name: prov?.name || item.providerId,
+        tag: '备选',
+        protocol: prov?.protocol || p.protocol || '-',
+        model: item.model || '-',
+        weight: Math.max(1, parseInt(item.weight, 10) || 1),
+      };
+    });
+    const allRows = [primaryRow, ...poolRows];
+    const strategy = ROUTING_LABELS[p.routingStrategy] || p.routingStrategy;
+
     return `
     <div class="proxy-item">
       <div class="proxy-header">
@@ -728,6 +965,7 @@ function renderProxies() {
             ${p.running ? '运行中' : '已停止'}
           </span>
         </div>
+        <span class="proxy-routing-badge">${escapeHtml(strategy)}</span>
       </div>
       <div class="proxy-meta">
         <span>端口: <strong>${p.port}</strong></span>
@@ -745,19 +983,22 @@ function renderProxies() {
           <tr>
             <th>供应商</th>
             <th>协议</th>
-            <th>默认 Model</th>
+            <th>模型</th>
+            <th>权重</th>
           </tr>
         </thead>
         <tbody>
+          ${allRows.map(r => `
           <tr>
-            <td>${escapeHtml(p.providerName || p.providerUrl || '-')}</td>
+            <td>${escapeHtml(r.name)}${r.tag ? `<span class="provider-tag">${r.tag}</span>` : ''}</td>
             <td>
-              <span class="badge" style="background:${p.protocol==='openai'?'#0c4a6e':'#581c87'};color:${p.protocol==='openai'?'#7dd3fc':'#e9d5ff'}">
-                ${p.protocol || '-'}
+              <span class="badge" style="background:${r.protocol==='openai'?'#0c4a6e':r.protocol==='anthropic'?'#581c87':'#064e3b'};color:${r.protocol==='openai'?'#7dd3fc':r.protocol==='anthropic'?'#e9d5ff':'#6ee7b7'}">
+                ${r.protocol}
               </span>
             </td>
-            <td><code>${escapeHtml(p.defaultModel) || '-'}</code></td>
-          </tr>
+            <td><code>${escapeHtml(r.model)}</code></td>
+            <td>${r.weight}</td>
+          </tr>`).join('')}
         </tbody>
       </table>
       <div class="proxy-actions">
@@ -805,6 +1046,9 @@ function openModal(id = null) {
     document.getElementById('target-azure-deployment').value = provider?.azureDeployment || '';
     document.getElementById('target-azure-version').value = provider?.azureApiVersion || '';
     document.getElementById('azure-fields').style.display = p.protocol === 'openai' ? '' : 'none';
+    document.getElementById('provider-weight').value = Math.max(1, parseInt(p.providerWeight, 10) || 1);
+    syncSimpleDropdown('routing-dropdown', p.routingStrategy || 'primary_fallback', 'routing-strategy');
+    syncProviderPoolState(p.providerPool || []);
   } else {
     document.getElementById('proxy-id').value = '';
     // 重置认证下拉框
@@ -819,6 +1063,9 @@ function openModal(id = null) {
     document.getElementById('target-azure-deployment').value = '';
     document.getElementById('target-azure-version').value = '';
     document.getElementById('azure-fields').style.display = 'none';
+    document.getElementById('provider-weight').value = 1;
+    syncSimpleDropdown('routing-dropdown', 'primary_fallback', 'routing-strategy');
+    syncProviderPoolState([]);
   }
 
   updateModelAddState();
@@ -888,6 +1135,9 @@ async function handleSubmit(e) {
     authToken: document.getElementById('proxy-auth-token').value.trim() || null,
     providerId,
     defaultModel,
+    providerWeight: Math.max(1, parseInt(document.getElementById('provider-weight').value, 10) || 1),
+    routingStrategy: document.getElementById('routing-strategy').value || 'primary_fallback',
+    providerPool: providerPoolItems,
   };
 
   try {
