@@ -380,6 +380,79 @@ function renderProviderOptions() {
   });
 }
 
+function renderApiKeys(provider) {
+  const container = document.getElementById('api-keys-list');
+  if (!container) return;
+  const keys = provider?.apiKeys || [];
+  const hasKeys = keys.length > 0;
+  const items = hasKeys ? keys : [{ alias: '', masked: false, key: '', index: 0 }];
+  container.innerHTML = items.map((k, i) => `
+    <div class="form-row api-key-entry" data-index="${k.index ?? i}" data-masked="${k.masked ? 'true' : 'false'}" ${!hasKeys ? 'data-new="true"' : ''}>
+      <div class="form-group">
+        <label>别名</label>
+        <input type="text" class="api-key-alias" value="${escapeHtml(k.alias || '')}" placeholder="可选">
+      </div>
+      <div class="form-group">
+        <label>API Key</label>
+        ${k.masked
+          ? `<span class="api-key-display">****</span>`
+          : `<input type="password" class="api-key-input" value="${escapeHtml(k.key || '')}" placeholder="sk-...">`
+        }
+      </div>
+      <label class="toggle-switch" title="${k.enabled !== false ? '已启用' : '已禁用'}">
+        <input type="checkbox" class="api-key-enabled" ${k.enabled !== false ? 'checked' : ''}>
+        <span class="toggle-slider"></span>
+      </label>
+      <button type="button" class="api-key-remove" title="移除">&times;</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.api-key-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btn.closest('.api-key-entry').remove();
+      if (container.children.length === 0) renderApiKeys(null);
+    });
+  });
+}
+
+function collectApiKeys() {
+  const rows = document.querySelectorAll('#api-keys-list .api-key-entry');
+  return Array.from(rows).map(row => {
+    const alias = row.querySelector('.api-key-alias')?.value.trim() || '';
+    const enabled = row.querySelector('.api-key-enabled')?.checked !== false;
+    const isMasked = row.dataset.masked === 'true';
+    if (isMasked) {
+      return { alias, masked: true, index: parseInt(row.dataset.index, 10), enabled };
+    }
+    const key = row.querySelector('.api-key-input')?.value.trim() || '';
+    if (!key) return null;
+    return { key, alias, enabled };
+  }).filter(Boolean);
+}
+
+function initApiKeyAddBtn() {
+  const btn = document.getElementById('api-key-add-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const container = document.getElementById('api-keys-list');
+    const row = document.createElement('div');
+    row.className = 'form-row api-key-entry';
+    row.dataset.new = 'true';
+    row.innerHTML = `
+      <div class="form-group"><label>别名</label><input type="text" class="api-key-alias" placeholder="可选"></div>
+      <div class="form-group"><label>API Key</label><input type="password" class="api-key-input" placeholder="sk-..."></div>
+      <label class="toggle-switch" title="已启用"><input type="checkbox" class="api-key-enabled" checked><span class="toggle-slider"></span></label>
+      <button type="button" class="api-key-remove" title="移除">&times;</button>
+    `;
+    container.appendChild(row);
+    row.querySelector('.api-key-alias').focus();
+    row.querySelector('.api-key-remove').addEventListener('click', () => {
+      row.remove();
+      if (container.children.length === 0) renderApiKeys(null);
+    });
+  });
+}
+
 function selectProvider(id) {
   const provider = providers.find(p => p.id === id);
   document.getElementById('provider-id').value = id || '';
@@ -401,8 +474,8 @@ function selectProvider(id) {
   const models = provider?.models || [];
   selectModel(models[0] || '');
   updateModelAddState();
-  // 同步 API Key placeholder
-  document.getElementById('target-key').placeholder = provider?.apiKey ? '已设置（留空则不修改）' : 'sk-...';
+  // 同步 API Keys
+  renderApiKeys(provider);
   // 同步 Azure 字段
   document.getElementById('target-azure-deployment').value = provider?.azureDeployment || '';
   document.getElementById('target-azure-version').value = provider?.azureApiVersion || '';
@@ -847,6 +920,7 @@ async function init() {
   initStatsDropdown();
   initStatsRangeBtns();
   initProviderPoolDropdown();
+  initApiKeyAddBtn();
   initSimpleDropdown('auth-dropdown', (val) => {
     const enabled = val === 'true';
     document.getElementById('auth-token-group').style.display = enabled ? 'block' : 'none';
@@ -1040,7 +1114,7 @@ function openModal(id = null) {
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
     selectProvider(p.providerId || '');
     selectModel(p.defaultModel || '');
-    document.getElementById('target-key').placeholder = p.hasApiKey ? '已设置（留空则不修改）' : 'sk-...';
+    renderApiKeys(providers.find(pr => pr.id === p.providerId));
     // Azure 字段从供应商配置读取
     const provider = providers.find(pr => pr.id === p.providerId);
     document.getElementById('target-azure-deployment').value = provider?.azureDeployment || '';
@@ -1059,7 +1133,7 @@ function openModal(id = null) {
     document.getElementById('auth-token-group').style.display = 'none';
     selectProvider('');
     selectModel('');
-    document.getElementById('target-key').placeholder = 'sk-...';
+    renderApiKeys(null);
     document.getElementById('target-azure-deployment').value = '';
     document.getElementById('target-azure-version').value = '';
     document.getElementById('azure-fields').style.display = 'none';
@@ -1099,13 +1173,13 @@ async function handleSubmit(e) {
     return;
   }
 
-  const apiKey = document.getElementById('target-key').value.trim();
+  const apiKeys = collectApiKeys();
   const protocol = document.getElementById('target-protocol').value;
   const defaultModel = document.getElementById('target-model').value.trim() || '';
 
   // 同步更新供应商配置
   const providerUpdates = {};
-  if (apiKey) providerUpdates.apiKey = apiKey;
+  providerUpdates.apiKeys = apiKeys;
   if (protocol) providerUpdates.protocol = protocol;
   const azureDeployment = document.getElementById('target-azure-deployment').value.trim();
   const azureApiVersion = document.getElementById('target-azure-version').value.trim();

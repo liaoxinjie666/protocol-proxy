@@ -370,7 +370,7 @@ header p {
   backdrop-filter: blur(8px);
   z-index: 1000;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
   padding: 20px;
   overflow-y: auto;
 }
@@ -386,6 +386,7 @@ header p {
   border-radius: 20px;
   width: 100%;
   max-width: 700px;
+  margin: auto;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(59, 130, 246, 0.05);
   animation: modal-in 0.3s ease;
 }
@@ -1189,6 +1190,109 @@ form {
   header h1 {
     font-size: 2rem;
   }
+}
+
+.api-keys-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.api-keys-header span {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.api-keys-row {
+  grid-template-columns: 1fr;
+}
+
+.api-key-entry {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto auto;
+  align-items: start;
+  gap: 18px;
+  margin-bottom: 10px;
+}
+
+/* Toggle switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  margin-top: 40px;
+  cursor: pointer;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: rgba(51, 65, 85, 0.6);
+  border-radius: 20px;
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  transition: all 0.25s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 2px;
+  top: 2px;
+  background: #94a3b8;
+  border-radius: 50%;
+  transition: all 0.25s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+  background: #60a5fa;
+}
+
+.api-key-remove {
+  margin-top: 35px;
+}
+
+.api-key-display {
+  display: block;
+  padding: 11px 16px;
+  background: rgba(6, 8, 15, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+  border-radius: 10px;
+  color: #64748b;
+  font-size: 0.9rem;
+  letter-spacing: 2px;
+}
+
+.api-key-remove {
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(127, 29, 29, 0.5);
+  background: rgba(127, 29, 29, 0.15);
+  color: #fca5a5;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.api-key-remove:hover {
+  background: rgba(127, 29, 29, 0.3);
+  border-color: rgba(248, 113, 113, 0.7);
 }
 
 .proxy-routing-badge {

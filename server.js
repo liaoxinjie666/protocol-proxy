@@ -174,7 +174,7 @@ async function init() {
       providerName: primaryProvider.name,
       providerUrl: primaryProvider.url,
       protocol: primaryProvider.protocol,
-      apiKey: primaryProvider.apiKey,
+      apiKeys: primaryProvider.apiKeys || [],
       models: primaryProvider.models,
       azureDeployment: primaryProvider.azureDeployment || '',
       azureApiVersion: primaryProvider.azureApiVersion || '',
@@ -196,7 +196,7 @@ async function init() {
         providerName: provider.name,
         providerUrl: provider.url,
         protocol: provider.protocol,
-        apiKey: provider.apiKey,
+        apiKeys: provider.apiKeys || [],
         models: provider.models,
         azureDeployment: provider.azureDeployment || '',
         azureApiVersion: provider.azureApiVersion || '',
@@ -206,11 +206,9 @@ async function init() {
     }
 
     if (pool.length === 0) return null;
-    const protocol = pool[0].protocol;
-    if (pool.some(p => p.protocol !== protocol)) return null;
 
     return {
-      protocol,
+      protocol: pool[0].protocol,
       routingStrategy: proxy.routingStrategy || 'primary_fallback',
       providerPool: pool,
       defaultModel: proxy.defaultModel,
@@ -257,6 +255,7 @@ async function init() {
     const providers = configStore.getProviders().map(p => ({
       ...p,
       apiKey: p.apiKey ? '***' : '',
+      apiKeys: (p.apiKeys || []).map((k, i) => ({ alias: k.alias || '', masked: true, index: i, enabled: k.enabled !== false })),
     }));
     res.json(providers);
   });
@@ -264,11 +263,11 @@ async function init() {
   app.get('/api/providers/:id', (req, res) => {
     const provider = configStore.getProviderById(req.params.id);
     if (!provider) return res.status(404).json({ error: 'Provider not found' });
-    res.json({ ...provider, apiKey: provider.apiKey ? '***' : '' });
+    res.json({ ...provider, apiKey: provider.apiKey ? '***' : '', apiKeys: (provider.apiKeys || []).map((k, i) => ({ alias: k.alias || '', masked: true, index: i, enabled: k.enabled !== false })) });
   });
 
   app.post('/api/providers', (req, res) => {
-    const { name, url, protocol, apiKey, models, azureDeployment, azureApiVersion } = req.body;
+    const { name, url, protocol, apiKey, apiKeys, models, azureDeployment, azureApiVersion } = req.body;
     if (!name || !url) {
       return res.status(400).json({ error: 'name and url are required' });
     }
@@ -276,6 +275,7 @@ async function init() {
       name, url,
       protocol: protocol || (/anthropic/i.test(url) ? 'anthropic' : 'openai'),
       apiKey: apiKey || '',
+      apiKeys: Array.isArray(apiKeys) ? apiKeys.filter(k => k && typeof k === 'object' && k.key && k.key.trim()) : [],
       models: models || [],
       azureDeployment: azureDeployment || '',
       azureApiVersion: azureApiVersion || '',
@@ -292,6 +292,26 @@ async function init() {
     if (req.body.url !== undefined) updates.url = req.body.url;
     if (req.body.protocol !== undefined) updates.protocol = req.body.protocol;
     if (req.body.apiKey !== undefined && req.body.apiKey !== '') updates.apiKey = req.body.apiKey;
+    if (req.body.apiKeys !== undefined) {
+      // Map masked entries back to existing keys by index
+      const existingKeys = existing.apiKeys || [];
+      updates.apiKeys = req.body.apiKeys
+        .map(k => {
+          if (k && typeof k === 'object' && k.masked && typeof k.index === 'number') {
+            const existing = existingKeys[k.index];
+            if (!existing) return null;
+            return { ...existing, alias: typeof k.alias === 'string' ? k.alias.trim() : (existing.alias || ''), enabled: k.enabled !== false };
+          }
+          if (k && typeof k === 'object' && typeof k.key === 'string' && k.key.trim()) {
+            return { key: k.key.trim(), alias: typeof k.alias === 'string' ? k.alias.trim() : '', enabled: k.enabled !== false };
+          }
+          if (typeof k === 'string' && k.trim()) {
+            return { key: k.trim(), alias: '' };
+          }
+          return null;
+        })
+        .filter(Boolean);
+    }
     if (req.body.models !== undefined) updates.models = req.body.models;
     if (req.body.azureDeployment !== undefined) updates.azureDeployment = req.body.azureDeployment;
     if (req.body.azureApiVersion !== undefined) updates.azureApiVersion = req.body.azureApiVersion;
@@ -343,7 +363,7 @@ async function init() {
         providerWeight: Math.max(1, parseInt(p.providerWeight, 10) || 1),
         routingStrategy: p.routingStrategy || 'primary_fallback',
         providerPool: Array.isArray(p.providerPool) ? p.providerPool : [],
-        hasApiKey: !!provider?.apiKey,
+        hasApiKey: !!(provider?.apiKey || (provider?.apiKeys && provider.apiKeys.length > 0)),
         running: proxyManager.isRunning(p.id),
       };
     });
@@ -362,7 +382,7 @@ async function init() {
       protocol: provider?.protocol || '',
       routingStrategy: proxy.routingStrategy || 'primary_fallback',
       providerPool: Array.isArray(proxy.providerPool) ? proxy.providerPool : [],
-      hasApiKey: !!provider?.apiKey,
+      hasApiKey: !!(provider?.apiKey || (provider?.apiKeys && provider.apiKeys.length > 0)),
     });
   });
 
