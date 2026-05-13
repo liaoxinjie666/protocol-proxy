@@ -380,6 +380,42 @@ function renderProviderOptions() {
   });
 }
 
+function attachMaskedKeyClick(span) {
+  span.style.cursor = 'pointer';
+  span.title = '点击修改 API Key';
+  span.addEventListener('click', () => {
+    const row = span.closest('.api-key-entry');
+    const group = span.parentElement;
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.className = 'api-key-input';
+    input.placeholder = '输入新的 API Key...';
+    group.replaceChild(input, span);
+    input.focus();
+    input.addEventListener('blur', async () => {
+      const val = input.value.trim();
+      if (!val) {
+        restoreMaskedSpan(group, input, row);
+        return;
+      }
+      if (await showConfirm('确认修改此 API Key？<br>取消将恢复为 ****', '确认修改')) {
+        row.dataset.masked = 'false';
+      } else {
+        row.dataset.masked = 'true';
+        restoreMaskedSpan(group, input, row);
+      }
+    });
+  });
+}
+
+function restoreMaskedSpan(group, input, row) {
+  const restored = document.createElement('span');
+  restored.className = 'api-key-display';
+  restored.textContent = '****';
+  group.replaceChild(restored, input);
+  attachMaskedKeyClick(restored);
+}
+
 function renderApiKeys(provider) {
   const container = document.getElementById('api-keys-list');
   if (!container) return;
@@ -406,6 +442,10 @@ function renderApiKeys(provider) {
       <button type="button" class="api-key-remove" title="移除">&times;</button>
     </div>
   `).join('');
+
+  container.querySelectorAll('.api-key-display').forEach(span => {
+    attachMaskedKeyClick(span);
+  });
 
   container.querySelectorAll('.api-key-remove').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -453,7 +493,12 @@ function initApiKeyAddBtn() {
   });
 }
 
-function selectProvider(id) {
+function hasUnsavedMaskedKeyEdits() {
+  return !!document.querySelector('#api-keys-list .api-key-entry[data-index][data-masked="false"]');
+}
+
+async function selectProvider(id) {
+  if (hasUnsavedMaskedKeyEdits() && !await showConfirm('当前有未保存的 API Key 修改，切换供应商将丢失，确认切换？', '确认切换')) return;
   const provider = providers.find(p => p.id === id);
   document.getElementById('provider-id').value = id || '';
   const protocol = provider ? provider.protocol : '';
@@ -958,14 +1003,14 @@ function copyProxyUrl(port, btn) {
   });
 }
 
-function showConfirm(text) {
+function showConfirm(text, okText = '删除') {
   return new Promise(resolve => {
     const modal = document.getElementById('confirm-modal');
     document.getElementById('confirm-text').innerHTML = text;
-    modal.classList.add('active');
-
     const okBtn = document.getElementById('confirm-ok');
     const cancelBtn = document.getElementById('confirm-cancel');
+    okBtn.textContent = okText;
+    modal.classList.add('active');
 
     function cleanup(result) {
       modal.classList.remove('active');

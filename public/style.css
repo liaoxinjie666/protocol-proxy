@@ -793,6 +793,10 @@ form {
 }
 
 /* Confirm modal */
+.confirm-modal {
+  align-items: center;
+}
+
 .confirm-modal .confirm-box {
   background: rgba(15, 23, 42, 0.8);
   backdrop-filter: blur(24px);
@@ -1277,6 +1281,13 @@ form {
   color: #64748b;
   font-size: 0.9rem;
   letter-spacing: 2px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.api-key-display:hover {
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #94a3b8;
 }
 
 .api-key-remove {
