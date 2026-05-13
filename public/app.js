@@ -587,6 +587,59 @@ function initModelDropdown() {
   });
 }
 
+async function importModels() {
+  const providerId = document.getElementById('provider-id').value;
+  if (!providerId) {
+    showToast('请先选择供应商', true);
+    return;
+  }
+  const btn = document.getElementById('model-import-btn');
+  btn.disabled = true;
+  btn.textContent = '导入中...';
+  try {
+    const apiKeys = collectApiKeys();
+    const res = await fetch(`/api/providers/${providerId}/available-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKeys }),
+    });
+    const data = await res.json();
+    if (!data.models || data.models.length === 0) {
+      showToast(data.message || '未获取到模型', true);
+      return;
+    }
+    const provider = providers.find(p => p.id === providerId);
+    const existing = new Set(provider?.models || []);
+    const newModels = data.models.filter(m => !existing.has(m));
+    if (newModels.length === 0) {
+      showToast(`已全部存在，共 ${data.models.length} 个模型`);
+      // 即使没有新模型，也尝试自动选择第一个
+      if (!document.getElementById('target-model').value && data.models.length > 0) {
+        selectModel(data.models[0]);
+      }
+      return;
+    }
+    const merged = [...(provider?.models || []), ...newModels];
+    await fetch(`/api/providers/${providerId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models: merged }),
+    });
+    await loadProviders();
+    renderModelOptions();
+    // 自动选择默认模型
+    if (!document.getElementById('target-model').value) {
+      selectModel(newModels[0] || data.models[0]);
+    }
+    showToast(`已导入 ${newModels.length} 个新模型（共 ${data.models.length} 个）`);
+  } catch (err) {
+    showToast('导入失败: ' + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '自动导入';
+  }
+}
+
 function renderModelOptions() {
   const container = document.getElementById('model-dropdown-options');
   const providerId = document.getElementById('provider-id').value;
@@ -1201,6 +1254,140 @@ function closeModal() {
   editingProviderId = null;
 }
 
+function showTestResultModal(data) {
+  const modal = document.getElementById('test-result-modal');
+  const icon = document.getElementById('test-result-icon');
+  const summary = document.getElementById('test-result-summary');
+  const list = document.getElementById('test-result-list');
+  const closeBtn = document.getElementById('test-result-close');
+
+  if (data.failed === 0) {
+    icon.textContent = '✓';
+    icon.style.background = 'rgba(6, 78, 59, 0.4)';
+    icon.style.color = '#34d399';
+    icon.style.borderColor = 'rgba(52, 211, 153, 0.15)';
+    summary.innerHTML = `<strong>${data.total}</strong> 条 API Key 全部测试通过`;
+  } else if (data.passed === 0) {
+    icon.textContent = '✗';
+    icon.style.background = 'rgba(127, 29, 29, 0.4)';
+    icon.style.color = '#f87171';
+    icon.style.borderColor = 'rgba(248, 113, 113, 0.15)';
+    summary.innerHTML = `<strong>${data.total}</strong> 条 API Key 全部测试失败`;
+  } else {
+    icon.textContent = '!';
+    icon.style.background = 'rgba(69, 26, 3, 0.4)';
+    icon.style.color = '#fbbf24';
+    icon.style.borderColor = 'rgba(251, 191, 36, 0.15)';
+    summary.innerHTML = `<strong>${data.passed}</strong> 条通过，<strong>${data.failed}</strong> 条失败`;
+  }
+
+  list.innerHTML = data.results.map(r => `
+    <div class="test-result-item ${r.ok ? 'test-ok' : 'test-fail'}">
+      <div class="test-result-row">
+        <span class="test-result-status">${r.ok ? '✓' : '✗'}</span>
+        <span class="test-result-alias">${escapeHtml(r.alias || `Key #${r.index + 1}`)}</span>
+        ${r.latencyMs != null ? `<span class="test-result-latency">${r.latencyMs}ms</span>` : ''}
+      </div>
+      ${r.message ? `<div class="test-result-error">${escapeHtml(r.message)}</div>` : ''}
+    </div>
+  `).join('');
+
+  modal.classList.add('active');
+  closeBtn.onclick = () => modal.classList.remove('active');
+}
+
+function clearKeyErrors() {
+  document.querySelectorAll('#api-keys-list .api-key-entry').forEach(row => {
+    row.querySelector('.api-key-input')?.style.removeProperty('border-color');
+    row.querySelector('.api-key-display')?.style.removeProperty('border-color');
+    row.querySelector('.api-key-error')?.remove();
+  });
+}
+
+function markKeyErrors(data) {
+  const rows = document.querySelectorAll('#api-keys-list .api-key-entry');
+  for (const r of data.results) {
+    if (!r.ok) {
+      const row = rows[r.index];
+      if (row) {
+        const el = row.querySelector('.api-key-input') || row.querySelector('.api-key-display');
+        if (el) el.style.borderColor = '#ef4444';
+        if (r.message) {
+          const errDiv = document.createElement('div');
+          errDiv.className = 'api-key-error';
+          errDiv.textContent = r.message;
+          // Insert after the API Key form-group
+          const keyGroup = row.querySelectorAll('.form-group')[1];
+          if (keyGroup) keyGroup.appendChild(errDiv);
+        }
+      }
+    }
+  }
+}
+
+async function testConnection() {
+  const providerId = document.getElementById('provider-id').value;
+  if (!providerId) {
+    showToast('请先选择供应商', true);
+    return;
+  }
+  const protocol = document.getElementById('target-protocol').value;
+  const apiKeys = collectApiKeys();
+  const model = document.getElementById('target-model').value.trim() || '';
+  const btn = document.getElementById('test-connection-btn');
+  btn.disabled = true;
+  btn.textContent = '测试中...';
+  clearKeyErrors();
+  try {
+    const res = await fetch(`/api/providers/${providerId}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ protocol, apiKeys, model }),
+    });
+    const data = await res.json();
+    if (!data.results || data.results.length === 0) {
+      showToast(data.message || '没有可用的 API Key', true);
+      return;
+    }
+    markKeyErrors(data);
+    showTestResultModal(data);
+  } catch (err) {
+    showToast('测试请求失败: ' + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '测试连接';
+  }
+}
+
+async function autoTestForSave() {
+  const providerId = document.getElementById('provider-id').value;
+  if (!providerId) return true;
+  const protocol = document.getElementById('target-protocol').value;
+  const apiKeys = collectApiKeys();
+  const model = document.getElementById('target-model').value.trim() || '';
+  clearKeyErrors();
+  try {
+    const res = await fetch(`/api/providers/${providerId}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ protocol, apiKeys, model }),
+    });
+    const data = await res.json();
+    if (!data.results || data.results.length === 0) return true;
+    if (data.failed === 0) {
+      showToast(`${data.total} 条 API Key 测试通过`);
+      return true;
+    }
+    markKeyErrors(data);
+    return await showConfirm(
+      `${data.passed} 条通过，${data.failed} 条失败。<br><br>是否仍然保存？`,
+      '仍然保存'
+    );
+  } catch (err) {
+    return true;
+  }
+}
+
 async function handleSubmit(e) {
   e.preventDefault();
 
@@ -1208,6 +1395,21 @@ async function handleSubmit(e) {
   if (!providerId) {
     showToast('请选择供应商', true);
     return;
+  }
+
+  // 保存前自动测试：如果有 API Key 被修改，先测试连接
+  const hasModifiedKeys = !!document.querySelector('#api-keys-list .api-key-entry[data-masked="false"], #api-keys-list .api-key-entry[data-new="true"]');
+  if (hasModifiedKeys) {
+    const saveBtn = document.querySelector('.modal-footer .btn-primary');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '测试中...';
+    try {
+      const canProceed = await autoTestForSave();
+      if (!canProceed) return;
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存';
+    }
   }
 
   const port = parseInt(document.getElementById('proxy-port').value);

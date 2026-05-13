@@ -184,6 +184,7 @@
                       <div class="model-add-section" id="model-add-section">
                         <input type="text" class="model-add-input" id="model-add-input" placeholder="输入模型名称">
                         <button type="button" class="btn btn-primary btn-sm" id="model-add-btn">添加</button>
+                        <button type="button" class="btn btn-sm" id="model-import-btn" onclick="importModels()">自动导入</button>
                       </div>
                     </div>
                   </div>
@@ -252,6 +253,7 @@
 
           <div class="modal-footer">
             <button type="button" class="btn" onclick="closeModal()">取消</button>
+            <button type="button" class="btn" id="test-connection-btn" onclick="testConnection()">测试连接</button>
             <button type="submit" class="btn btn-primary">保存</button>
           </div>
         </form>
@@ -267,6 +269,18 @@
       <div class="confirm-actions">
         <button class="btn" id="confirm-cancel">取消</button>
         <button class="btn btn-danger" id="confirm-ok">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 测试结果弹窗 -->
+  <div class="modal confirm-modal" id="test-result-modal">
+    <div class="confirm-box test-result-box">
+      <div class="confirm-icon" id="test-result-icon">!</div>
+      <p class="confirm-text" id="test-result-summary"></p>
+      <div class="test-result-list" id="test-result-list"></div>
+      <div class="confirm-actions">
+        <button class="btn btn-primary" id="test-result-close">知道了</button>
       </div>
     </div>
   </div>

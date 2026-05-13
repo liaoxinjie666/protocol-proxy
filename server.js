@@ -329,6 +329,169 @@ async function init() {
     res.json(updated);
   });
 
+  app.post('/api/providers/:id/test', async (req, res) => {
+    const provider = configStore.getProviderById(req.params.id);
+    if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+    const existingKeys = provider.apiKeys || [];
+    const reqKeys = Array.isArray(req.body.apiKeys) ? req.body.apiKeys : [];
+    const resolved = reqKeys
+      .map((k, i) => {
+        if (k && typeof k === 'object' && k.masked && typeof k.index === 'number') {
+          const ex = existingKeys[k.index];
+          return ex ? { key: ex.key, alias: k.alias || ex.alias || '', domIndex: i } : null;
+        }
+        if (k && typeof k === 'object' && typeof k.key === 'string' && k.key.trim()) {
+          return { key: k.key.trim(), alias: k.alias || '', domIndex: i };
+        }
+        if (typeof k === 'string' && k.trim()) return { key: k.trim(), alias: '', domIndex: i };
+        return null;
+      })
+      .filter(Boolean);
+
+    if (resolved.length === 0) {
+      return res.json({ ok: false, message: '没有可用的 API Key', results: [] });
+    }
+
+    const protocol = req.body.protocol || provider.protocol || 'openai';
+    const base = provider.url.replace(/\/$/, '');
+    const hasV1Suffix = base.endsWith('/v1');
+    const isAzure = protocol === 'openai' && !!provider.azureDeployment;
+
+    function buildTestOpts(key) {
+      if (protocol === 'openai') {
+        if (isAzure) {
+          const ver = provider.azureApiVersion || '2024-02-01';
+          return {
+            url: `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`,
+            opts: { headers: { 'api-key': key } },
+          };
+        }
+        return {
+          url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`,
+          opts: { headers: { 'Authorization': `Bearer ${key}` } },
+        };
+      }
+      if (protocol === 'anthropic') {
+        const testModel = req.body.model || 'claude-3-haiku-20240307';
+        return {
+          url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`,
+          opts: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+          },
+        };
+      }
+      if (protocol === 'gemini') {
+        return { url: `${base}/v1beta/models?key=${key}`, opts: {} };
+      }
+      return null;
+    }
+
+    if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') {
+      return res.json({ ok: false, message: `不支持的协议: ${protocol}`, results: [] });
+    }
+
+    const results = await Promise.all(resolved.map(async entry => {
+      const { url: testUrl, opts: fetchOpts } = buildTestOpts(entry.key);
+      try {
+        const startedAt = Date.now();
+        const fetchRes = await fetch(testUrl, { ...fetchOpts, signal: AbortSignal.timeout(15000) });
+        const latencyMs = Date.now() - startedAt;
+        if (!fetchRes.ok) {
+          const errText = await fetchRes.text().catch(() => '');
+          const hint = fetchRes.status === 401 || fetchRes.status === 403
+            ? 'API Key 无效或无权限'
+            : `HTTP ${fetchRes.status}: ${errText.slice(0, 200) || '未知错误'}`;
+          return { ok: false, alias: entry.alias, index: entry.domIndex, message: hint, latencyMs };
+        }
+        return { ok: true, alias: entry.alias, index: entry.domIndex, latencyMs };
+      } catch (err) {
+        const msg = err.name === 'TimeoutError' ? '连接超时 (15s)' : `连接失败: ${err.message}`;
+        return { ok: false, alias: entry.alias, index: entry.domIndex, message: msg };
+      }
+    }));
+
+    const passed = results.filter(r => r.ok).length;
+    const failed = results.length - passed;
+    res.json({ ok: failed === 0, passed, failed, total: results.length, results });
+  });
+
+  app.post('/api/providers/:id/available-models', async (req, res) => {
+    const provider = configStore.getProviderById(req.params.id);
+    if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+    // Support unsaved API keys from form
+    let keys;
+    const reqKeys = Array.isArray(req.body?.apiKeys) ? req.body.apiKeys : [];
+    if (reqKeys.length > 0) {
+      const existingKeys = provider.apiKeys || [];
+      keys = reqKeys
+        .map(k => {
+          if (k && typeof k === 'object' && k.masked && typeof k.index === 'number') {
+            return existingKeys[k.index]?.key || null;
+          }
+          if (k && typeof k === 'object' && typeof k.key === 'string' && k.key.trim()) {
+            return k.key.trim();
+          }
+          return null;
+        })
+        .filter(Boolean);
+    } else {
+      keys = (provider.apiKeys || []).map(k => k.key).filter(Boolean);
+    }
+    if (keys.length === 0) return res.json({ models: [], message: '没有可用的 API Key' });
+
+    const protocol = provider.protocol || 'openai';
+    const base = provider.url.replace(/\/$/, '');
+    const hasV1Suffix = base.endsWith('/v1');
+    const key = keys[0];
+    const isAzure = protocol === 'openai' && !!provider.azureDeployment;
+
+    try {
+      let fetchUrl, fetchOpts;
+      if (protocol === 'openai') {
+        if (isAzure) {
+          const ver = provider.azureApiVersion || '2024-02-01';
+          fetchUrl = `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`;
+          fetchOpts = { headers: { 'api-key': key } };
+        } else {
+          fetchUrl = hasV1Suffix ? `${base}/models` : `${base}/v1/models`;
+          fetchOpts = { headers: { 'Authorization': `Bearer ${key}` } };
+        }
+      } else if (protocol === 'gemini') {
+        fetchUrl = `${base}/v1beta/models?key=${key}`;
+        fetchOpts = {};
+      } else if (protocol === 'anthropic') {
+        fetchUrl = hasV1Suffix ? `${base}/models` : `${base}/v1/models`;
+        fetchOpts = { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } };
+      } else {
+        return res.json({ models: [], message: `不支持的协议: ${protocol}` });
+      }
+
+      const fetchRes = await fetch(fetchUrl, { ...fetchOpts, signal: AbortSignal.timeout(15000) });
+      if (!fetchRes.ok) {
+        const hint = fetchRes.status === 404 ? '该供应商不支持模型列表接口' : `获取失败: HTTP ${fetchRes.status}`;
+        return res.json({ models: [], message: hint });
+      }
+
+      const data = await fetchRes.json().catch(() => null);
+      let models = [];
+      if (Array.isArray(data?.data)) {
+        // OpenAI 格式（含第三方 Anthropic 兼容供应商）
+        models = data.data.map(m => m.id || m.name).filter(Boolean).sort();
+      } else if (Array.isArray(data?.models)) {
+        // Gemini 格式
+        models = data.models.map(m => (m.name || m.id)?.replace('models/', '')).filter(Boolean).sort();
+      }
+
+      res.json({ models });
+    } catch (err) {
+      res.json({ models: [], message: `获取失败: ${err.message}` });
+    }
+  });
+
   app.delete('/api/providers/:id', (req, res) => {
     const existing = configStore.getProviderById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Provider not found' });
