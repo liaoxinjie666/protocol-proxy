@@ -7,6 +7,49 @@ let statsRange = 'daily';
 let statsProxyId = '';
 let providerPoolItems = [];
 
+// ==================== 主题切换 ====================
+
+const THEMES = [
+  { id: 'dark',       icon: '☾',  label: '深色' },
+  { id: 'light',      icon: '☀',  label: '浅色' },
+  { id: 'pure-black', icon: '●',  label: '纯黑' },
+  { id: 'neon',       icon: '⚡',  label: '霓虹' },
+  { id: 'amber',      icon: '◈',  label: '琥珀' },
+];
+
+function applyTheme(theme) {
+  const t = THEMES.find(t => t.id === theme) || THEMES[0];
+  document.documentElement.setAttribute('data-theme', t.id);
+  const icon = document.getElementById('theme-icon');
+  const label = document.getElementById('theme-label');
+  if (icon) icon.textContent = t.icon;
+  if (label) label.textContent = t.label;
+  localStorage.setItem('theme', t.id);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const idx = THEMES.findIndex(t => t.id === current);
+  const next = THEMES[(idx + 1) % THEMES.length];
+  applyTheme(next.id);
+  fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ theme: next.id }),
+  }).catch(() => {});
+}
+
+// 初始化主题：优先服务端，fallback 到 localStorage
+(async () => {
+  try {
+    const res = await fetch('/api/settings');
+    const settings = await res.json();
+    applyTheme(settings.theme || localStorage.getItem('theme') || 'dark');
+  } catch {
+    applyTheme(localStorage.getItem('theme') || 'dark');
+  }
+})();
+
 // ==================== 数据加载 ====================
 
 async function loadProxies() {
@@ -1036,6 +1079,33 @@ async function init() {
   // 初始状态：根据当前协议值决定 Azure 字段显示
   const initProto = document.getElementById('target-protocol').value;
   document.getElementById('azure-fields').style.display = initProto === 'openai' ? '' : 'none';
+
+  // 快捷键
+  document.addEventListener('keydown', (e) => {
+    // Esc 关闭最上层弹窗
+    if (e.key === 'Escape') {
+      if (document.getElementById('confirm-modal').classList.contains('active')) return;
+      if (document.getElementById('log-modal').classList.contains('active')) { closeLogViewer(); return; }
+      if (document.getElementById('history-modal').classList.contains('active')) { closeHistoryViewer(); return; }
+      if (document.getElementById('test-result-modal').classList.contains('active')) { document.getElementById('test-result-modal').classList.remove('active'); return; }
+      if (document.getElementById('import-modal').classList.contains('active')) { closeImportModal(); return; }
+      if (document.getElementById('modal').classList.contains('active')) { closeModal(); return; }
+    }
+    // Ctrl+S 保存表单
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if (document.getElementById('modal').classList.contains('active')) {
+        e.preventDefault();
+        document.getElementById('proxy-form').requestSubmit();
+      }
+    }
+    // Ctrl+N 新建代理
+    if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+      if (!document.getElementById('modal').classList.contains('active')) {
+        e.preventDefault();
+        openModal();
+      }
+    }
+  });
 }
 
 // ==================== 代理地址复制 ====================
@@ -1090,6 +1160,149 @@ function showToast(msg, isError) {
   setTimeout(() => toast.remove(), 2000);
 }
 
+// ==================== 批量操作 ====================
+
+async function startAllProxies() {
+  try {
+    const res = await fetch('/api/proxies/start-all', { method: 'POST' });
+    const data = await res.json();
+    await loadProxies();
+    const started = data.results.filter(r => r.success).length;
+    const skipped = data.results.filter(r => r.skipped).length;
+    const failed = data.results.filter(r => !r.success && !r.skipped).length;
+    let msg = `启动完成：${started} 个启动`;
+    if (skipped > 0) msg += `，${skipped} 个已在运行`;
+    if (failed > 0) msg += `，${failed} 个失败`;
+    showToast(msg, failed > 0);
+  } catch (err) {
+    showToast('批量启动失败: ' + err.message, true);
+  }
+}
+
+async function stopAllProxies() {
+  const ok = await showConfirm('确定要停止所有运行中的代理吗？', '全部停止');
+  if (!ok) return;
+  try {
+    const res = await fetch('/api/proxies/stop-all', { method: 'POST' });
+    const data = await res.json();
+    await loadProxies();
+    showToast(`已停止 ${data.results.length} 个代理`);
+  } catch (err) {
+    showToast('批量停止失败: ' + err.message, true);
+  }
+}
+
+// ==================== 日志查看 ====================
+
+async function openLogViewer() {
+  document.getElementById('log-modal').classList.add('active');
+  await loadLogs();
+}
+
+function closeLogViewer() {
+  document.getElementById('log-modal').classList.remove('active');
+}
+
+async function loadLogs() {
+  const container = document.getElementById('log-content');
+  const lines = document.getElementById('log-lines-select').value;
+  container.textContent = '加载中...';
+  try {
+    const res = await fetch(`/api/logs?lines=${lines}`);
+    const data = await res.json();
+    document.getElementById('log-total').textContent = data.total ? `(共 ${data.total} 行)` : '';
+    if (!data.lines || data.lines.length === 0) {
+      container.textContent = '暂无日志';
+      return;
+    }
+    container.innerHTML = data.lines.map(line => {
+      let cls = 'log-line';
+      if (/error|fail|失败/i.test(line)) cls += ' log-error';
+      else if (/warn|警告/i.test(line)) cls += ' log-warn';
+      return `<div class="${cls}">${escapeHtml(line)}</div>`;
+    }).join('');
+    container.scrollTop = container.scrollHeight;
+  } catch (err) {
+    container.textContent = '加载失败: ' + err.message;
+  }
+}
+
+// ==================== 版本历史 ====================
+
+async function openHistoryViewer() {
+  document.getElementById('history-modal').classList.add('active');
+  await loadHistory();
+}
+
+function closeHistoryViewer() {
+  document.getElementById('history-modal').classList.remove('active');
+}
+
+async function loadHistory() {
+  const container = document.getElementById('history-content');
+  container.textContent = '加载中...';
+  try {
+    const res = await fetch('/api/config/history');
+    const data = await res.json();
+    if (!data.snapshots || data.snapshots.length === 0) {
+      container.innerHTML = '<div class="empty">暂无历史版本</div>';
+      return;
+    }
+    const REASON_LABELS = {
+      'create-proxy': '创建代理',
+      'update-proxy': '更新代理',
+      'delete-proxy': '删除代理',
+      'import-merge': '导入配置（合并）',
+      'import-overwrite': '导入配置（覆盖）',
+      'before-rollback': '回滚前备份',
+      'save': '保存',
+    };
+    container.innerHTML = `<div class="history-list">` + data.snapshots.map(s => {
+      const date = new Date(s.timestamp);
+      const timeStr = date.toLocaleString('zh-CN', { hour12: false });
+      const label = REASON_LABELS[s.reason] || s.reason;
+      const sizeStr = s.size > 1024 ? `${(s.size / 1024).toFixed(1)} KB` : `${s.size} B`;
+      return `
+        <div class="history-item">
+          <div class="history-info">
+            <span class="history-time">${timeStr}</span>
+            <span class="history-reason">${escapeHtml(label)}</span>
+            <span class="history-size">${sizeStr}</span>
+          </div>
+          <button class="btn btn-sm history-rollback-btn" data-file="${escapeHtml(s.file)}">恢复</button>
+        </div>
+      `;
+    }).join('') + '</div>';
+    container.querySelectorAll('.history-rollback-btn').forEach(btn => {
+      btn.addEventListener('click', () => rollbackToSnapshot(btn.dataset.file));
+    });
+  } catch (err) {
+    container.textContent = '加载失败: ' + err.message;
+  }
+}
+
+async function rollbackToSnapshot(file) {
+  const ok = await showConfirm('确认恢复到此版本？<br>当前配置会先自动备份。', '确认恢复');
+  if (!ok) return;
+  try {
+    const res = await fetch('/api/config/rollback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || '恢复失败', true);
+      return;
+    }
+    closeHistoryViewer();
+    await Promise.all([loadProxies(), loadProviders()]);
+    showToast('已恢复到历史版本');
+  } catch (err) {
+    showToast('恢复失败: ' + err.message, true);
+  }
+}
+
 // ==================== 渲染代理列表 ====================
 
 const ROUTING_LABELS = {
@@ -1099,14 +1312,34 @@ const ROUTING_LABELS = {
   fastest: '最快优先',
 };
 
+function getFilteredProxies() {
+  const q = (document.getElementById('proxy-search-input')?.value || '').trim().toLowerCase();
+  if (!q) return proxies;
+  return proxies.filter(p => {
+    const name = (p.name || '').toLowerCase();
+    const port = String(p.port || '');
+    const provider = (p.providerName || '').toLowerCase();
+    return name.includes(q) || port.includes(q) || provider.includes(q);
+  });
+}
+
+function filterProxies() {
+  renderProxies();
+}
+
 function renderProxies() {
   const container = document.getElementById('proxy-list');
+  const list = getFilteredProxies();
   if (proxies.length === 0) {
     container.innerHTML = '<div class="empty">暂无代理配置，点击右上角创建</div>';
     return;
   }
+  if (list.length === 0) {
+    container.innerHTML = '<div class="empty">没有匹配的代理</div>';
+    return;
+  }
 
-  container.innerHTML = proxies.map(p => {
+  container.innerHTML = list.map(p => {
     // Build unified provider rows: primary first, then pool entries
     const primaryRow = {
       name: p.providerName || p.providerUrl || '-',

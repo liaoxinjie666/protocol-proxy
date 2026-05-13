@@ -8,6 +8,10 @@
 </head>
 <body>
   <div class="container">
+    <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换主题">
+      <span id="theme-icon">&#9790;</span>
+      <span id="theme-label" class="theme-label">深色</span>
+    </button>
     <header>
       <h1>Protocol Proxy</h1>
       <p>OpenAI / Anthropic 协议转换透明代理</p>
@@ -79,7 +83,18 @@
           <button class="btn" onclick="exportConfig()">导出配置</button>
           <button class="btn" onclick="document.getElementById('import-file').click()">导入配置</button>
           <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
+          <button class="btn" onclick="openHistoryViewer()">版本历史</button>
           <button class="btn btn-primary" onclick="openModal()">+ 新建代理</button>
+        </div>
+      </div>
+      <div class="proxy-toolbar">
+        <div class="proxy-search">
+          <input type="text" id="proxy-search-input" placeholder="搜索代理名称、端口、供应商..." oninput="filterProxies()">
+        </div>
+        <div class="proxy-toolbar-actions">
+          <button class="btn btn-sm" onclick="startAllProxies()">全部启动</button>
+          <button class="btn btn-sm" onclick="stopAllProxies()">全部停止</button>
+          <button class="btn btn-sm" onclick="openLogViewer()">日志</button>
         </div>
       </div>
       <div id="proxy-list" class="proxy-list">
@@ -282,6 +297,37 @@
       <div class="confirm-actions">
         <button class="btn btn-primary" id="test-result-close">知道了</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 日志查看弹窗 -->
+  <div class="modal" id="log-modal">
+    <div class="modal-content" style="max-width:800px">
+      <div class="modal-header">
+        <h3>运行日志 <span id="log-total" style="color:#64748b;font-size:0.8rem;font-weight:400"></span></h3>
+        <button class="btn-close" onclick="closeLogViewer()">&times;</button>
+      </div>
+      <div class="log-toolbar">
+        <select id="log-lines-select" onchange="loadLogs()">
+          <option value="100">最近 100 行</option>
+          <option value="200" selected>最近 200 行</option>
+          <option value="500">最近 500 行</option>
+          <option value="1000">最近 1000 行</option>
+        </select>
+        <button class="btn btn-sm" onclick="loadLogs()">刷新</button>
+      </div>
+      <div class="log-content" id="log-content">加载中...</div>
+    </div>
+  </div>
+
+  <!-- 版本历史弹窗 -->
+  <div class="modal" id="history-modal">
+    <div class="modal-content" style="max-width:600px">
+      <div class="modal-header">
+        <h3>配置版本历史</h3>
+        <button class="btn-close" onclick="closeHistoryViewer()">&times;</button>
+      </div>
+      <div class="history-content" id="history-content">加载中...</div>
     </div>
   </div>
 

@@ -551,6 +551,7 @@ async function init() {
 
   // 创建代理
   app.post('/api/proxies', async (req, res) => {
+    configStore.saveSnapshot('create-proxy');
     const { name, port, requireAuth, authToken, providerId, defaultModel, routingStrategy, providerPool, providerWeight } = req.body;
 
     if (!name || !port || !providerId) {
@@ -592,6 +593,7 @@ async function init() {
 
   // 更新代理
   app.put('/api/proxies/:id', async (req, res) => {
+    configStore.saveSnapshot('update-proxy');
     const existing = configStore.getProxyById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Proxy not found' });
 
@@ -640,6 +642,7 @@ async function init() {
 
   // 删除代理
   app.delete('/api/proxies/:id', async (req, res) => {
+    configStore.saveSnapshot('delete-proxy');
     const existing = configStore.getProxyById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Proxy not found' });
 
@@ -666,6 +669,36 @@ async function init() {
     res.json({ success: true, running: false });
   });
 
+  // 批量启动所有代理
+  app.post('/api/proxies/start-all', async (req, res) => {
+    const proxies = configStore.getProxies();
+    const results = [];
+    for (const proxy of proxies) {
+      if (proxyManager.isRunning(proxy.id)) {
+        results.push({ id: proxy.id, name: proxy.name, skipped: true });
+        continue;
+      }
+      try {
+        await startProxyWithProvider(proxy);
+        results.push({ id: proxy.id, name: proxy.name, success: true });
+      } catch (err) {
+        results.push({ id: proxy.id, name: proxy.name, success: false, error: err.message });
+      }
+    }
+    res.json({ results });
+  });
+
+  // 批量停止所有代理
+  app.post('/api/proxies/stop-all', async (req, res) => {
+    const running = proxyManager.getRunningPorts();
+    const results = [];
+    for (const r of running) {
+      await proxyManager.stopProxy(r.id);
+      results.push({ id: r.id, name: r.name, success: true });
+    }
+    res.json({ results });
+  });
+
   // 获取运行状态
   app.get('/api/status', (req, res) => {
     res.json({
@@ -687,6 +720,22 @@ async function init() {
     });
   });
 
+  // 设置
+  app.get('/api/settings', (req, res) => {
+    res.json(configStore.getSettings());
+  });
+
+  app.put('/api/settings', (req, res) => {
+    const settings = req.body;
+    if (!settings || typeof settings !== 'object') {
+      return res.status(400).json({ error: '需要 settings 对象' });
+    }
+    for (const [key, value] of Object.entries(settings)) {
+      configStore.setSetting(key, value);
+    }
+    res.json(configStore.getSettings());
+  });
+
   // Token 用量统计
   app.get('/api/stats', (req, res) => {
     const { range, startDate, endDate, proxyId } = req.query;
@@ -702,6 +751,22 @@ async function init() {
       providerName: configStore.getProviderById(p.providerId)?.name || '',
     }));
     res.json({ ...stats, proxies });
+  });
+
+  // 日志查看
+  app.get('/api/logs', (req, res) => {
+    const lines = Math.min(parseInt(req.query.lines) || 200, 2000);
+    try {
+      if (!fs.existsSync(logger.LOG_FILE)) {
+        return res.json({ lines: [] });
+      }
+      const content = fs.readFileSync(logger.LOG_FILE, 'utf8');
+      const allLines = content.split('\n').filter(l => l.trim());
+      const tail = allLines.slice(-lines);
+      res.json({ lines: tail, total: allLines.length });
+    } catch (err) {
+      res.json({ lines: [], error: err.message });
+    }
   });
 
   // ==================== 配置导入/导出 ====================
@@ -732,6 +797,8 @@ async function init() {
     if (!config || !mode || !['overwrite', 'merge'].includes(mode)) {
       return res.status(400).json({ error: '需要 config 和 mode（overwrite/merge）' });
     }
+
+    configStore.saveSnapshot('import-' + mode);
 
     // 校验结构
     if (!Array.isArray(config.providers) || !Array.isArray(config.proxies)) {
@@ -835,6 +902,21 @@ async function init() {
         proxies: merged.proxies.length - existingProxies.length,
       },
     });
+  });
+
+  // ==================== 配置版本历史 ====================
+
+  app.get('/api/config/history', (req, res) => {
+    const snapshots = configStore.getSnapshots();
+    res.json({ snapshots });
+  });
+
+  app.post('/api/config/rollback', async (req, res) => {
+    const { file } = req.body;
+    if (!file) return res.status(400).json({ error: '需要指定快照文件' });
+    const result = configStore.restoreSnapshot(file);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ success: true });
   });
 
   // 前端首页
