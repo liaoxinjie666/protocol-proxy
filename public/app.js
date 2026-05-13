@@ -6,6 +6,8 @@ let importData = null;
 let statsRange = 'daily';
 let statsProxyId = '';
 let providerPoolItems = [];
+let keyHealth = {};
+let statsAutoRefreshTimer = null;
 
 // ==================== 主题切换 ====================
 
@@ -79,6 +81,30 @@ function updateStats() {
   document.getElementById('stat-total').textContent = proxies.length;
   document.getElementById('stat-running').textContent =
     proxies.filter(p => p.running).length;
+}
+
+async function loadKeyHealth() {
+  try {
+    const res = await fetch('/api/key-health');
+    keyHealth = await res.json();
+    refreshHealthUI();
+  } catch (err) {
+    console.error('加载 Key 健康状态失败:', err);
+  }
+}
+
+function refreshHealthUI() {
+  // 更新每个代理卡片上的健康点
+  document.querySelectorAll('.health-dot[data-provider]').forEach(dot => {
+    const h = keyHealth[dot.dataset.provider];
+    dot.className = 'health-dot';
+    if (!h || h.status === 'unknown') { dot.classList.add('health-unknown'); dot.title = '未检测'; }
+    else if (h.status === 'healthy') { dot.classList.add('health-ok'); dot.title = 'Key 正常'; }
+    else if (h.status === 'partial') { dot.classList.add('health-warn'); dot.title = '部分 Key 异常'; }
+    else { dot.classList.add('health-error'); dot.title = 'Key 全部异常'; }
+  });
+  // 更新汇总卡片
+  renderProviderHealthSummary();
 }
 
 function parseProviderPool(value) {
@@ -991,9 +1017,18 @@ function initStatsRangeBtns() {
       document.querySelectorAll('.stats-range-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       statsRange = btn.dataset.range;
-      // 清空日期选择器，显示全部数据
-      document.getElementById('stats-start-date').value = '';
-      document.getElementById('stats-end-date').value = '';
+      // 清除自动刷新
+      if (statsAutoRefreshTimer) { clearInterval(statsAutoRefreshTimer); statsAutoRefreshTimer = null; }
+      if (statsRange === 'hourly') {
+        // 实时模式：设为今天 + 30 秒自动刷新
+        const today = new Date().toISOString().slice(0, 10);
+        document.getElementById('stats-start-date').value = today;
+        document.getElementById('stats-end-date').value = today;
+        statsAutoRefreshTimer = setInterval(loadStats, 30000);
+      } else {
+        document.getElementById('stats-start-date').value = '';
+        document.getElementById('stats-end-date').value = '';
+      }
       loadStats();
     });
   });
@@ -1054,7 +1089,16 @@ function initProviderPoolDropdown() {
 }
 
 async function init() {
+  // 默认统计范围：当天（HTML 内联脚本已优先设置，此处兜底）
+  const today = new Date().toISOString().slice(0, 10);
+  const sd = document.getElementById('stats-start-date');
+  const ed = document.getElementById('stats-end-date');
+  if (!sd.value) sd.value = today;
+  if (!ed.value) ed.value = today;
   await Promise.all([loadProxies(), loadProviders(), loadStats()]);
+  // 延迟加载 health（等后端启动检测完成），之后每 5 分钟刷新
+  setTimeout(() => loadKeyHealth(), 6000);
+  setInterval(() => loadKeyHealth(), 5 * 60 * 1000);
   renderProxies();
   initProviderDropdown();
   initModelDropdown();
@@ -1327,9 +1371,64 @@ function filterProxies() {
   renderProxies();
 }
 
+function healthDot(providerId) {
+  const h = keyHealth[providerId];
+  const cls = !h || h.status === 'unknown' ? 'health-unknown'
+    : h.status === 'healthy' ? 'health-ok'
+    : h.status === 'partial' ? 'health-warn' : 'health-error';
+  const title = !h || h.status === 'unknown' ? '未检测'
+    : h.status === 'healthy' ? 'Key 正常'
+    : h.status === 'partial' ? '部分 Key 异常' : 'Key 全部异常';
+  return `<span class="health-dot ${cls}" data-provider="${escapeHtml(providerId)}" title="${title}"></span>`;
+}
+
+function renderProviderHealthSummary() {
+  const el = document.getElementById('provider-health-summary');
+  if (!el) return;
+  const allProviders = proxies.map(p => p.providerId).filter(Boolean);
+  const unique = [...new Set(allProviders)];
+  if (unique.length === 0) { el.style.display = 'none'; return; }
+  let healthy = 0, partial = 0, unhealthy = 0, unknown = 0;
+  for (const id of unique) {
+    const h = keyHealth[id];
+    if (!h || h.status === 'unknown') unknown++;
+    else if (h.status === 'healthy') healthy++;
+    else if (h.status === 'partial') partial++;
+    else unhealthy++;
+  }
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="health-stat"><span class="health-dot health-ok"></span><span>正常 ${healthy}</span></div>
+    <div class="health-stat"><span class="health-dot health-warn"></span><span>部分异常 ${partial}</span></div>
+    <div class="health-stat"><span class="health-dot health-error"></span><span>异常 ${unhealthy}</span></div>
+    <div class="health-stat"><span class="health-dot health-unknown"></span><span>未检测 ${unknown}</span></div>
+    <button class="btn btn-sm" onclick="recheckKeys()">重新检测</button>
+  `;
+}
+
+let rechecking = false;
+async function recheckKeys() {
+  if (rechecking) return;
+  rechecking = true;
+  const btn = document.querySelector('.provider-health-summary .btn');
+  if (btn) { btn.disabled = true; btn.textContent = '检测中...'; }
+  showToast('正在检测...');
+  try {
+    await fetch('/api/key-health/check', { method: 'POST' });
+    await loadKeyHealth();
+    showToast('检测完成');
+  } catch (err) {
+    showToast('检测失败: ' + err.message, true);
+  } finally {
+    rechecking = false;
+    if (btn) { btn.disabled = false; btn.textContent = '重新检测'; }
+  }
+}
+
 function renderProxies() {
   const container = document.getElementById('proxy-list');
   const list = getFilteredProxies();
+  renderProviderHealthSummary();
   if (proxies.length === 0) {
     container.innerHTML = '<div class="empty">暂无代理配置，点击右上角创建</div>';
     return;
@@ -1374,6 +1473,7 @@ function renderProxies() {
       </div>
       <div class="proxy-meta">
         <span>端口: <strong>${p.port}</strong></span>
+        <span>供应商: ${healthDot(p.providerId)} ${escapeHtml(p.providerName || '-')}</span>
         <span>认证: ${p.requireAuth ? '已启用' : '未启用'}</span>
       </div>
       <div class="proxy-address">

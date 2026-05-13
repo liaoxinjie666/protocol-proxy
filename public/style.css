@@ -1871,3 +1871,36 @@ form {
   font-size: 0.78rem;
   white-space: nowrap;
 }
+
+/* Health dots */
+.health-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.health-ok { background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.4); }
+.health-warn { background: #f59e0b; box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
+.health-error { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
+.health-unknown { background: #64748b; }
+
+/* Provider health summary */
+.provider-health-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 28px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-surface-alt);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.health-stat {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}

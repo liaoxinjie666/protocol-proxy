@@ -7,6 +7,16 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <script>
+    // 尽早设置统计日期默认值，避免 init() 时序问题
+    document.addEventListener('DOMContentLoaded', function() {
+      var today = new Date().toISOString().slice(0, 10);
+      var sd = document.getElementById('stats-start-date');
+      var ed = document.getElementById('stats-end-date');
+      if (sd && !sd.value) sd.value = today;
+      if (ed && !ed.value) ed.value = today;
+    });
+  </script>
   <div class="container">
     <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换主题">
       <span id="theme-icon">&#9790;</span>
@@ -43,6 +53,7 @@
             </div>
           </div>
           <div class="stats-range-btns">
+            <button class="btn btn-sm stats-range-btn" data-range="hourly">实时</button>
             <button class="btn btn-sm stats-range-btn active" data-range="daily">每日</button>
             <button class="btn btn-sm stats-range-btn" data-range="monthly">每月</button>
             <button class="btn btn-sm stats-range-btn" data-range="yearly">每年</button>
@@ -97,6 +108,7 @@
           <button class="btn btn-sm" onclick="openLogViewer()">日志</button>
         </div>
       </div>
+      <div class="provider-health-summary" id="provider-health-summary" style="display:none"></div>
       <div id="proxy-list" class="proxy-list">
         <div class="empty">加载中...</div>
       </div>

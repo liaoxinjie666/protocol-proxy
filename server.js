@@ -249,6 +249,89 @@ async function init() {
     return proxyManager.startProxy(proxyConfig);
   }
 
+  // ==================== API Key 健康检查 ====================
+
+  const keyHealth = new Map(); // providerId -> { status, lastCheck, keys: [{index, ok, message}] }
+  let healthCheckRunning = false;
+
+  async function checkAllProviderKeys() {
+    if (healthCheckRunning) return;
+    healthCheckRunning = true;
+    try {
+      const providers = configStore.getProviders();
+      logger.log(`[Health] 开始检查 ${providers.length} 个供应商的 API Key...`);
+      for (const provider of providers) {
+        await checkProviderKeys(provider);
+      }
+      logger.log('[Health] API Key 健康检查完成');
+    } finally {
+      healthCheckRunning = false;
+    }
+  }
+
+  async function checkProviderKeys(provider) {
+    const keys = (provider.apiKeys || []).filter(k => k.enabled !== false);
+    if (keys.length === 0) {
+      keyHealth.set(provider.id, { status: 'unknown', lastCheck: Date.now(), keys: [] });
+      return;
+    }
+
+    const protocol = provider.protocol || 'openai';
+    const base = provider.url.replace(/\/$/, '');
+    const hasV1Suffix = base.endsWith('/v1');
+    const isAzure = protocol === 'openai' && !!provider.azureDeployment;
+
+    const results = await Promise.all(keys.map(async (k, i) => {
+      try {
+        let testUrl, fetchOpts;
+        if (protocol === 'openai') {
+          if (isAzure) {
+            const ver = provider.azureApiVersion || '2024-02-01';
+            testUrl = `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`;
+            fetchOpts = { headers: { 'api-key': k.key } };
+          } else {
+            testUrl = hasV1Suffix ? `${base}/models` : `${base}/v1/models`;
+            fetchOpts = { headers: { 'Authorization': `Bearer ${k.key}` } };
+          }
+        } else if (protocol === 'anthropic') {
+          const testModel = (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
+          testUrl = hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`;
+          fetchOpts = {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': k.key, 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+          };
+        } else if (protocol === 'gemini') {
+          testUrl = `${base}/v1beta/models?key=${k.key}`;
+          fetchOpts = {};
+        } else {
+          return { index: i, ok: false, message: '不支持的协议' };
+        }
+        const res = await fetch(testUrl, { ...fetchOpts, signal: AbortSignal.timeout(15000) });
+        if (!res.ok) {
+          const hint = res.status === 401 || res.status === 403 ? 'Key 无效或无权限' : `HTTP ${res.status}`;
+          return { index: i, ok: false, message: hint };
+        }
+        return { index: i, ok: true };
+      } catch (err) {
+        return { index: i, ok: false, message: err.name === 'TimeoutError' ? '连接超时' : err.message };
+      }
+    }));
+
+    const allOk = results.every(r => r.ok);
+    const anyOk = results.some(r => r.ok);
+    keyHealth.set(provider.id, {
+      status: allOk ? 'healthy' : anyOk ? 'partial' : 'unhealthy',
+      lastCheck: Date.now(),
+      keys: results,
+    });
+  }
+
+  // 启动后延迟 5 秒执行首次检查
+  setTimeout(() => checkAllProviderKeys(), 5000);
+  // 每 24 小时检查一次
+  setInterval(() => checkAllProviderKeys(), 24 * 60 * 60 * 1000);
+
   // ==================== 供应商 API ====================
 
   app.get('/api/providers', (req, res) => {
@@ -718,6 +801,21 @@ async function init() {
         running: proxyManager.getRunningPorts().length,
       },
     });
+  });
+
+  // API Key 健康状态
+  app.get('/api/key-health', (req, res) => {
+    const result = {};
+    for (const [providerId, health] of keyHealth) {
+      result[providerId] = health;
+    }
+    res.json(result);
+  });
+
+  // 手动触发健康检查
+  app.post('/api/key-health/check', async (req, res) => {
+    await checkAllProviderKeys();
+    res.json({ success: true });
   });
 
   // 设置
