@@ -1994,3 +1994,50 @@ form {
 .request-log-status-success { background: rgba(52,211,153,0.15); color: #34d399; }
 .request-log-status-failure { background: rgba(239,68,68,0.15); color: #ef4444; }
 .request-log-status-429 { background: rgba(251,191,36,0.15); color: #fbbf24; }
+
+.request-log-row.clickable { cursor: pointer; }
+.request-log-row.clickable:hover td { background: var(--bg-surface-alt); }
+
+.request-log-summary {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.request-log-summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.request-log-detail-row td {
+  padding: 0 !important;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.request-log-detail {
+  padding: 10px 16px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-light);
+}
+
+.request-log-detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  font-size: 12px;
+}
+
+.detail-label {
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.request-log-detail-error {
+  color: #ef4444;
+  word-break: break-all;
+}

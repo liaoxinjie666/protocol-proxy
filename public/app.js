@@ -1321,6 +1321,18 @@ function openRequestLog() {
   populateRequestLogFilters();
   loadInitialRequestLogs();
   connectRequestLogWs();
+  // 事件委托：点击行展开详情
+  const tbody = document.getElementById('request-log-tbody');
+  if (!tbody._delegated) {
+    tbody.addEventListener('click', (ev) => {
+      const row = ev.target.closest('.request-log-row');
+      if (!row || row.parentElement !== tbody) return;
+      const idx = Array.from(tbody.children).filter(c => c.classList.contains('request-log-row')).indexOf(row);
+      const filtered = getFilteredRequestLogs();
+      if (idx >= 0 && idx < filtered.length) toggleRequestLogDetail(row, filtered[idx]);
+    });
+    tbody._delegated = true;
+  }
 }
 
 function closeRequestLog() {
@@ -1407,6 +1419,31 @@ function updateRequestLogCount() {
   const filtered = getFilteredRequestLogs();
   document.getElementById('request-log-count').textContent =
     `(显示 ${filtered.length}/${requestLogEntries.length})`;
+  renderRequestLogSummary(filtered);
+}
+
+function renderRequestLogSummary(filtered) {
+  const el = document.getElementById('request-log-summary');
+  if (!filtered || filtered.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  const total = filtered.length;
+  const successCount = filtered.filter(e => e.status === 'success').length;
+  const failureCount = filtered.filter(e => e.status === 'failure').length;
+  const rateLimitedCount = filtered.filter(e => e.status === '429').length;
+  const successRate = ((successCount / total) * 100).toFixed(1);
+  const latencies = filtered.filter(e => e.status === 'success' && e.latencyMs > 0).map(e => e.latencyMs);
+  const avgLatency = latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : '-';
+  const p95 = latencies.length > 0 ? latencies.sort((a, b) => a - b)[Math.floor(latencies.length * 0.95)] || latencies[latencies.length - 1] : '-';
+  el.innerHTML = [
+    `<span class="request-log-summary-item">请求 <b>${total}</b></span>`,
+    `<span class="request-log-summary-item">成功率 <b style="color:#34d399">${successRate}%</b></span>`,
+    `<span class="request-log-summary-item">平均延迟 <b>${avgLatency}${avgLatency !== '-' ? 'ms' : ''}</b></span>`,
+    `<span class="request-log-summary-item">P95 <b>${p95}${p95 !== '-' ? 'ms' : ''}</b></span>`,
+    failureCount > 0 ? `<span class="request-log-summary-item">失败 <b style="color:#ef4444">${failureCount}</b></span>` : '',
+    rateLimitedCount > 0 ? `<span class="request-log-summary-item">限流 <b style="color:#fbbf24">${rateLimitedCount}</b></span>` : '',
+  ].filter(Boolean).join('');
 }
 
 function renderRequestLogTable() {
@@ -1429,10 +1466,41 @@ function appendRequestLogRow(entry) {
   row.className = 'request-log-row request-log-' + entry.status;
   row.innerHTML = entryToCellHtml(entry);
   tbody.insertBefore(row, tbody.firstChild);
+  renderRequestLogSummary(getFilteredRequestLogs());
+}
+
+function toggleRequestLogDetail(row, entry) {
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains('request-log-detail-row')) {
+    next.remove();
+    return;
+  }
+  const detailRow = document.createElement('tr');
+  detailRow.className = 'request-log-detail-row';
+  const time = new Date(entry.timestamp).toLocaleString('zh-CN', { hour12: false });
+  detailRow.innerHTML = `<td colspan="9"><div class="request-log-detail">
+    <div class="request-log-detail-grid">
+      <span class="detail-label">Request ID</span><span><code>${escapeHtml(entry.id)}</code></span>
+      <span class="detail-label">时间</span><span>${time}</span>
+      <span class="detail-label">客户端 IP</span><span>${escapeHtml(entry.clientIP || '-')}</span>
+      <span class="detail-label">入站协议</span><span>${escapeHtml(entry.inboundProtocol || '-')}</span>
+      <span class="detail-label">目标协议</span><span>${escapeHtml(entry.targetProtocol || '-')}</span>
+      <span class="detail-label">代理</span><span>${escapeHtml(entry.proxyName || '-')} <code style="font-size:11px;color:var(--text-dim)">${escapeHtml(entry.proxyId || '')}</code></span>
+      <span class="detail-label">供应商</span><span>${escapeHtml(entry.providerName || '-')}</span>
+      <span class="detail-label">模型</span><span><code>${escapeHtml(entry.model || '-')}</code></span>
+      <span class="detail-label">Key</span><span>${escapeHtml(entry.keyAlias || '-')}</span>
+      <span class="detail-label">流式</span><span>${entry.stream ? '是' : '否'}</span>
+      <span class="detail-label">上游状态码</span><span>${entry.upstreamStatusCode || '-'}</span>
+      <span class="detail-label">延迟</span><span>${entry.latencyMs != null ? entry.latencyMs + 'ms' : '-'}</span>
+      <span class="detail-label">Token</span><span>${entry.promptTokens} 输入 + ${entry.completionTokens} 输出 = ${entry.totalTokens} ${entry.isEstimated ? '(估算)' : ''}</span>
+      ${entry.errorMessage ? `<span class="detail-label">错误信息</span><span class="request-log-detail-error">${escapeHtml(entry.errorMessage)}</span>` : ''}
+    </div>
+  </div></td>`;
+  row.after(detailRow);
 }
 
 function entryToRowHtml(e) {
-  return `<tr class="request-log-row request-log-${e.status}">${entryToCellHtml(e)}</tr>`;
+  return `<tr class="request-log-row request-log-${e.status} clickable">${entryToCellHtml(e)}</tr>`;
 }
 
 function entryToCellHtml(e) {
@@ -1458,6 +1526,28 @@ function clearRequestLogs() {
   requestLogEntries = [];
   document.getElementById('request-log-tbody').innerHTML = '';
   document.getElementById('request-log-count').textContent = '';
+  document.getElementById('request-log-summary').innerHTML = '';
+}
+
+function exportRequestLogs() {
+  const filtered = getFilteredRequestLogs();
+  if (filtered.length === 0) {
+    showToast('无数据可导出', true);
+    return;
+  }
+  const rows = [['时间','RequestID','代理','协议','模型','状态','上游状态码','输入Token','输出Token','合计Token','估算','流式','延迟ms','供应商','Key','客户端IP','错误信息']];
+  for (const e of filtered) {
+    const time = new Date(e.timestamp).toLocaleString('zh-CN', { hour12: false });
+    rows.push([time, e.id, e.proxyName, e.inboundProtocol, e.model, e.status, e.upstreamStatusCode || '', e.promptTokens, e.completionTokens, e.totalTokens, e.isEstimated ? '是' : '否', e.stream ? '是' : '否', e.latencyMs, e.providerName, e.keyAlias, e.clientIP, e.errorMessage || '']);
+  }
+  const csv = '﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `request-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ==================== 版本历史 ====================

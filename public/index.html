@@ -375,9 +375,11 @@
         </div>
         <div class="request-log-controls">
           <button class="btn btn-sm" id="request-log-ws-status" style="color:var(--text-dim);cursor:default">连接中...</button>
+          <button class="btn btn-sm" onclick="exportRequestLogs()">导出</button>
           <button class="btn btn-sm" onclick="clearRequestLogs()">清空</button>
         </div>
       </div>
+      <div class="request-log-summary" id="request-log-summary"></div>
       <div class="request-log-table-wrap" id="request-log-table-wrap">
         <table class="request-log-table">
           <thead>
