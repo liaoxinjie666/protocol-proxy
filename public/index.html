@@ -61,6 +61,7 @@
             <input type="date" id="stats-start-date" class="stats-date-input" placeholder="开始日期">
             <span class="stats-date-sep">~</span>
             <input type="date" id="stats-end-date" class="stats-date-input" placeholder="结束日期">
+            <button class="btn btn-sm" onclick="exportStatsCSV()" title="导出 CSV">导出</button>
           </div>
         </div>
       </div>
@@ -150,6 +151,14 @@
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>请求超时（秒）</label>
+              <input type="number" id="proxy-timeout" placeholder="300" min="5" max="3600" step="1">
+              <small style="color:var(--text-dim);font-size:11px">默认 300 秒（5 分钟）</small>
             </div>
           </div>
 

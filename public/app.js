@@ -916,6 +916,44 @@ async function loadStats() {
   }
 }
 
+async function exportStatsCSV() {
+  try {
+    const params = new URLSearchParams({ range: statsRange });
+    if (statsProxyId) params.set('proxyId', statsProxyId);
+    const startDate = document.getElementById('stats-start-date')?.value;
+    const endDate = document.getElementById('stats-end-date')?.value;
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
+    const res = await fetch('/api/stats?' + params);
+    const data = await res.json();
+
+    if (!data.byModel || data.byModel.length === 0) {
+      showToast('当前筛选条件下无数据可导出', true);
+      return;
+    }
+
+    const rows = [['供应商', '模型', '请求数', '输入Token', '输出Token', '合计Token', '含估算']];
+    for (const item of data.byModel) {
+      rows.push([item.provider, item.model, item.requests, item.prompt, item.completion, item.total, item.hasEstimated ? '是' : '否']);
+    }
+    // 合计行
+    const s = data.summary;
+    rows.push(['合计', '', s.requests, s.prompt, s.completion, s.total, s.hasEstimated ? '是' : '否']);
+
+    const csv = '﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = startDate || new Date().toISOString().slice(0, 10);
+    a.download = `stats-${statsRange}-${dateStr}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showToast('导出失败: ' + err.message, true);
+  }
+}
+
 function renderStatsSummary(summary) {
   document.getElementById('stats-total-tokens').textContent = formatTokens(summary.total);
   document.getElementById('stats-prompt-tokens').textContent = formatTokens(summary.prompt);
@@ -1694,6 +1732,7 @@ function openModal(id = null) {
     }
     document.getElementById('proxy-auth-token').value = p.authToken || '';
     document.getElementById('auth-token-group').style.display = p.requireAuth ? 'block' : 'none';
+    document.getElementById('proxy-timeout').value = p.timeout ? Math.round(p.timeout / 1000) : '';
     selectProvider(p.providerId || '');
     selectModel(p.defaultModel || '');
     renderApiKeys(providers.find(pr => pr.id === p.providerId));
@@ -1713,6 +1752,7 @@ function openModal(id = null) {
     document.querySelector('#auth-dropdown .model-option[data-value="false"]').classList.add('selected');
     document.getElementById('auth-dropdown-value').textContent = '不启用';
     document.getElementById('auth-token-group').style.display = 'none';
+    document.getElementById('proxy-timeout').value = '';
     selectProvider('');
     selectModel('');
     renderApiKeys(null);
@@ -1943,6 +1983,7 @@ async function handleSubmit(e) {
     providerWeight: Math.max(1, parseInt(document.getElementById('provider-weight').value, 10) || 1),
     routingStrategy: document.getElementById('routing-strategy').value || 'primary_fallback',
     providerPool: providerPoolItems,
+    timeout: parseInt(document.getElementById('proxy-timeout').value, 10) * 1000 || undefined,
   };
 
   try {
