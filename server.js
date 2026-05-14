@@ -867,6 +867,13 @@ async function init() {
     }
   });
 
+  // 实时请求日志
+  const requestLog = require('./lib/request-log');
+  app.get('/api/request-logs', (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 2000);
+    res.json({ entries: requestLog.getAll(limit), total: requestLog.getCount() });
+  });
+
   // ==================== 配置导入/导出 ====================
 
   app.get('/api/config/export', (req, res) => {
@@ -1036,11 +1043,19 @@ async function init() {
     }
   }));
 
-  app.listen(PORT, () => {
+  const http = require('http');
+  const server = app.listen(PORT, () => {
     const adminUrl = `http://localhost:${PORT}`;
     logger.log(`[Admin] Management server running on ${adminUrl}`);
     logger.log(`[Admin] ${proxies.length} proxy config(s) loaded`);
     logger.log(`[Admin] 日志文件: ${logger.LOG_FILE}`);
+
+    // 初始化 WebSocket 实时日志
+    const wsServer = require('./lib/ws-server');
+    wsServer.init(server);
+    requestLog.onEntry((entry) => wsServer.broadcast(entry));
+    logger.log(`[Admin] WebSocket 已附加 (ws://localhost:${PORT})`);
+
     openBrowser(adminUrl);
   });
 }
@@ -1050,6 +1065,8 @@ process.on('SIGINT', async () => {
   logger.log('[Shutdown] Shutting down...');
   removePid();
   try {
+    const wsServer = require('./lib/ws-server');
+    wsServer.close();
     const proxyManager = require('./lib/proxy-manager');
     const statsStore = require('./lib/stats-store');
     statsStore.flush();
@@ -1063,6 +1080,8 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   removePid();
   try {
+    const wsServer = require('./lib/ws-server');
+    wsServer.close();
     const proxyManager = require('./lib/proxy-manager');
     const statsStore = require('./lib/stats-store');
     statsStore.flush();

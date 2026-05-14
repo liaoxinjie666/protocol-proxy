@@ -1131,6 +1131,7 @@ async function init() {
       if (document.getElementById('confirm-modal').classList.contains('active')) return;
       if (document.getElementById('log-modal').classList.contains('active')) { closeLogViewer(); return; }
       if (document.getElementById('history-modal').classList.contains('active')) { closeHistoryViewer(); return; }
+      if (document.getElementById('request-log-modal').classList.contains('active')) { closeRequestLog(); return; }
       if (document.getElementById('test-result-modal').classList.contains('active')) { document.getElementById('test-result-modal').classList.remove('active'); return; }
       if (document.getElementById('import-modal').classList.contains('active')) { closeImportModal(); return; }
       if (document.getElementById('modal').classList.contains('active')) { closeModal(); return; }
@@ -1269,6 +1270,156 @@ async function loadLogs() {
   } catch (err) {
     container.textContent = '加载失败: ' + err.message;
   }
+}
+
+// ==================== 实时请求日志 ====================
+
+let requestLogWs = null;
+let requestLogEntries = [];
+let requestLogReconnectTimer = null;
+
+function openRequestLog() {
+  document.getElementById('request-log-modal').classList.add('active');
+  populateRequestLogFilters();
+  loadInitialRequestLogs();
+  connectRequestLogWs();
+}
+
+function closeRequestLog() {
+  document.getElementById('request-log-modal').classList.remove('active');
+  disconnectRequestLogWs();
+}
+
+function connectRequestLogWs() {
+  if (requestLogWs) return;
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${protocol}//${location.host}`;
+  requestLogWs = new WebSocket(url);
+
+  requestLogWs.onopen = () => {
+    const el = document.getElementById('request-log-ws-status');
+    el.textContent = '已连接';
+    el.style.color = '#34d399';
+    if (requestLogReconnectTimer) { clearTimeout(requestLogReconnectTimer); requestLogReconnectTimer = null; }
+  };
+
+  requestLogWs.onmessage = (event) => {
+    try {
+      const entry = JSON.parse(event.data);
+      if (entry.type === 'connected') return;
+      requestLogEntries.unshift(entry);
+      if (requestLogEntries.length > 2000) requestLogEntries.pop();
+      appendRequestLogRow(entry);
+      updateRequestLogCount();
+    } catch { /* ignore */ }
+  };
+
+  requestLogWs.onclose = () => {
+    requestLogWs = null;
+    const el = document.getElementById('request-log-ws-status');
+    el.textContent = '已断开';
+    el.style.color = '#ef4444';
+    if (document.getElementById('request-log-modal').classList.contains('active')) {
+      requestLogReconnectTimer = setTimeout(connectRequestLogWs, 3000);
+    }
+  };
+
+  requestLogWs.onerror = () => {};
+}
+
+function disconnectRequestLogWs() {
+  if (requestLogWs) { requestLogWs.close(); requestLogWs = null; }
+  if (requestLogReconnectTimer) { clearTimeout(requestLogReconnectTimer); requestLogReconnectTimer = null; }
+}
+
+async function loadInitialRequestLogs() {
+  try {
+    const res = await fetch('/api/request-logs?limit=200');
+    const data = await res.json();
+    requestLogEntries = data.entries || [];
+    renderRequestLogTable();
+    updateRequestLogCount();
+  } catch { /* ignore */ }
+}
+
+function populateRequestLogFilters() {
+  const select = document.getElementById('request-log-proxy-filter');
+  select.innerHTML = '<option value="">全部代理</option>' +
+    (proxies || []).map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
+}
+
+function filterRequestLogs() {
+  renderRequestLogTable();
+}
+
+function getFilteredRequestLogs() {
+  const proxyId = document.getElementById('request-log-proxy-filter').value;
+  const status = document.getElementById('request-log-status-filter').value;
+  const model = (document.getElementById('request-log-model-filter').value || '').trim().toLowerCase();
+
+  return requestLogEntries.filter(e => {
+    if (proxyId && e.proxyId !== proxyId) return false;
+    if (status && e.status !== status) return false;
+    if (model && !(e.model || '').toLowerCase().includes(model)) return false;
+    return true;
+  });
+}
+
+function updateRequestLogCount() {
+  const filtered = getFilteredRequestLogs();
+  document.getElementById('request-log-count').textContent =
+    `(显示 ${filtered.length}/${requestLogEntries.length})`;
+}
+
+function renderRequestLogTable() {
+  const tbody = document.getElementById('request-log-tbody');
+  const filtered = getFilteredRequestLogs();
+  tbody.innerHTML = filtered.map(e => entryToRowHtml(e)).join('');
+  updateRequestLogCount();
+}
+
+function appendRequestLogRow(entry) {
+  const proxyId = document.getElementById('request-log-proxy-filter').value;
+  const status = document.getElementById('request-log-status-filter').value;
+  const model = (document.getElementById('request-log-model-filter').value || '').trim().toLowerCase();
+  if (proxyId && entry.proxyId !== proxyId) return;
+  if (status && entry.status !== status) return;
+  if (model && !(entry.model || '').toLowerCase().includes(model)) return;
+
+  const tbody = document.getElementById('request-log-tbody');
+  const row = document.createElement('tr');
+  row.className = 'request-log-row request-log-' + entry.status;
+  row.innerHTML = entryToCellHtml(entry);
+  tbody.insertBefore(row, tbody.firstChild);
+}
+
+function entryToRowHtml(e) {
+  return `<tr class="request-log-row request-log-${e.status}">${entryToCellHtml(e)}</tr>`;
+}
+
+function entryToCellHtml(e) {
+  const time = new Date(e.timestamp).toLocaleTimeString('zh-CN', { hour12: false });
+  const statusLabel = e.status === 'success' ? '成功' : e.status === '429' ? '429' : '失败';
+  const tokens = e.totalTokens > 0 ? `${e.promptTokens}+${e.completionTokens}` : '-';
+  const latency = e.latencyMs != null ? `${e.latencyMs}ms` : '-';
+  const statusSuffix = e.upstreamStatusCode ? ` (${e.upstreamStatusCode})` : '';
+  return [
+    `<td>${time}</td>`,
+    `<td>${escapeHtml(e.proxyName || '-')}</td>`,
+    `<td><span class="badge" style="font-size:11px">${escapeHtml(e.inboundProtocol || '-')}</span></td>`,
+    `<td><code style="font-size:12px">${escapeHtml(e.model || '-')}</code></td>`,
+    `<td><span class="request-log-status-badge request-log-status-${e.status}">${statusLabel}${statusSuffix}</span></td>`,
+    `<td>${tokens}${e.isEstimated ? ' <span title="估算值" style="color:var(--text-dim)">~</span>' : ''}</td>`,
+    `<td>${latency}</td>`,
+    `<td>${escapeHtml(e.providerName || '-')}</td>`,
+    `<td>${escapeHtml(e.keyAlias || '-')}</td>`,
+  ].join('');
+}
+
+function clearRequestLogs() {
+  requestLogEntries = [];
+  document.getElementById('request-log-tbody').innerHTML = '';
+  document.getElementById('request-log-count').textContent = '';
 }
 
 // ==================== 版本历史 ====================

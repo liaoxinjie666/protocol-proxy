@@ -1904,3 +1904,93 @@ form {
   align-items: center;
   gap: 5px;
 }
+
+/* ==================== 实时请求日志面板 ==================== */
+
+.request-log-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.request-log-filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.request-log-filters select,
+.request-log-filters input {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.request-log-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.request-log-table-wrap {
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+
+.request-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.request-log-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elevated);
+}
+
+.request-log-table th {
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-main);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.request-log-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-secondary);
+}
+
+.request-log-row:hover td {
+  background: var(--bg-surface-alt);
+}
+
+.request-log-success td:first-child { border-left: 3px solid #34d399; }
+.request-log-failure td:first-child { border-left: 3px solid #ef4444; }
+.request-log-429 td:first-child { border-left: 3px solid #fbbf24; }
+
+.request-log-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.request-log-status-success { background: rgba(52,211,153,0.15); color: #34d399; }
+.request-log-status-failure { background: rgba(239,68,68,0.15); color: #ef4444; }
+.request-log-status-429 { background: rgba(251,191,36,0.15); color: #fbbf24; }

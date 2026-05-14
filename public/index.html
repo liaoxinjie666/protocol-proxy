@@ -106,6 +106,7 @@
           <button class="btn btn-sm" onclick="startAllProxies()">全部启动</button>
           <button class="btn btn-sm" onclick="stopAllProxies()">全部停止</button>
           <button class="btn btn-sm" onclick="openLogViewer()">日志</button>
+          <button class="btn btn-sm" onclick="openRequestLog()">请求日志</button>
         </div>
       </div>
       <div class="provider-health-summary" id="provider-health-summary" style="display:none"></div>
@@ -340,6 +341,52 @@
         <button class="btn-close" onclick="closeHistoryViewer()">&times;</button>
       </div>
       <div class="history-content" id="history-content">加载中...</div>
+    </div>
+  </div>
+
+  <!-- 实时请求日志弹窗 -->
+  <div class="modal" id="request-log-modal">
+    <div class="modal-content" style="max-width:1200px">
+      <div class="modal-header">
+        <h3>实时请求日志 <span id="request-log-count" style="color:#64748b;font-size:0.8rem;font-weight:400"></span></h3>
+        <button class="btn-close" onclick="closeRequestLog()">&times;</button>
+      </div>
+      <div class="request-log-toolbar">
+        <div class="request-log-filters">
+          <select id="request-log-proxy-filter" onchange="filterRequestLogs()">
+            <option value="">全部代理</option>
+          </select>
+          <select id="request-log-status-filter" onchange="filterRequestLogs()">
+            <option value="">全部状态</option>
+            <option value="success">成功</option>
+            <option value="failure">失败</option>
+            <option value="429">429 限流</option>
+          </select>
+          <input type="text" id="request-log-model-filter" placeholder="模型过滤..." oninput="filterRequestLogs()">
+        </div>
+        <div class="request-log-controls">
+          <button class="btn btn-sm" id="request-log-ws-status" style="color:var(--text-dim);cursor:default">连接中...</button>
+          <button class="btn btn-sm" onclick="clearRequestLogs()">清空</button>
+        </div>
+      </div>
+      <div class="request-log-table-wrap" id="request-log-table-wrap">
+        <table class="request-log-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>代理</th>
+              <th>协议</th>
+              <th>模型</th>
+              <th>状态</th>
+              <th>Tokens</th>
+              <th>延迟</th>
+              <th>供应商</th>
+              <th>Key</th>
+            </tr>
+          </thead>
+          <tbody id="request-log-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 

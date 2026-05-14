@@ -27,7 +27,8 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "pkg": "^5.8.1"
