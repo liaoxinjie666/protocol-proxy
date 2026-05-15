@@ -22,6 +22,11 @@ let providerKeys = [];
 const THEMES = [
   { id: 'dark', icon: '\u263E', label: '\u6df1\u8272' },
   { id: 'light', icon: '\u2600', label: '\u6d45\u8272' },
+  { id: 'midnight', icon: '\u2726', label: '\u5348\u591c\u7d2b' },
+  { id: 'forest', icon: '\u2638', label: '\u68ee\u6797\u7eff' },
+  { id: 'sunset', icon: '\u2605', label: '\u65e5\u843d\u6a59' },
+  { id: 'ocean', icon: '\u265B', label: '\u6d77\u6d0b\u9752' },
+  { id: 'sakura', icon: '\u273F', label: '\u6a31\u82b1\u7c89' },
 ];
 
 function applyTheme(themeId) {

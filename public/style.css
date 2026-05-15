@@ -73,6 +73,161 @@
   --shadow-lg: 0 12px 40px rgba(0,0,0,0.5);
 }
 
+/* ---------- Midnight Theme ---------- */
+[data-theme="midnight"] {
+  --bg-base: #0f0f1a;
+  --bg-elevated: #16162a;
+  --bg-surface: #222240;
+  --bg-surface-hover: #2e2e58;
+  --border-default: #2a2a50;
+  --border-subtle: #1e1e3a;
+  --text-primary: #f0f0ff;
+  --text-secondary: #a0a0c8;
+  --text-muted: #7a7aa8;
+  --text-faint: #55558a;
+  --text-inverse: #0f0f1a;
+
+  --accent: #8b5cf6;
+  --accent-hover: #7c3aed;
+  --accent-subtle: rgba(139, 92, 246, 0.12);
+  --accent-border: rgba(139, 92, 246, 0.3);
+
+  --success: #34d399;
+  --success-bg: rgba(52, 211, 153, 0.12);
+  --warning: #fbbf24;
+  --warning-bg: rgba(251, 191, 36, 0.12);
+  --error: #f87171;
+  --error-bg: rgba(248, 113, 113, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
+}
+
+/* ---------- Forest Theme ---------- */
+[data-theme="forest"] {
+  --bg-base: #0a1a12;
+  --bg-elevated: #122b1e;
+  --bg-surface: #1b3f2d;
+  --bg-surface-hover: #24523b;
+  --border-default: #264f3a;
+  --border-subtle: #1a3628;
+  --text-primary: #e8f5e9;
+  --text-secondary: #90bfa0;
+  --text-muted: #6b9e80;
+  --text-faint: #4a7a5e;
+  --text-inverse: #0a1a12;
+
+  --accent: #34d399;
+  --accent-hover: #10b981;
+  --accent-subtle: rgba(52, 211, 153, 0.12);
+  --accent-border: rgba(52, 211, 153, 0.3);
+
+  --success: #4ade80;
+  --success-bg: rgba(74, 222, 128, 0.12);
+  --warning: #facc15;
+  --warning-bg: rgba(250, 204, 21, 0.12);
+  --error: #f87171;
+  --error-bg: rgba(248, 113, 113, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
+}
+
+/* ---------- Sunset Theme ---------- */
+[data-theme="sunset"] {
+  --bg-base: #1c1410;
+  --bg-elevated: #2d1f18;
+  --bg-surface: #3e2b20;
+  --bg-surface-hover: #503828;
+  --border-default: #4a3428;
+  --border-subtle: #2d2018;
+  --text-primary: #fff5eb;
+  --text-secondary: #c4a890;
+  --text-muted: #a08068;
+  --text-faint: #786050;
+  --text-inverse: #1c1410;
+
+  --accent: #fb923c;
+  --accent-hover: #f97316;
+  --accent-subtle: rgba(251, 146, 60, 0.12);
+  --accent-border: rgba(251, 146, 60, 0.3);
+
+  --success: #86efac;
+  --success-bg: rgba(134, 239, 172, 0.12);
+  --warning: #fcd34d;
+  --warning-bg: rgba(252, 211, 77, 0.12);
+  --error: #fca5a5;
+  --error-bg: rgba(252, 165, 165, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
+}
+
+/* ---------- Ocean Theme ---------- */
+[data-theme="ocean"] {
+  --bg-base: #0a1628;
+  --bg-elevated: #0f2744;
+  --bg-surface: #1a3a5c;
+  --bg-surface-hover: #234a70;
+  --border-default: #1e4568;
+  --border-subtle: #132840;
+  --text-primary: #e0f2fe;
+  --text-secondary: #7fb8d9;
+  --text-muted: #5a96b8;
+  --text-faint: #3f7496;
+  --text-inverse: #0a1628;
+
+  --accent: #22d3ee;
+  --accent-hover: #06b6d4;
+  --accent-subtle: rgba(34, 211, 238, 0.12);
+  --accent-border: rgba(34, 211, 238, 0.3);
+
+  --success: #4ade80;
+  --success-bg: rgba(74, 222, 128, 0.12);
+  --warning: #facc15;
+  --warning-bg: rgba(250, 204, 21, 0.12);
+  --error: #f87171;
+  --error-bg: rgba(248, 113, 113, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
+}
+
+/* ---------- Sakura Theme ---------- */
+[data-theme="sakura"] {
+  --bg-base: #fff5f7;
+  --bg-elevated: #ffe8ed;
+  --bg-surface: #ffd9e4;
+  --bg-surface-hover: #fcc9d8;
+  --border-default: #f2c2d0;
+  --border-subtle: #ffe8ed;
+  --text-primary: #4a1022;
+  --text-secondary: #8a4060;
+  --text-muted: #a86080;
+  --text-faint: #c490a8;
+  --text-inverse: #fff5f7;
+
+  --accent: #ec4899;
+  --accent-hover: #db2777;
+  --accent-subtle: rgba(236, 72, 153, 0.08);
+  --accent-border: rgba(236, 72, 153, 0.25);
+
+  --success: #22c55e;
+  --success-bg: rgba(34, 197, 94, 0.08);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.08);
+  --error: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(74, 16, 34, 0.06);
+  --shadow-md: 0 4px 12px rgba(74, 16, 34, 0.08);
+  --shadow-lg: 0 12px 40px rgba(74, 16, 34, 0.12);
+}
+
 /* ---------- Reset & Base ---------- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
