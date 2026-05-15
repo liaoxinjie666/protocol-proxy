@@ -456,7 +456,7 @@ async function init() {
         };
       }
       if (protocol === 'anthropic') {
-        const testModel = req.body.model || 'claude-3-haiku-20240307';
+        const testModel = req.body.model || (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
         return {
           url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`,
           opts: {
@@ -499,6 +499,103 @@ async function init() {
     const passed = results.filter(r => r.ok).length;
     const failed = results.length - passed;
     res.json({ ok: failed === 0, passed, failed, total: results.length, results });
+  });
+
+  app.post('/api/test-connection', async (req, res) => {
+    const { url, protocol, apiKeys, models, azureDeployment, azureApiVersion } = req.body || {};
+    if (!url || !protocol) return res.json({ ok: false, message: '缺少 url 或 protocol', results: [] });
+    if (!Array.isArray(apiKeys) || apiKeys.length === 0) {
+      return res.json({ ok: false, message: '没有可用的 API Key', results: [] });
+    }
+    const keys = apiKeys.filter(k => k && k.key);
+    if (keys.length === 0) return res.json({ ok: false, message: '没有可用的 API Key', results: [] });
+    const base = url.replace(/\/$/, '');
+    const hasV1Suffix = base.endsWith('/v1');
+    const isAzure = protocol === 'openai' && !!azureDeployment;
+
+    function buildTestOpts(key) {
+      if (protocol === 'openai') {
+        if (isAzure) {
+          const ver = azureApiVersion || '2024-02-01';
+          return { url: `${base}/openai/deployments/${azureDeployment}/models?api-version=${ver}`, opts: { headers: { 'api-key': key } } };
+        }
+        return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
+      }
+      if (protocol === 'anthropic') {
+        const testModel = (Array.isArray(models) && models[0]) || 'claude-3-haiku-20240307';
+        return {
+          url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`,
+          opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) },
+        };
+      }
+      if (protocol === 'gemini') return { url: `${base}/v1beta/models?key=${key}`, opts: {} };
+      return null;
+    }
+
+    const results = await Promise.all(keys.map(async (k) => {
+      const built = buildTestOpts(k.key);
+      if (!built) return { ok: false, alias: k.alias || '', message: '不支持的协议' };
+      try {
+        const started = Date.now();
+        const fetchRes = await fetch(built.url, { ...built.opts, signal: AbortSignal.timeout(15000) });
+        const latency = Date.now() - started;
+        if (!fetchRes.ok) {
+          const hint = fetchRes.status === 401 || fetchRes.status === 403 ? 'API Key 无效或无权限' : `HTTP ${fetchRes.status}`;
+          return { ok: false, alias: k.alias || '', message: hint, latency };
+        }
+        return { ok: true, alias: k.alias || '', latency };
+      } catch (err) {
+        return { ok: false, alias: k.alias || '', message: err.name === 'TimeoutError' ? '连接超时' : err.message };
+      }
+    }));
+
+    const passed = results.filter(r => r.ok).length;
+    res.json({ ok: passed === keys.length, passed, failed: keys.length - passed, results });
+  });
+
+  app.post('/api/providers/available-models', async (req, res) => {
+    const { url, protocol, apiKey, azureDeployment, azureApiVersion } = req.body || {};
+    if (!url || !protocol) return res.json({ models: [], message: '缺少 url 或 protocol 参数' });
+    const key = apiKey || '';
+    const base = url.replace(/\/$/, '');
+    const hasV1Suffix = base.endsWith('/v1');
+    const isAzure = protocol === 'openai' && !!azureDeployment;
+    try {
+      let fetchUrl, fetchOpts;
+      if (protocol === 'openai') {
+        if (isAzure) {
+          const ver = azureApiVersion || '2024-02-01';
+          fetchUrl = `${base}/openai/deployments/${azureDeployment}/models?api-version=${ver}`;
+          fetchOpts = { headers: { 'api-key': key } };
+        } else {
+          fetchUrl = hasV1Suffix ? `${base}/models` : `${base}/v1/models`;
+          fetchOpts = key ? { headers: { 'Authorization': `Bearer ${key}` } } : {};
+        }
+      } else if (protocol === 'gemini') {
+        fetchUrl = `${base}/v1beta/models?key=${key}`;
+        fetchOpts = {};
+      } else if (protocol === 'anthropic') {
+        fetchUrl = hasV1Suffix ? `${base}/models` : `${base}/v1/models`;
+        fetchOpts = key ? { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } } : {};
+      } else {
+        return res.json({ models: [], message: `不支持的协议: ${protocol}` });
+      }
+      const fetchRes = await fetch(fetchUrl, { ...fetchOpts, signal: AbortSignal.timeout(15000) });
+      if (!fetchRes.ok) {
+        const hint = fetchRes.status === 404 ? '该供应商不支持模型列表接口' : `获取失败: HTTP ${fetchRes.status}`;
+        return res.json({ models: [], message: hint });
+      }
+      const data = await fetchRes.json().catch(() => null);
+      let models = [];
+      if (Array.isArray(data?.data)) {
+        models = data.data.map(m => m.id || m.name).filter(Boolean).sort();
+      } else if (Array.isArray(data?.models)) {
+        models = data.models.map(m => (m.name || m.id)?.replace('models/', '')).filter(Boolean).sort();
+      }
+      res.json({ models });
+    } catch (err) {
+      res.json({ models: [], message: `获取失败: ${err.message}` });
+    }
   });
 
   app.post('/api/providers/:id/available-models', async (req, res) => {

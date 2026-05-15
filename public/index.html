@@ -1,296 +1,446 @@
-﻿<!DOCTYPE html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Protocol Proxy - 协议转换代理管理</title>
+  <title>Protocol Proxy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <script>
-    // 尽早设置统计日期默认值，避免 init() 时序问题
-    document.addEventListener('DOMContentLoaded', function() {
-      var today = new Date().toISOString().slice(0, 10);
-      var sd = document.getElementById('stats-start-date');
-      var ed = document.getElementById('stats-end-date');
-      if (sd && !sd.value) sd.value = today;
-      if (ed && !ed.value) ed.value = today;
-    });
-  </script>
-  <div class="container">
-    <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换主题">
-      <span id="theme-icon">&#9790;</span>
-      <span id="theme-label" class="theme-label">深色</span>
-    </button>
-    <header>
-      <h1>Protocol Proxy</h1>
-      <p>OpenAI / Anthropic 协议转换透明代理</p>
-    </header>
-
-    <div class="stats" id="stats">
-      <div class="stat-item">
-        <span class="stat-value" id="stat-total">0</span>
-        <span class="stat-label">代理配置</span>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        </div>
+        <span class="brand-text">Protocol Proxy</span>
       </div>
-      <div class="stat-item">
-        <span class="stat-value" id="stat-running">0</span>
-        <span class="stat-label">运行中</span>
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" data-page="dashboard">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+          <span>总览</span>
+        </a>
+        <a href="#" class="nav-item" data-page="proxies">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          <span>代理管理</span>
+          <span class="nav-badge" id="nav-proxy-count">0</span>
+        </a>
+        <a href="#" class="nav-item" data-page="providers">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          <span>供应商管理</span>
+          <span class="nav-badge" id="nav-provider-count">0</span>
+        </a>
+        <a href="#" class="nav-item" data-page="stats">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+          <span>用量统计</span>
+        </a>
+        <a href="#" class="nav-item" data-page="request-logs">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          <span>请求日志</span>
+        </a>
+        <a href="#" class="nav-item" data-page="system-logs">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
+          <span>系统日志</span>
+        </a>
+        <a href="#" class="nav-item" data-page="settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 5 15.34a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 20.39 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          <span>设置</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="theme-toggle-btn" id="theme-toggle-btn" onclick="cycleTheme()">
+          <span id="theme-icon">&#9790;</span>
+          <span id="theme-label">深色</span>
+        </button>
+        <div class="version" id="app-version">v2.8.1</div>
       </div>
-    </div>
+    </aside>
 
-    <!-- Token 用量统计 -->
-    <section class="card stats-panel">
-      <div class="card-header">
-        <h2>Token 用量统计 <span class="stats-estimated-badge" id="stats-estimated-badge" style="display:none">含估算</span></h2>
-        <div class="stats-controls">
-          <div class="model-dropdown" id="stats-proxy-dropdown">
-            <div class="model-dropdown-trigger stats-filter-trigger" id="stats-proxy-dropdown-trigger">
-              <span id="stats-proxy-dropdown-value">全部代理</span>
-              <span class="model-dropdown-arrow">&#9662;</span>
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Topbar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="page-title" id="page-title">总览</h1>
+        </div>
+        <div class="topbar-right">
+          <div class="health-summary" id="topbar-health"></div>
+        </div>
+      </header>
+
+      <!-- ==================== Dashboard Page ==================== -->
+      <div class="page active" id="page-dashboard">
+        <div class="dashboard-grid">
+          <div class="metric-card">
+            <div class="metric-label">运行中代理</div>
+            <div class="metric-value" id="dash-running">0</div>
+            <div class="metric-sub">/ <span id="dash-total">0</span> 配置</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">今日 Token</div>
+            <div class="metric-value" id="dash-tokens">0</div>
+            <div class="metric-sub" id="dash-tokens-sub">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">今日请求</div>
+            <div class="metric-value" id="dash-requests">0</div>
+            <div class="metric-sub" id="dash-requests-sub">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">供应商健康</div>
+            <div class="metric-value" id="dash-health">—</div>
+            <div class="metric-sub" id="dash-health-sub">全部正常</div>
+          </div>
+        </div>
+
+        <div class="dashboard-row">
+          <div class="panel flex-2">
+            <div class="panel-header">
+              <h3>代理状态</h3>
+              <button class="btn btn-sm" onclick="navigateTo('proxies')">查看全部</button>
             </div>
-            <div class="model-dropdown-menu" id="stats-proxy-dropdown-menu">
-              <div class="model-dropdown-options" id="stats-proxy-dropdown-options"></div>
+            <div class="proxy-mini-list" id="dash-proxy-list">
+              <div class="empty-sm">暂无代理配置</div>
             </div>
           </div>
-          <div class="stats-range-btns">
-            <button class="btn btn-sm stats-range-btn" data-range="hourly">实时</button>
-            <button class="btn btn-sm stats-range-btn active" data-range="daily">每日</button>
-            <button class="btn btn-sm stats-range-btn" data-range="monthly">每月</button>
-            <button class="btn btn-sm stats-range-btn" data-range="yearly">每年</button>
-            <span class="stats-date-sep">|</span>
-            <input type="date" id="stats-start-date" class="stats-date-input" placeholder="开始日期">
-            <span class="stats-date-sep">~</span>
-            <input type="date" id="stats-end-date" class="stats-date-input" placeholder="结束日期">
-            <button class="btn btn-sm" onclick="exportStatsCSV()" title="导出 CSV">导出</button>
+          <div class="panel flex-1">
+            <div class="panel-header">
+              <h3>供应商健康</h3>
+            </div>
+            <div class="provider-health-list" id="dash-provider-health">
+              <div class="empty-sm">暂无供应商</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3>最近请求</h3>
+            <button class="btn btn-sm" onclick="navigateTo('request-logs')">查看全部</button>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>代理</th>
+                  <th>协议</th>
+                  <th>模型</th>
+                  <th>状态</th>
+                  <th>延迟</th>
+                </tr>
+              </thead>
+              <tbody id="dash-recent-requests">
+                <tr><td colspan="6" class="empty-cell">暂无请求记录</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
-      <div class="stats-summary" id="stats-summary">
-        <div class="stats-summary-item">
-          <span class="stats-summary-value" id="stats-total-tokens">-</span>
-          <span class="stats-summary-label">总 Token</span>
-        </div>
-        <div class="stats-summary-item">
-          <span class="stats-summary-value" id="stats-prompt-tokens">-</span>
-          <span class="stats-summary-label">输入 Token</span>
-        </div>
-        <div class="stats-summary-item">
-          <span class="stats-summary-value" id="stats-completion-tokens">-</span>
-          <span class="stats-summary-label">输出 Token</span>
-        </div>
-        <div class="stats-summary-item">
-          <span class="stats-summary-value" id="stats-total-requests">-</span>
-          <span class="stats-summary-label">请求数</span>
-        </div>
-      </div>
-      <div id="stats-breakdown" class="stats-breakdown">
-        <div class="empty">暂无数据</div>
-      </div>
-    </section>
 
-    <section class="card">
-      <div class="card-header">
-        <h2>代理列表</h2>
-        <div class="card-header-actions">
-          <button class="btn" onclick="exportConfig()">导出配置</button>
-          <button class="btn" onclick="document.getElementById('import-file').click()">导入配置</button>
-          <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
-          <button class="btn" onclick="openHistoryViewer()">版本历史</button>
-          <button class="btn btn-primary" onclick="openModal()">+ 新建代理</button>
+      <!-- ==================== Proxies Page ==================== -->
+      <div class="page" id="page-proxies">
+        <div class="page-toolbar">
+          <div class="search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" id="proxy-search" placeholder="搜索代理名称、端口、供应商..." oninput="filterProxies()">
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn btn-sm" onclick="startAllProxies()">全部启动</button>
+            <button class="btn btn-sm" onclick="stopAllProxies()">全部停止</button>
+            <button class="btn btn-primary" onclick="openProxyModal()">+ 新建代理</button>
+          </div>
+        </div>
+        <div class="proxy-grid" id="proxy-grid">
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+            </div>
+            <p>还没有配置代理</p>
+            <button class="btn btn-primary" onclick="openProxyModal()">创建第一个代理</button>
+          </div>
         </div>
       </div>
-      <div class="proxy-toolbar">
-        <div class="proxy-search">
-          <input type="text" id="proxy-search-input" placeholder="搜索代理名称、端口、供应商..." oninput="filterProxies()">
-        </div>
-        <div class="proxy-toolbar-actions">
-          <button class="btn btn-sm" onclick="startAllProxies()">全部启动</button>
-          <button class="btn btn-sm" onclick="stopAllProxies()">全部停止</button>
-          <button class="btn btn-sm" onclick="openLogViewer()">日志</button>
-          <button class="btn btn-sm" onclick="openRequestLog()">请求日志</button>
-        </div>
-      </div>
-      <div class="provider-health-summary" id="provider-health-summary" style="display:none"></div>
-      <div id="proxy-list" class="proxy-list">
-        <div class="empty">加载中...</div>
-      </div>
-    </section>
 
-    <!-- 编辑/创建弹窗 -->
-    <div class="modal" id="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3 id="modal-title">新建代理</h3>
-          <button class="btn-close" onclick="closeModal()">&times;</button>
+      <!-- ==================== Providers Page ==================== -->
+      <div class="page" id="page-providers">
+        <div class="page-toolbar">
+          <div class="search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" id="provider-search" placeholder="搜索供应商名称、地址..." oninput="filterProviders()">
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn btn-primary" onclick="openProviderModal()">+ 新建供应商</button>
+          </div>
         </div>
-        <form id="proxy-form" onsubmit="handleSubmit(event)">
+        <div class="provider-grid" id="provider-grid">
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+            </div>
+            <p>还没有配置供应商</p>
+            <button class="btn btn-primary" onclick="openProviderModal()">创建第一个供应商</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Stats Page ==================== -->
+      <div class="page" id="page-stats">
+        <div class="page-toolbar">
+          <div class="filter-group">
+            <select id="stats-range" onchange="changeStatsRange(this.value)">
+              <option value="daily">每日</option>
+              <option value="monthly">每月</option>
+              <option value="yearly">每年</option>
+            </select>
+            <select id="stats-proxy-filter" onchange="changeStatsProxy(this.value)">
+              <option value="">全部代理</option>
+            </select>
+            <input type="date" id="stats-start" onchange="loadStats()">
+            <span class="filter-sep">~</span>
+            <input type="date" id="stats-end" onchange="loadStats()">
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn btn-sm" onclick="exportStatsCSV()">导出 CSV</button>
+          </div>
+        </div>
+        <div class="stats-summary-bar" id="stats-summary-bar">
+          <div class="stats-summary-item">
+            <span class="stats-summary-label">总 Token</span>
+            <span class="stats-summary-value" id="stats-total">—</span>
+          </div>
+          <div class="stats-summary-item">
+            <span class="stats-summary-label">输入 Token</span>
+            <span class="stats-summary-value" id="stats-prompt">—</span>
+          </div>
+          <div class="stats-summary-item">
+            <span class="stats-summary-label">输出 Token</span>
+            <span class="stats-summary-value" id="stats-completion">—</span>
+          </div>
+          <div class="stats-summary-item">
+            <span class="stats-summary-label">请求数</span>
+            <span class="stats-summary-value" id="stats-requests">—</span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h3>按模型统计</h3>
+            <span class="panel-sub" id="stats-estimated-badge" style="display:none">含估算值</span>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>供应商</th>
+                  <th>模型</th>
+                  <th class="num">请求数</th>
+                  <th class="num">输入 Token</th>
+                  <th class="num">输出 Token</th>
+                  <th class="num">合计</th>
+                </tr>
+              </thead>
+              <tbody id="stats-table-body">
+                <tr><td colspan="6" class="empty-cell">暂无数据</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Request Logs Page ==================== -->
+      <div class="page" id="page-request-logs">
+        <div class="page-toolbar">
+          <div class="filter-group">
+            <select id="rq-proxy-filter" onchange="filterRequestLogs()">
+              <option value="">全部代理</option>
+            </select>
+            <select id="rq-status-filter" onchange="filterRequestLogs()">
+              <option value="">全部状态</option>
+              <option value="success">成功</option>
+              <option value="failure">失败</option>
+              <option value="429">429 限流</option>
+            </select>
+            <input type="text" id="rq-model-filter" placeholder="模型过滤..." oninput="filterRequestLogs()">
+          </div>
+          <div class="toolbar-actions">
+            <button class="btn btn-sm" id="rq-ws-btn" style="color:var(--text-muted);cursor:default">连接中...</button>
+            <button class="btn btn-sm" onclick="exportRequestLogs()">导出</button>
+            <button class="btn btn-sm" onclick="clearRequestLogs()">清空</button>
+          </div>
+        </div>
+        <div class="request-log-summary-bar" id="rq-summary"></div>
+        <div class="data-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>代理</th>
+                <th>协议</th>
+                <th>模型</th>
+                <th>状态</th>
+                <th class="num">Tokens</th>
+                <th class="num">延迟</th>
+                <th>供应商</th>
+                <th>Key</th>
+              </tr>
+            </thead>
+            <tbody id="rq-tbody">
+              <tr><td colspan="9" class="empty-cell">等待连接...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ==================== System Logs Page ==================== -->
+      <div class="page" id="page-system-logs">
+        <div class="page-toolbar">
+          <div class="filter-group">
+            <select id="log-lines" onchange="loadLogs()">
+              <option value="100">最近 100 行</option>
+              <option value="200" selected>最近 200 行</option>
+              <option value="500">最近 500 行</option>
+              <option value="1000">最近 1000 行</option>
+            </select>
+            <button class="btn btn-sm" onclick="loadLogs()">刷新</button>
+          </div>
+        </div>
+        <div class="log-panel" id="log-content">
+          <div class="empty-sm">加载中...</div>
+        </div>
+      </div>
+
+      <!-- ==================== Settings Page ==================== -->
+      <div class="page" id="page-settings">
+        <div class="settings-grid">
+          <div class="panel">
+            <div class="panel-header">
+              <h3>配置管理</h3>
+            </div>
+            <div class="settings-body">
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">导出配置</div>
+                  <div class="setting-desc">将所有供应商和代理配置导出为 JSON 文件</div>
+                </div>
+                <button class="btn btn-sm" onclick="exportConfig()">导出</button>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">导入配置</div>
+                  <div class="setting-desc">从 JSON 文件导入配置（支持合并或覆盖）</div>
+                </div>
+                <button class="btn btn-sm" onclick="document.getElementById('import-file').click()">导入</button>
+                <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">版本历史</div>
+                  <div class="setting-desc">查看配置变更快照，支持回滚到历史版本</div>
+                </div>
+                <button class="btn btn-sm" onclick="openHistoryModal()">查看</button>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>外观</h3>
+            </div>
+            <div class="settings-body">
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">主题</div>
+                  <div class="setting-desc">切换界面配色方案</div>
+                </div>
+                <select id="settings-theme" onchange="applyTheme(this.value)">
+                  <option value="dark">深色</option>
+                  <option value="light">浅色</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ==================== Modals ==================== -->
+
+  <!-- Proxy Modal -->
+  <div class="modal-overlay" id="proxy-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="proxy-modal-title">新建代理</h3>
+        <button class="modal-close" onclick="closeProxyModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="proxy-form" onsubmit="handleProxySubmit(event)">
           <input type="hidden" id="proxy-id">
-          
-          <div class="form-group">
-            <label>代理名称</label>
-            <input type="text" id="proxy-name" required placeholder="例如：OpenAI 代理">
-          </div>
-
           <div class="form-row">
             <div class="form-group">
+              <label>代理名称</label>
+              <input type="text" id="proxy-name" required placeholder="例如：OpenAI 代理">
+            </div>
+            <div class="form-group" style="max-width:140px">
               <label>监听端口</label>
               <input type="number" id="proxy-port" required placeholder="8080" min="1000" max="65535">
             </div>
-            <div class="form-group">
-              <label>Agent 认证</label>
-              <input type="hidden" id="proxy-auth" value="false">
-              <div class="model-dropdown" id="auth-dropdown">
-                <div class="model-dropdown-trigger" id="auth-dropdown-trigger">
-                  <span id="auth-dropdown-value">不启用</span>
-                  <span class="model-dropdown-arrow">&#9662;</span>
-                </div>
-                <div class="model-dropdown-menu" id="auth-dropdown-menu">
-                  <div class="model-dropdown-options" id="auth-dropdown-options">
-                    <div class="model-option selected" data-value="false"><span class="model-option-name">不启用</span></div>
-                    <div class="model-option" data-value="true"><span class="model-option-name">启用</span></div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
-
+          <div class="form-group">
+            <label>认证</label>
+            <select id="proxy-auth">
+              <option value="false">不启用</option>
+              <option value="true">启用 Bearer Token</option>
+            </select>
+          </div>
+          <div class="form-group" id="proxy-auth-token-group" style="display:none">
+            <label>认证 Token</label>
+            <input type="text" id="proxy-auth-token" placeholder="Bearer sk-...">
+          </div>
+          <div class="form-divider"></div>
+          <div class="form-section-title">目标供应商</div>
           <div class="form-row">
             <div class="form-group">
-              <label>请求超时（秒）</label>
-              <input type="number" id="proxy-timeout" placeholder="300" min="5" max="3600" step="1">
-              <small style="color:var(--text-dim);font-size:11px">默认 300 秒（5 分钟）</small>
+              <label>供应商</label>
+              <select id="proxy-provider" required>
+                <option value="">选择供应商...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>默认模型</label>
+              <select id="proxy-model">
+                <option value="">使用请求模型</option>
+              </select>
             </div>
           </div>
-
-          <div class="form-group" id="auth-token-group" style="display:none">
-            <label>认证 Token</label>
-            <input type="text" id="proxy-auth-token" placeholder="Bearer Token">
-          </div>
-
-          <div class="target-section">
-            <h4>目标供应商配置</h4>
-            <div class="target-item">
-              <input type="hidden" id="provider-id">
-              <div class="form-row">
-                <div class="form-group">
-                  <label>供应商</label>
-                  <div class="model-dropdown" id="provider-dropdown">
-                    <div class="model-dropdown-trigger" id="provider-dropdown-trigger">
-                      <span id="provider-dropdown-value">选择供应商...</span>
-                      <span class="model-dropdown-arrow">&#9662;</span>
-                    </div>
-                    <div class="model-dropdown-menu" id="provider-dropdown-menu">
-                      <div class="model-dropdown-options" id="provider-dropdown-options"></div>
-                      <div class="model-add-section">
-                        <input type="text" class="model-add-input" id="provider-add-name" placeholder="供应商名称">
-                        <input type="text" class="model-add-input" id="provider-add-url" placeholder="https://api.example.com">
-                        <button type="button" class="btn btn-primary btn-sm" id="provider-add-btn">添加</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="form-group">
-                  <label>协议</label>
-                  <input type="hidden" id="target-protocol" value="openai">
-                  <div class="model-dropdown" id="protocol-dropdown">
-                    <div class="model-dropdown-trigger" id="protocol-dropdown-trigger">
-                      <span id="protocol-dropdown-value">OpenAI</span>
-                      <span class="model-dropdown-arrow">&#9662;</span>
-                    </div>
-                    <div class="model-dropdown-menu" id="protocol-dropdown-menu">
-                      <div class="model-dropdown-options" id="protocol-dropdown-options">
-                        <div class="model-option selected" data-value="openai"><span class="model-option-name">OpenAI</span></div>
-                        <div class="model-option" data-value="anthropic"><span class="model-option-name">Anthropic</span></div>
-                        <div class="model-option" data-value="gemini"><span class="model-option-name">Gemini</span></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label>默认 Model（可选）</label>
-                  <input type="hidden" id="target-model">
-                  <div class="model-dropdown" id="model-dropdown">
-                    <div class="model-dropdown-trigger" id="model-dropdown-trigger">
-                      <span id="model-dropdown-value">选择模型...</span>
-                      <span class="model-dropdown-arrow">&#9662;</span>
-                    </div>
-                    <div class="model-dropdown-menu" id="model-dropdown-menu">
-                      <div class="model-dropdown-options" id="model-dropdown-options"></div>
-                      <div class="model-add-section" id="model-add-section">
-                        <input type="text" class="model-add-input" id="model-add-input" placeholder="输入模型名称">
-                        <button type="button" class="btn btn-primary btn-sm" id="model-add-btn">添加</button>
-                        <button type="button" class="btn btn-sm" id="model-import-btn" onclick="importModels()">自动导入</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="form-row api-keys-row">
-                <div class="form-group">
-                  <div class="api-keys-header">
-                    <span>API Keys</span>
-                    <button type="button" id="api-key-add-btn" class="btn btn-sm">+ 添加 Key</button>
-                  </div>
-                  <div id="api-keys-list"></div>
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label>路由策略</label>
-                  <input type="hidden" id="routing-strategy" value="primary_fallback">
-                  <div class="model-dropdown" id="routing-dropdown">
-                    <div class="model-dropdown-trigger" id="routing-dropdown-trigger">
-                      <span id="routing-dropdown-value">主备切换</span>
-                      <span class="model-dropdown-arrow">&#9662;</span>
-                    </div>
-                    <div class="model-dropdown-menu" id="routing-dropdown-menu">
-                      <div class="model-dropdown-options" id="routing-dropdown-options">
-                        <div class="model-option selected" data-value="primary_fallback"><span class="model-option-name">主备切换</span></div>
-                        <div class="model-option" data-value="round_robin"><span class="model-option-name">轮询</span></div>
-                        <div class="model-option" data-value="weighted"><span class="model-option-name">加权</span></div>
-                        <div class="model-option" data-value="fastest"><span class="model-option-name">最快优先</span></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="form-group" style="max-width:120px">
-                  <label>主供应商权重</label>
-                  <input type="number" id="provider-weight" min="1" step="1" value="1" placeholder="1">
-                </div>
-                <div class="form-group provider-pool-group">
-                  <label>备选供应商</label>
-                  <div class="provider-pool-picker">
-                    <div class="model-dropdown" id="provider-pool-dropdown">
-                      <div class="model-dropdown-trigger" id="provider-pool-dropdown-trigger">
-                        <span id="provider-pool-dropdown-value">从供应商列表添加</span>
-                        <span class="model-dropdown-arrow">&#9662;</span>
-                      </div>
-                      <div class="model-dropdown-menu" id="provider-pool-dropdown-menu">
-                        <div class="model-dropdown-options" id="provider-pool-dropdown-options"></div>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="provider-pool-list" id="provider-pool-list"></div>
-                </div>
-              </div>
-              <div class="form-row" id="azure-fields" style="display:none">
-                <div class="form-group">
-                  <label>Azure Deployment <span style="color:#64748b;font-size:0.75rem">（仅 Azure 用户填写）</span></label>
-                  <input type="text" id="target-azure-deployment" placeholder="仅 Azure 用户填写">
-                </div>
-                <div class="form-group">
-                  <label>Azure API Version <span style="color:#64748b;font-size:0.75rem">（仅 Azure 用户填写）</span></label>
-                  <input type="text" id="target-azure-version" placeholder="仅 Azure 用户填写">
-                </div>
-              </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>路由策略</label>
+              <select id="proxy-routing">
+                <option value="primary_fallback">主备切换</option>
+                <option value="round_robin">轮询</option>
+                <option value="weighted">加权随机</option>
+                <option value="fastest">最快优先</option>
+              </select>
+            </div>
+            <div class="form-group" style="max-width:120px">
+              <label>权重</label>
+              <input type="number" id="proxy-weight" min="1" value="1">
             </div>
           </div>
-
+          <div class="form-group">
+            <label>备选供应商</label>
+            <div class="pool-editor" id="proxy-pool-editor">
+              <div class="pool-empty">暂无备选供应商</div>
+            </div>
+            <button type="button" class="btn btn-sm" onclick="addPoolItem()" style="margin-top:8px">+ 添加备选</button>
+          </div>
           <div class="modal-footer">
-            <button type="button" class="btn" onclick="closeModal()">取消</button>
-            <button type="button" class="btn" id="test-connection-btn" onclick="testConnection()">测试连接</button>
+            <button type="button" class="btn" onclick="closeProxyModal()">取消</button>
+            <button type="button" class="btn" onclick="testConnectionFromModal()">测试连接</button>
             <button type="submit" class="btn btn-primary">保存</button>
           </div>
         </form>
@@ -298,118 +448,120 @@
     </div>
   </div>
 
-  <!-- 确认弹窗 -->
-  <div class="modal confirm-modal" id="confirm-modal">
-    <div class="confirm-box">
-      <div class="confirm-icon" id="confirm-icon">!</div>
-      <p class="confirm-text" id="confirm-text"></p>
-      <div class="confirm-actions">
-        <button class="btn" id="confirm-cancel">取消</button>
-        <button class="btn btn-danger" id="confirm-ok">删除</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 测试结果弹窗 -->
-  <div class="modal confirm-modal" id="test-result-modal">
-    <div class="confirm-box test-result-box">
-      <div class="confirm-icon" id="test-result-icon">!</div>
-      <p class="confirm-text" id="test-result-summary"></p>
-      <div class="test-result-list" id="test-result-list"></div>
-      <div class="confirm-actions">
-        <button class="btn btn-primary" id="test-result-close">知道了</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 日志查看弹窗 -->
-  <div class="modal" id="log-modal">
-    <div class="modal-content" style="max-width:800px">
+  <!-- Provider Modal -->
+  <div class="modal-overlay" id="provider-modal">
+    <div class="modal" style="max-width:640px">
       <div class="modal-header">
-        <h3>运行日志 <span id="log-total" style="color:#64748b;font-size:0.8rem;font-weight:400"></span></h3>
-        <button class="btn-close" onclick="closeLogViewer()">&times;</button>
+        <h3 id="provider-modal-title">新建供应商</h3>
+        <button class="modal-close" onclick="closeProviderModal()">&times;</button>
       </div>
-      <div class="log-toolbar">
-        <select id="log-lines-select" onchange="loadLogs()">
-          <option value="100">最近 100 行</option>
-          <option value="200" selected>最近 200 行</option>
-          <option value="500">最近 500 行</option>
-          <option value="1000">最近 1000 行</option>
-        </select>
-        <button class="btn btn-sm" onclick="loadLogs()">刷新</button>
+      <div class="modal-body">
+        <form id="provider-form" onsubmit="handleProviderSubmit(event)">
+          <input type="hidden" id="provider-edit-id">
+          <div class="form-row">
+            <div class="form-group">
+              <label>名称</label>
+              <input type="text" id="provider-name" required placeholder="例如：OpenAI 官方">
+            </div>
+            <div class="form-group">
+              <label>协议</label>
+              <select id="provider-protocol">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>API 地址</label>
+            <input type="url" id="provider-url" required placeholder="https://api.openai.com">
+          </div>
+          <div class="form-group">
+            <label>模型列表</label>
+            <div class="tag-input" id="provider-models-input">
+              <div class="tag-list" id="provider-models-list"></div>
+              <input type="text" id="provider-model-input" placeholder="输入模型名称按回车添加..." onkeydown="handleModelTagInput(event)">
+            </div>
+            <button type="button" class="btn btn-sm" onclick="fetchModelsForProvider(this)" style="margin-top:8px">自动获取模型列表</button>
+          </div>
+          <div class="form-group">
+            <label>API Keys</label>
+            <div id="provider-keys-list"></div>
+            <button type="button" class="btn btn-sm" onclick="addProviderKey()" style="margin-top:8px">+ 添加 Key</button>
+          </div>
+          <div class="form-row" id="provider-azure-row" style="display:none">
+            <div class="form-group">
+              <label>Azure Deployment</label>
+              <input type="text" id="provider-azure-deployment" placeholder="仅 Azure 用户填写">
+            </div>
+            <div class="form-group">
+              <label>Azure API Version</label>
+              <input type="text" id="provider-azure-version" placeholder="例如：2024-02-01">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn" onclick="closeProviderModal()">取消</button>
+            <button type="button" class="btn" onclick="testProviderFromModal()">测试连接</button>
+            <button type="submit" class="btn btn-primary">保存</button>
+          </div>
+        </form>
       </div>
-      <div class="log-content" id="log-content">加载中...</div>
     </div>
   </div>
 
-  <!-- 版本历史弹窗 -->
-  <div class="modal" id="history-modal">
-    <div class="modal-content" style="max-width:600px">
+  <!-- Confirm Modal -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal modal-sm">
+      <div class="modal-body" style="text-align:center;padding:32px">
+        <div class="confirm-icon">!</div>
+        <p class="confirm-text" id="confirm-text"></p>
+        <div class="modal-footer" style="justify-content:center;border:none;padding:0;margin-top:24px">
+          <button class="btn" id="confirm-cancel">取消</button>
+          <button class="btn btn-danger" id="confirm-ok">确认</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test Result Modal -->
+  <div class="modal-overlay" id="test-modal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3>连接测试结果</h3>
+        <button class="modal-close" onclick="closeTestModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="test-summary"></p>
+        <div id="test-details"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="closeTestModal()">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- History Modal -->
+  <div class="modal-overlay" id="history-modal">
+    <div class="modal" style="max-width:560px">
       <div class="modal-header">
         <h3>配置版本历史</h3>
-        <button class="btn-close" onclick="closeHistoryViewer()">&times;</button>
+        <button class="modal-close" onclick="closeHistoryModal()">&times;</button>
       </div>
-      <div class="history-content" id="history-content">加载中...</div>
-    </div>
-  </div>
-
-  <!-- 实时请求日志弹窗 -->
-  <div class="modal" id="request-log-modal">
-    <div class="modal-content" style="max-width:1200px">
-      <div class="modal-header">
-        <h3>实时请求日志 <span id="request-log-count" style="color:#64748b;font-size:0.8rem;font-weight:400"></span></h3>
-        <button class="btn-close" onclick="closeRequestLog()">&times;</button>
-      </div>
-      <div class="request-log-toolbar">
-        <div class="request-log-filters">
-          <select id="request-log-proxy-filter" onchange="filterRequestLogs()">
-            <option value="">全部代理</option>
-          </select>
-          <select id="request-log-status-filter" onchange="filterRequestLogs()">
-            <option value="">全部状态</option>
-            <option value="success">成功</option>
-            <option value="failure">失败</option>
-            <option value="429">429 限流</option>
-          </select>
-          <input type="text" id="request-log-model-filter" placeholder="模型过滤..." oninput="filterRequestLogs()">
-        </div>
-        <div class="request-log-controls">
-          <button class="btn btn-sm" id="request-log-ws-status" style="color:var(--text-dim);cursor:default">连接中...</button>
-          <button class="btn btn-sm" onclick="exportRequestLogs()">导出</button>
-          <button class="btn btn-sm" onclick="clearRequestLogs()">清空</button>
-        </div>
-      </div>
-      <div class="request-log-summary" id="request-log-summary"></div>
-      <div class="request-log-table-wrap" id="request-log-table-wrap">
-        <table class="request-log-table">
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>代理</th>
-              <th>协议</th>
-              <th>模型</th>
-              <th>状态</th>
-              <th>Tokens</th>
-              <th>延迟</th>
-              <th>供应商</th>
-              <th>Key</th>
-            </tr>
-          </thead>
-          <tbody id="request-log-tbody"></tbody>
-        </table>
+      <div class="modal-body">
+        <div id="history-list">加载中...</div>
       </div>
     </div>
   </div>
 
-  <!-- 导入预览弹窗 -->
-  <div class="modal" id="import-modal">
-    <div class="modal-content" style="max-width:500px">
+  <!-- Import Modal -->
+  <div class="modal-overlay" id="import-modal">
+    <div class="modal" style="max-width:480px">
       <div class="modal-header">
         <h3>导入配置</h3>
-        <button class="btn-close" onclick="closeImportModal()">&times;</button>
+        <button class="modal-close" onclick="closeImportModal()">&times;</button>
       </div>
-      <div class="import-preview" id="import-preview">
-        <div class="import-stats">
+      <div class="modal-body">
+        <div class="import-stats-row">
           <div class="import-stat">
             <span class="import-stat-value" id="import-providers-count">0</span>
             <span class="import-stat-label">供应商</span>
@@ -419,32 +571,27 @@
             <span class="import-stat-label">代理</span>
           </div>
         </div>
-        <div class="import-mode">
+        <div class="form-group">
           <label>导入模式</label>
-          <div class="import-mode-options">
-            <label class="import-mode-option">
-              <input type="radio" name="import-mode" value="merge" checked>
-              <span>
-                <strong>合并</strong>
-                <small>按 ID 去重：新增导入项，同 ID 覆盖</small>
-              </span>
-            </label>
-            <label class="import-mode-option">
-              <input type="radio" name="import-mode" value="overwrite">
-              <span>
-                <strong>覆盖</strong>
-                <small>完全替换现有配置</small>
-              </span>
-            </label>
-          </div>
+          <label class="radio-label">
+            <input type="radio" name="import-mode" value="merge" checked>
+            <span><strong>合并</strong> — 按 ID 去重，新增导入项，同 ID 覆盖</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="import-mode" value="overwrite">
+            <span><strong>覆盖</strong> — 完全替换现有配置</span>
+          </label>
         </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn" onclick="closeImportModal()">取消</button>
-        <button class="btn btn-primary" onclick="confirmImport()">确认导入</button>
+        <div class="modal-footer">
+          <button class="btn" onclick="closeImportModal()">取消</button>
+          <button class="btn btn-primary" onclick="confirmImport()">确认导入</button>
+        </div>
       </div>
     </div>
   </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast" style="display:none"></div>
 
   <script src="app.js"></script>
 </body>
