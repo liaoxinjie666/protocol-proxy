@@ -1642,10 +1642,12 @@ function buildSystemPrompt() {
 - get_config_history: 获取配置快照历史
 
 文件与命令：
-- read_file: 读取任意文件内容（支持指定行范围）
+- read_file: 读取任意文件内容（支持指定行范围，自动检测二进制文件）
 - write_file: 写入文件（会覆盖已有内容）
+- edit_file: 精确替换文件中的字符串（比 write_file 更安全，只替换匹配内容）
 - list_directory: 列出目录内容
-- search_files: 按 glob 模式搜索文件
+- search_files: 按文件名 glob 模式搜索文件
+- grep_search: 按正则表达式搜索文件内容（用于查找代码、日志关键字等）
 - execute_command: 执行 shell 命令
 
 规则：
@@ -1729,7 +1731,6 @@ async function sendAssistantMessage() {
     let msgId = null;
 
     removeAssistantMessage(thinkingId);
-    console.log('[assistant] SSE stream started');
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1752,7 +1753,6 @@ async function sendAssistantMessage() {
         let data;
         try { data = JSON.parse(trimmed.slice(6)); } catch { continue; }
 
-        console.log('[assistant] SSE event:', currentEvent, data);
         switch (currentEvent) {
           case 'content': {
             if (!msgId) msgId = addAssistantMessage('assistant', '');
@@ -1791,14 +1791,14 @@ async function sendAssistantMessage() {
 
           case 'tool_result': {
             const resultStr = JSON.stringify(data.result, null, 2);
-            addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id });
+            addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error });
             // 追加 role: 'tool' 消息用于对话序列化（不创建 DOM 元素）
             assistantMessages.push({
               id: 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2),
               role: 'tool',
               tool_call_id: data.tool_call_id,
               tool_name: data.name,
-              content: JSON.stringify(data.result),
+              content: data.is_error ? `[ERROR] ${JSON.stringify(data.result)}` : JSON.stringify(data.result),
             });
             break;
           }
@@ -1862,13 +1862,14 @@ function addAssistantMessage(role, content) {
     // content 已经是 HTML 字符串
     div.innerHTML = `<div class="tool-calls-header">调用工具</div>${content}`;
   } else if (role === 'tool-result') {
-    // content 是 {name, result, tool_call_id}
+    // content 是 {name, result, tool_call_id, is_error}
     const toolData = typeof content === 'object' ? content : { name: 'unknown', result: content };
     const resultId = 'result-' + id;
+    if (toolData.is_error) div.classList.add('tool-error');
     div.innerHTML = `
       <div class="tool-result-header" onclick="document.getElementById('${resultId}').classList.toggle('expanded')">
-        <span class="tool-result-name">${escapeHtml(toolData.name)}</span>
-        <span class="tool-result-toggle">展开结果 ▾</span>
+        <span class="tool-result-name">${toolData.is_error ? '⚠ ' : ''}${escapeHtml(toolData.name)}</span>
+        <span class="tool-result-toggle">${toolData.is_error ? '错误详情 ▾' : '展开结果 ▾'}</span>
       </div>
       <div class="tool-result-body" id="${resultId}">
         <pre>${escapeHtml(toolData.result)}</pre>

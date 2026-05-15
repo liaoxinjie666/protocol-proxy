@@ -2067,6 +2067,14 @@ body {
   color: var(--text-faint);
 }
 
+.assistant-message.tool-result.tool-error {
+  border-left-color: var(--error);
+}
+
+.assistant-message.tool-result.tool-error .tool-result-name {
+  color: var(--error);
+}
+
 .tool-result-header {
   display: flex;
   align-items: center;

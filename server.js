@@ -244,6 +244,15 @@ async function init() {
 
   // ==================== 助手工具定义与执行器 ====================
 
+  const MAX_TOOL_OUTPUT = 16384; // 16KB — 防止工具输出撑爆 LLM 上下文
+
+  function truncateOutput(obj) {
+    const str = typeof obj === 'string' ? obj : JSON.stringify(obj);
+    if (str.length <= MAX_TOOL_OUTPUT) return obj;
+    const truncated = str.slice(0, MAX_TOOL_OUTPUT);
+    return { _truncated: true, _original_bytes: str.length, _preview: truncated + '\n... [截断，原始输出 ' + str.length + ' 字符]' };
+  }
+
   const TOOL_DEFINITIONS = [
     {
       type: 'function',
@@ -438,6 +447,40 @@ async function init() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'edit_file',
+        description: '精确替换文件中的字符串。比 write_file 更安全，只替换匹配的内容，不会覆盖整个文件。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '文件路径' },
+            old_string: { type: 'string', description: '要被替换的原始字符串（必须精确匹配）' },
+            new_string: { type: 'string', description: '替换后的新字符串' },
+            replace_all: { type: 'boolean', description: '是否替换所有匹配项，默认 false（只替换第一个）' },
+          },
+          required: ['path', 'old_string', 'new_string'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'grep_search',
+        description: '在文件内容中搜索正则表达式模式。用于查找代码、日志关键字等。',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: '正则表达式模式' },
+            path: { type: 'string', description: '搜索目录或文件路径，默认当前工作目录' },
+            glob: { type: 'string', description: '文件名过滤，如 "*.js" 或 "*.log"' },
+            max_results: { type: 'number', description: '最大返回匹配数，默认 50' },
+          },
+          required: ['pattern'],
+        },
+      },
+    },
   ];
 
   const TOOL_HANDLERS = {
@@ -524,6 +567,21 @@ async function init() {
     read_file: async (args) => {
       const filePath = path.resolve(args.path);
       try {
+        // 二进制检测：检查前 8KB 是否含 NUL 字节
+        const stat = await fs.promises.stat(filePath);
+        const peekSize = Math.min(8192, stat.size);
+        if (peekSize > 0) {
+          const fd = await fs.promises.open(filePath, 'r');
+          try {
+            const buf = Buffer.alloc(peekSize);
+            await fd.read(buf, 0, peekSize, 0);
+            if (buf.includes(0)) {
+              return { error: `二进制文件，无法以文本方式读取 (${filePath}, ${stat.size} bytes)` };
+            }
+          } finally {
+            await fd.close();
+          }
+        }
         const content = await fs.promises.readFile(filePath, 'utf8');
         const lines = content.split('\n');
         const offset = Math.max(0, parseInt(args.offset) || 0);
@@ -606,6 +664,74 @@ async function init() {
           }
         });
       });
+    },
+
+    edit_file: async (args) => {
+      const filePath = path.resolve(args.path);
+      try {
+        const content = await fs.promises.readFile(filePath, 'utf8');
+        const { old_string, new_string } = args;
+        if (old_string === new_string) return { error: 'old_string 和 new_string 不能相同' };
+        if (!content.includes(old_string)) return { error: `文件中未找到匹配的字符串` };
+        const replaceAll = !!args.replace_all;
+        const newContent = replaceAll
+          ? content.split(old_string).join(new_string)
+          : content.replace(old_string, new_string);
+        const count = replaceAll
+          ? content.split(old_string).length - 1
+          : 1;
+        await fs.promises.writeFile(filePath, newContent, 'utf8');
+        return { success: true, path: filePath, replacements: count };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    grep_search: async (args) => {
+      const root = path.resolve(args.path || '.');
+      const pattern = args.pattern;
+      const maxResults = Math.min(Math.max(1, parseInt(args.max_results) || 50), 200);
+      const globFilter = args.glob || '';
+      try {
+        const regex = new RegExp(pattern, 'gi');
+        const results = [];
+        const walk = async (dir) => {
+          if (results.length >= maxResults) return;
+          const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+          for (const e of entries) {
+            if (results.length >= maxResults) break;
+            const fullPath = path.join(dir, e.name);
+            if (e.isDirectory()) {
+              if (['node_modules', '.git', 'dist', 'build', '.next'].includes(e.name)) continue;
+              await walk(fullPath);
+            } else if (e.isFile()) {
+              if (globFilter) {
+                const ext = '.' + e.name.split('.').pop();
+                if (!globFilter.includes(ext) && !globFilter.includes(e.name) && !globFilter.includes('*')) continue;
+              }
+              try {
+                const content = await fs.promises.readFile(fullPath, 'utf8');
+                const lines = content.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                  if (results.length >= maxResults) break;
+                  if (regex.test(lines[i])) {
+                    results.push({
+                      file: path.relative(root, fullPath),
+                      line: i + 1,
+                      content: lines[i].trim().slice(0, 300),
+                    });
+                    regex.lastIndex = 0;
+                  }
+                }
+              } catch {}
+            }
+          }
+        };
+        await walk(root);
+        return { pattern, matches: results, total: results.length };
+      } catch (err) {
+        return { error: err.message };
+      }
     },
   };
 
@@ -1427,11 +1553,7 @@ async function init() {
 
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        logger.log(`[assistant] round ${round} — messages: ${conversationMessages.length}`);
-        for (let i = 0; i < conversationMessages.length; i++) {
-          const m = conversationMessages[i];
-          logger.log(`[assistant]   msg[${i}]: role=${m.role}, hasReasoning=${!!m.reasoning_content}, hasToolCalls=${!!m.tool_calls}, contentLen=${(m.content || '').length}`);
-        }
+        logger.log(`[assistant] round ${round} — ${conversationMessages.length} messages`);
 
         // 调用本地代理
         let fetchRes;
@@ -1513,7 +1635,7 @@ async function init() {
         }
 
         const toolCalls = Object.values(toolCallAccumulator).filter(tc => tc.id && tc.name);
-        logger.log(`[assistant] round ${round} done — content: ${fullContent.length} chars, tool_calls: ${toolCalls.length}`);
+        logger.log(`[assistant] round ${round} done — ${fullContent.length} chars content, ${toolCalls.length} tool calls`);
 
         if (toolCalls.length === 0) {
           safeSSE('done', { reasoning_content: reasoningContent || undefined });
@@ -1547,23 +1669,30 @@ async function init() {
         for (const tc of toolCalls) {
           let args = {};
           try { args = JSON.parse(tc.arguments); } catch {}
-          logger.log(`[assistant] EXEC tool: ${tc.name}(${JSON.stringify(args)})`);
+          logger.log(`[assistant] EXEC tool: ${tc.name}`);
           let result;
+          let isError = false;
           try {
             result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+            if (result && result.error) isError = true;
           } catch (err) {
             logger.log(`[assistant] tool ${tc.name} error: ${err.message}`);
             result = { error: err.message };
+            isError = true;
           }
 
+          // 截断过大的工具输出
+          result = truncateOutput(result);
           const resultStr = JSON.stringify(result);
-          logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars`);
-          safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result });
+          logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}`);
+          safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError });
 
+          // 在 tool result 消息中追加 is_error 标记，让模型明确知道这是错误
+          const toolContent = isError ? `[ERROR] ${resultStr}` : resultStr;
           conversationMessages.push({
             role: 'tool',
             tool_call_id: tc.id,
-            content: resultStr,
+            content: toolContent,
           });
         }
         // 继续下一轮
