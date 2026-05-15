@@ -17,6 +17,9 @@ let currentPage = 'dashboard';
 let providerPoolItems = [];
 let providerModelTags = [];
 let providerKeys = [];
+let assistantMessages = [];
+let assistantProxyId = '';
+let assistantAbortController = null;
 
 // ---------- Theme ----------
 const THEMES = [
@@ -80,6 +83,7 @@ function navigateTo(page) {
     stats: '\u7528\u91cf\u7edf\u8ba1',
     'request-logs': '\u8bf7\u6c42\u65e5\u5fd7',
     'system-logs': '\u7cfb\u7edf\u65e5\u5fd7',
+    assistant: '\u667a\u63a7\u52a9\u624b',
     settings: '\u8bbe\u7f6e',
   };
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -91,6 +95,7 @@ function navigateTo(page) {
   if (page === 'stats') loadStats();
   if (page === 'system-logs') loadLogs();
   if (page === 'request-logs') renderRequestLogs();
+  if (page === 'assistant') populateAssistantProxySelect();
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
@@ -1573,6 +1578,21 @@ async function init() {
   // Auto-refresh
   setInterval(loadStats, 30000);
   setInterval(loadKeyHealth, 5 * 60 * 1000);
+
+  // Assistant textarea auto-resize
+  const assistantInput = document.getElementById('assistant-input');
+  if (assistantInput) {
+    assistantInput.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+    assistantInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendAssistantMessage();
+      }
+    });
+  }
 }
 
 async function loadRequestLogHistory() {
@@ -1586,5 +1606,367 @@ async function loadRequestLogHistory() {
     console.error('loadRequestLogHistory error:', err);
   }
 }
+
+// ---------- Assistant ----------
+
+function populateAssistantProxySelect() {
+  const select = document.getElementById('assistant-proxy-select');
+  if (!select) return;
+  const running = proxies.filter(p => p.running);
+  const current = select.value;
+  select.innerHTML = '<option value="">选择后端代理...</option>' +
+    running.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (:${p.port})</option>`).join('');
+  if (current && running.find(p => p.id === current)) {
+    select.value = current;
+  } else {
+    assistantProxyId = '';
+    document.getElementById('assistant-send-btn').disabled = true;
+  }
+}
+
+function buildSystemPrompt() {
+  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+  return `你是 Protocol Proxy 的智能助手，专门帮助管理员监控和排障。当前时间：${now}
+
+你有以下工具可以调用：
+
+系统查询：
+- get_system_status: 获取系统概览（代理运行状态、供应商数量、运行时长）
+- get_providers / get_provider: 获取供应商列表或详情
+- get_proxies / get_proxy: 获取代理列表或详情
+- get_usage_stats: 查询用量统计（支持按时间范围、代理筛选）
+- get_recent_requests: 获取最近请求日志
+- get_system_logs: 获取系统日志
+- get_key_health: 获取 API Key 健康检查结果
+- get_settings: 获取系统设置项
+- get_config_history: 获取配置快照历史
+
+文件与命令：
+- read_file: 读取任意文件内容（支持指定行范围）
+- write_file: 写入文件（会覆盖已有内容）
+- list_directory: 列出目录内容
+- search_files: 按 glob 模式搜索文件
+- execute_command: 执行 shell 命令
+
+规则：
+- 当用户询问系统状态、代理、供应商、日志、用量等运维相关问题时，调用工具获取实时数据后再回答
+- 当用户需要查看或修改文件、执行命令时，使用对应的文件和命令工具
+- 当用户只是打招呼、闲聊、或询问与系统无关的问题时，直接回答，不要调用工具
+- 不要凭空猜测系统状态，需要数据时必须调用工具
+- 执行写操作或危险命令前，先告知用户将要做什么
+
+你的职责：
+1. 回答关于代理配置和运行状态的问题
+2. 分析日志，指出异常和可能原因
+3. 根据数据给出优化建议（负载均衡、模型选择、故障切换策略）
+4. 用自然语言解释技术问题
+5. 如果发现问题，给出具体的修复步骤
+
+请用中文回答，保持专业且易懂。`;
+}
+
+async function sendAssistantMessage() {
+  const input = document.getElementById('assistant-input');
+  const text = input.value.trim();
+  if (!text || !assistantProxyId) return;
+
+  addAssistantMessage('user', text);
+  input.value = '';
+  input.style.height = 'auto';
+
+  const systemPrompt = buildSystemPrompt();
+
+  // 构建消息历史，正确序列化 tool 相关字段
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...assistantMessages.filter(m => m.role !== 'thinking' && m.role !== 'tool-calls' && m.role !== 'tool-result').map(m => {
+      if (m.role === 'assistant' && m.tool_calls) {
+        const msg = { role: 'assistant', content: m.content || null, tool_calls: m.tool_calls };
+        if (m.reasoning_content) msg.reasoning_content = m.reasoning_content;
+        return msg;
+      }
+      if (m.role === 'assistant' && m.reasoning_content) {
+        const msg = { role: 'assistant', content: m.content };
+        msg.reasoning_content = m.reasoning_content;
+        return msg;
+      }
+      if (m.role === 'tool') {
+        return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content };
+      }
+      return { role: m.role, content: m.content };
+    })
+  ];
+
+  const proxy = proxies.find(p => p.id === assistantProxyId);
+  if (!proxy) {
+    addAssistantMessage('assistant', '所选代理不存在或已停止，请重新选择。');
+    return;
+  }
+
+  const thinkingId = addAssistantMessage('thinking', '');
+  assistantAbortController = new AbortController();
+
+  try {
+    const res = await fetch('/api/assistant/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxyId: proxy.id, messages }),
+      signal: assistantAbortController.signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => 'Unknown error');
+      removeAssistantMessage(thinkingId);
+      addAssistantMessage('assistant', `请求失败: HTTP ${res.status}\n\n${err}`);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullContent = '';
+    let currentEvent = '';
+    let msgId = null;
+
+    removeAssistantMessage(thinkingId);
+    console.log('[assistant] SSE stream started');
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith('event: ')) {
+          currentEvent = trimmed.slice(7);
+          continue;
+        }
+
+        if (!trimmed.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(trimmed.slice(6)); } catch { continue; }
+
+        console.log('[assistant] SSE event:', currentEvent, data);
+        switch (currentEvent) {
+          case 'content': {
+            if (!msgId) msgId = addAssistantMessage('assistant', '');
+            fullContent += data.delta;
+            updateAssistantMessage(msgId, fullContent);
+            break;
+          }
+
+          case 'tool_calls': {
+            const calls = data.calls || [];
+            const toolCallsData = calls.map(tc => ({
+              id: tc.id,
+              type: 'function',
+              function: { name: tc.name, arguments: JSON.stringify(tc.arguments || {}) },
+            }));
+            // 存储 assistant 消息（含 tool_calls）用于对话序列化
+            const assistantMsg = {
+              id: 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+              role: 'assistant',
+              content: fullContent || null,
+              tool_calls: toolCallsData,
+            };
+            if (data.reasoning_content) assistantMsg.reasoning_content = data.reasoning_content;
+            assistantMessages.push(assistantMsg);
+            fullContent = '';
+            // 创建显示用的 tool-calls 消息
+            const callHtml = calls.map(tc => {
+              const argsStr = Object.keys(tc.arguments || {}).length > 0
+                ? `<span class="tool-call-args">${escapeHtml(JSON.stringify(tc.arguments))}</span>`
+                : '';
+              return `<div class="tool-call-item"><span class="tool-call-name">${escapeHtml(tc.name)}</span>${argsStr}</div>`;
+            }).join('');
+            addAssistantMessage('tool-calls', callHtml);
+            break;
+          }
+
+          case 'tool_result': {
+            const resultStr = JSON.stringify(data.result, null, 2);
+            addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id });
+            // 追加 role: 'tool' 消息用于对话序列化（不创建 DOM 元素）
+            assistantMessages.push({
+              id: 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+              role: 'tool',
+              tool_call_id: data.tool_call_id,
+              tool_name: data.name,
+              content: JSON.stringify(data.result),
+            });
+            break;
+          }
+
+          case 'done': {
+            if (msgId) {
+              const msgObj = assistantMessages.find(m => m.id === msgId);
+              if (msgObj) {
+                msgObj.content = fullContent;
+                if (data.reasoning_content) msgObj.reasoning_content = data.reasoning_content;
+              }
+            }
+            break;
+          }
+
+          case 'error': {
+            addAssistantMessage('assistant', `错误: ${data.message}`);
+            break;
+          }
+        }
+      }
+    }
+
+    // 流结束但没有收到 done 事件时，确保最终内容被保存
+    if (msgId && fullContent) {
+      const msgObj = assistantMessages.find(m => m.id === msgId);
+      if (msgObj && !msgObj.content) msgObj.content = fullContent;
+    }
+
+  } catch (err) {
+    removeAssistantMessage(thinkingId);
+    if (err.name === 'AbortError') {
+      addAssistantMessage('assistant', '已取消');
+    } else {
+      addAssistantMessage('assistant', `请求出错: ${err.message}`);
+    }
+  } finally {
+    assistantAbortController = null;
+  }
+}
+
+function addAssistantMessage(role, content) {
+  const id = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+  assistantMessages.push({ id, role, content });
+
+  const chat = document.getElementById('assistant-chat');
+  if (!chat) return id;
+
+  const displayRoles = ['user', 'assistant', 'tool', 'tool-calls', 'tool-result'];
+  if (assistantMessages.filter(m => displayRoles.includes(m.role)).length === 1 && role === 'user') {
+    chat.innerHTML = '';
+  }
+
+  const div = document.createElement('div');
+  div.id = id;
+  div.className = `assistant-message ${role}`;
+
+  if (role === 'thinking') {
+    div.innerHTML = `<div class="assistant-dot"></div><div class="assistant-dot"></div><div class="assistant-dot"></div>`;
+  } else if (role === 'tool-calls') {
+    // content 已经是 HTML 字符串
+    div.innerHTML = `<div class="tool-calls-header">调用工具</div>${content}`;
+  } else if (role === 'tool-result') {
+    // content 是 {name, result, tool_call_id}
+    const toolData = typeof content === 'object' ? content : { name: 'unknown', result: content };
+    const resultId = 'result-' + id;
+    div.innerHTML = `
+      <div class="tool-result-header" onclick="document.getElementById('${resultId}').classList.toggle('expanded')">
+        <span class="tool-result-name">${escapeHtml(toolData.name)}</span>
+        <span class="tool-result-toggle">展开结果 ▾</span>
+      </div>
+      <div class="tool-result-body" id="${resultId}">
+        <pre>${escapeHtml(toolData.result)}</pre>
+      </div>`;
+    // 保存 tool_call_id 到消息对象
+    const msgObj = assistantMessages.find(m => m.id === id);
+    if (msgObj) {
+      msgObj.tool_call_id = toolData.tool_call_id;
+      msgObj.tool_name = toolData.name;
+      msgObj.content = toolData.result;
+    }
+  } else if (role === 'assistant') {
+    div.innerHTML = formatAssistantContent(content);
+  } else {
+    div.textContent = content;
+  }
+
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return id;
+}
+
+function updateAssistantMessage(id, content) {
+  const div = document.getElementById(id);
+  if (div) {
+    div.innerHTML = formatAssistantContent(content);
+    const chat = document.getElementById('assistant-chat');
+    if (chat) chat.scrollTop = chat.scrollHeight;
+  }
+}
+
+function removeAssistantMessage(id) {
+  const div = document.getElementById(id);
+  if (div) div.remove();
+  assistantMessages = assistantMessages.filter(m => m.id !== id);
+}
+
+function formatAssistantContent(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // 代码块
+  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+  // 行内代码
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 段落
+  const paragraphs = html.split(/\n{2,}/);
+  html = paragraphs.map(p => {
+    p = p.trim();
+    if (!p) return '';
+    // 如果已经是 pre，不包 p
+    if (p.startsWith('<pre>')) return p;
+    // 列表项
+    if (p.startsWith('- ') || p.startsWith('* ')) {
+      const items = p.split('\n').filter(l => l.trim().startsWith('- ') || l.trim().startsWith('* '));
+      return '<ul>' + items.map(i => `<li>${i.trim().slice(2)}</li>`).join('') + '</ul>';
+    }
+    // 数字列表
+    if (/^\d+\./.test(p)) {
+      const items = p.split('\n').filter(l => /^\d+\./.test(l.trim()));
+      return '<ol>' + items.map(i => `<li>${i.trim().replace(/^\d+\.\s*/, '')}</li>`).join('') + '</ol>';
+    }
+    return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+  return html;
+}
+
+function clearAssistantChat() {
+  assistantMessages = [];
+  const chat = document.getElementById('assistant-chat');
+  if (!chat) return;
+  chat.innerHTML = `
+    <div class="assistant-welcome">
+      <div class="assistant-welcome-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+      </div>
+      <h3>智控助手</h3>
+      <p>我是你的 Protocol Proxy 智能助手，可以帮你：</p>
+      <ul>
+        <li>查询代理和供应商运行状态</li>
+        <li>分析日志，定位异常原因</li>
+        <li>解读配置并给出优化建议</li>
+        <li>自然语言排障与问答</li>
+      </ul>
+      <p class="assistant-hint">请先选择一个运行中的代理作为对话后端</p>
+    </div>
+  `;
+}
+
+// 监听代理选择
+(function() {
+  const select = document.getElementById('assistant-proxy-select');
+  if (select) {
+    select.addEventListener('change', function() {
+      assistantProxyId = this.value;
+      const btn = document.getElementById('assistant-send-btn');
+      if (btn) btn.disabled = !this.value;
+    });
+  }
+})();
 
 init();

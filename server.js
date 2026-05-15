@@ -242,6 +242,373 @@ async function init() {
       : 'primary_fallback';
   }
 
+  // ==================== 助手工具定义与执行器 ====================
+
+  const TOOL_DEFINITIONS = [
+    {
+      type: 'function',
+      function: {
+        name: 'get_system_status',
+        description: '获取系统概览：所有代理的运行状态、供应商数量、系统运行时长。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_providers',
+        description: '获取所有供应商列表，包含协议、Key 数量和健康状态。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_provider',
+        description: '根据 ID 获取单个供应商的详细信息。',
+        parameters: {
+          type: 'object',
+          properties: { providerId: { type: 'string', description: '供应商 ID' } },
+          required: ['providerId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_proxies',
+        description: '获取所有代理列表，包含端口、运行状态、关联供应商和路由策略。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_proxy',
+        description: '根据 ID 获取单个代理的详细信息。',
+        parameters: {
+          type: 'object',
+          properties: { proxyId: { type: 'string', description: '代理 ID' } },
+          required: ['proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_usage_stats',
+        description: '查询用量统计，支持按时间范围、代理筛选。返回请求数和 Token 用量。',
+        parameters: {
+          type: 'object',
+          properties: {
+            range: { type: 'string', enum: ['hourly', 'daily', 'monthly', 'yearly'], description: '统计粒度，默认 daily' },
+            startDate: { type: 'string', description: '起始日期，格式 YYYY-MM-DD' },
+            endDate: { type: 'string', description: '结束日期，格式 YYYY-MM-DD' },
+            proxyId: { type: 'string', description: '按代理 ID 筛选' },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_recent_requests',
+        description: '获取最近的请求日志，包含状态、延迟、模型、Token 用量等。',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: '返回条数，默认 20，最大 100' },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_system_logs',
+        description: '获取最近的系统日志（倒序），用于排查错误和异常。',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: '返回行数，默认 30，最大 100' },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_key_health',
+        description: '获取所有供应商的 API Key 健康检查结果，包含每个 Key 的状态和错误信息。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_settings',
+        description: '获取系统设置项。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_config_history',
+        description: '获取配置快照历史列表，可用于了解配置变更记录。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_file',
+        description: '读取文件内容。可以读取任意文件。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '文件的绝对路径或相对于工作目录的路径' },
+            offset: { type: 'number', description: '从第几行开始读（从 0 开始），默认 0' },
+            limit: { type: 'number', description: '最多读取多少行，默认 500' },
+          },
+          required: ['path'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'write_file',
+        description: '写入文件内容。如果文件不存在会创建（含父目录）。会覆盖已有内容。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '文件的绝对路径或相对于工作目录的路径' },
+            content: { type: 'string', description: '要写入的内容' },
+          },
+          required: ['path', 'content'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_directory',
+        description: '列出目录下的文件和子目录。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '目录路径，默认为当前工作目录' },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'search_files',
+        description: '按文件名模式搜索文件，支持通配符（如 *.js、**/*.log）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'glob 模式，如 "**/*.js" 或 "src/**/*.ts"' },
+            path: { type: 'string', description: '搜索根目录，默认为当前工作目录' },
+          },
+          required: ['pattern'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'execute_command',
+        description: '执行 shell 命令并返回输出。可以执行任意命令。',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: '要执行的 shell 命令' },
+            cwd: { type: 'string', description: '工作目录，默认为当前工作目录' },
+            timeout: { type: 'number', description: '超时时间（毫秒），默认 30000' },
+          },
+          required: ['command'],
+        },
+      },
+    },
+  ];
+
+  const TOOL_HANDLERS = {
+    get_system_status: async () => {
+      const proxies = configStore.getProxies().map(p => {
+        const provider = configStore.getProviderById(p.providerId);
+        return { name: p.name, port: p.port, running: proxyManager.isRunning(p.id), providerName: provider?.name || '' };
+      });
+      return { proxies, providerCount: configStore.getProviders().length, uptime: Math.floor(process.uptime()) };
+    },
+
+    get_providers: async () => {
+      return configStore.getProviders().map(p => {
+        const h = keyHealth.get(p.id);
+        let healthStatus = '未检测';
+        if (h) {
+          const ok = h.keys?.filter(k => k.ok).length || 0;
+          const total = h.keys?.length || 0;
+          healthStatus = h.status === 'healthy' ? `健康 (${ok}/${total})` :
+            h.status === 'partial' ? `部分异常 (${ok}/${total})` :
+            h.status === 'unhealthy' ? `异常 (${ok}/${total})` : '未检测';
+        }
+        return { id: p.id, name: p.name, url: p.url, protocol: p.protocol, keyCount: (p.apiKeys || []).length, health: healthStatus };
+      });
+    },
+
+    get_provider: async (args) => {
+      const p = configStore.getProviderById(args.providerId);
+      if (!p) return { error: `供应商 ${args.providerId} 不存在` };
+      const h = keyHealth.get(p.id);
+      return { id: p.id, name: p.name, url: p.url, protocol: p.protocol, apiKeys: (p.apiKeys || []).map((k, i) => ({ index: i, alias: k.alias || '', enabled: k.enabled !== false })), health: h || null };
+    },
+
+    get_proxies: async () => {
+      return configStore.getProxies().map(p => {
+        const provider = configStore.getProviderById(p.providerId);
+        return { id: p.id, name: p.name, port: p.port, running: proxyManager.isRunning(p.id), providerName: provider?.name || '', protocol: provider?.protocol || '', defaultModel: p.defaultModel || '', routingStrategy: p.routingStrategy || 'primary_fallback' };
+      });
+    },
+
+    get_proxy: async (args) => {
+      const p = configStore.getProxyById(args.proxyId);
+      if (!p) return { error: `代理 ${args.proxyId} 不存在` };
+      const provider = configStore.getProviderById(p.providerId);
+      return { id: p.id, name: p.name, port: p.port, running: proxyManager.isRunning(p.id), providerName: provider?.name || '', protocol: provider?.protocol || '', defaultModel: p.defaultModel || '', routingStrategy: p.routingStrategy || 'primary_fallback', requireAuth: !!p.requireAuth };
+    },
+
+    get_usage_stats: async (args) => {
+      return statsStore.getStats({ range: args.range || 'daily', startDate: args.startDate, endDate: args.endDate, proxyId: args.proxyId });
+    },
+
+    get_recent_requests: async (args) => {
+      const limit = Math.min(Math.max(1, parseInt(args.limit) || 20), 100);
+      return { entries: requestLog.getAll(limit) };
+    },
+
+    get_system_logs: async (args) => {
+      const limit = Math.min(Math.max(1, parseInt(args.limit) || 30), 100);
+      try {
+        const content = await fs.promises.readFile(logger.LOG_FILE, 'utf8');
+        const allLines = content.split('\n').filter(l => l.trim());
+        return { lines: allLines.slice(-limit) };
+      } catch {
+        return { lines: [] };
+      }
+    },
+
+    get_key_health: async () => {
+      const result = {};
+      for (const [providerId, health] of keyHealth) {
+        result[providerId] = health;
+      }
+      return result;
+    },
+
+    get_settings: async () => {
+      return configStore.getSettings();
+    },
+
+    get_config_history: async () => {
+      return { snapshots: configStore.getSnapshots() };
+    },
+
+    read_file: async (args) => {
+      const filePath = path.resolve(args.path);
+      try {
+        const content = await fs.promises.readFile(filePath, 'utf8');
+        const lines = content.split('\n');
+        const offset = Math.max(0, parseInt(args.offset) || 0);
+        const limit = Math.min(Math.max(1, parseInt(args.limit) || 500), 2000);
+        const sliced = lines.slice(offset, offset + limit);
+        return { content: sliced.join('\n'), totalLines: lines.length, offset, returnedLines: sliced.length };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    write_file: async (args) => {
+      const filePath = path.resolve(args.path);
+      try {
+        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.promises.writeFile(filePath, args.content, 'utf8');
+        return { success: true, path: filePath, bytes: Buffer.byteLength(args.content, 'utf8') };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    list_directory: async (args) => {
+      const dirPath = path.resolve(args.path || '.');
+      try {
+        const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        return {
+          path: dirPath,
+          entries: entries.map(e => ({
+            name: e.name,
+            type: e.isDirectory() ? 'directory' : 'file',
+          })),
+        };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    search_files: async (args) => {
+      const root = path.resolve(args.path || '.');
+      const pattern = args.pattern;
+      try {
+        const results = [];
+        const globToRegex = (g) => {
+          const r = g.replace(/\*\*/g, '§GLOBSTAR§')
+                     .replace(/\*/g, '[^/]*')
+                     .replace(/\?/g, '[^/]')
+                     .replace(/§GLOBSTAR§/g, '.*');
+          return new RegExp('^' + r + '$');
+        };
+        const regex = globToRegex(pattern);
+        const walk = async (dir, rel) => {
+          const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+          for (const e of entries) {
+            const fullPath = path.join(dir, e.name);
+            const relPath = rel ? `${rel}/${e.name}` : e.name;
+            if (e.isDirectory()) {
+              if (e.name === 'node_modules' || e.name === '.git') continue;
+              await walk(fullPath, relPath);
+            } else if (regex.test(relPath)) {
+              results.push(relPath);
+            }
+          }
+        };
+        await walk(root, '');
+        return { pattern, root, matches: results.slice(0, 200), total: results.length };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    execute_command: async (args) => {
+      const timeout = Math.min(Math.max(1000, parseInt(args.timeout) || 30000), 120000);
+      return new Promise((resolve) => {
+        exec(args.command, { cwd: args.cwd || process.cwd(), timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+          if (err) {
+            resolve({ exitCode: err.code || 1, stdout: stdout || '', stderr: stderr || err.message });
+          } else {
+            resolve({ exitCode: 0, stdout: stdout || '', stderr: stderr || '' });
+          }
+        });
+      });
+    },
+  };
+
   async function startProxyWithProvider(proxy) {
     const target = resolveTarget(proxy);
     if (!target) throw new Error(`供应商 ${proxy.providerId} 不存在`);
@@ -969,6 +1336,251 @@ async function init() {
   app.get('/api/request-logs', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 200, 2000);
     res.json({ entries: requestLog.getAll(limit), total: requestLog.getCount() });
+  });
+
+  // ==================== 智控助手上下文 API ====================
+
+  app.get('/api/assistant/context', async (req, res) => {
+    const proxyList = configStore.getProxies().map(p => {
+      const provider = configStore.getProviderById(p.providerId);
+      return {
+        id: p.id,
+        name: p.name,
+        port: p.port,
+        running: proxyManager.isRunning(p.id),
+        providerId: p.providerId,
+        providerName: provider?.name || '',
+        protocol: provider?.protocol || '',
+        defaultModel: p.defaultModel || '',
+        routingStrategy: p.routingStrategy || 'primary_fallback',
+      };
+    });
+
+    const providerList = configStore.getProviders().map(p => ({
+      id: p.id,
+      name: p.name,
+      url: p.url,
+      protocol: p.protocol,
+      apiKeys: (p.apiKeys || []).map((k, i) => ({ alias: k.alias || '', index: i, enabled: k.enabled !== false })),
+    }));
+
+    const healthData = {};
+    for (const [providerId, health] of keyHealth) {
+      healthData[providerId] = health;
+    }
+
+    const stats = statsStore.getStats({ range: 'daily' });
+
+    let recentLogs = [];
+    try {
+      const content = await fs.promises.readFile(logger.LOG_FILE, 'utf8');
+      const allLines = content.split('\n').filter(l => l.trim());
+      recentLogs = allLines.slice(-30);
+    } catch {}
+
+    const recentRequests = requestLog.getAll(20);
+
+    res.json({
+      proxies: proxyList,
+      providers: providerList,
+      health: healthData,
+      stats,
+      recentLogs,
+      recentRequests,
+    });
+  });
+
+  // ==================== 智控助手 Tool Calling API ====================
+
+  function sendSSE(res, event, data) {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  app.post('/api/assistant/chat', async (req, res) => {
+    const { proxyId, messages } = req.body;
+    if (!proxyId || !Array.isArray(messages)) {
+      return res.status(400).json({ error: '需要 proxyId 和 messages' });
+    }
+
+    const proxy = configStore.getProxyById(proxyId);
+    if (!proxy) return res.status(404).json({ error: '代理不存在' });
+    if (!resolveTarget(proxy)) return res.status(500).json({ error: '代理目标未配置' });
+
+    const proxyUrl = `http://localhost:${proxy.port}/v1/chat/completions`;
+    const proxyHeaders = { 'Content-Type': 'application/json' };
+    if (proxy.requireAuth && proxy.authToken) {
+      proxyHeaders['Authorization'] = `Bearer ${proxy.authToken}`;
+    }
+
+    // SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // 发送 SSE 的辅助函数，忽略写入错误
+    function safeSSE(event, data) {
+      try { sendSSE(res, event, data); } catch {}
+    }
+
+    const MAX_TOOL_ROUNDS = 10;
+    const conversationMessages = [...messages];
+
+    try {
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        logger.log(`[assistant] round ${round} — messages: ${conversationMessages.length}`);
+        for (let i = 0; i < conversationMessages.length; i++) {
+          const m = conversationMessages[i];
+          logger.log(`[assistant]   msg[${i}]: role=${m.role}, hasReasoning=${!!m.reasoning_content}, hasToolCalls=${!!m.tool_calls}, contentLen=${(m.content || '').length}`);
+        }
+
+        // 调用本地代理
+        let fetchRes;
+        try {
+          fetchRes = await fetch(proxyUrl, {
+            method: 'POST',
+            headers: proxyHeaders,
+            signal: AbortSignal.timeout(300000),
+            body: JSON.stringify({
+              model: proxy.defaultModel || 'gpt-4o',
+              messages: conversationMessages,
+              stream: true,
+              tools: TOOL_DEFINITIONS,
+              tool_choice: 'auto',
+            }),
+          });
+        } catch (fetchErr) {
+          logger.log(`[assistant] round ${round} fetch error: ${fetchErr.message}`);
+          safeSSE('error', { message: `代理请求失败: ${fetchErr.message}` });
+          break;
+        }
+
+        if (!fetchRes.ok) {
+          const text = await fetchRes.text();
+          logger.log(`[assistant] round ${round} HTTP ${fetchRes.status}: ${text.slice(0, 200)}`);
+          safeSSE('error', { message: `代理请求失败: HTTP ${fetchRes.status} - ${text}` });
+          break;
+        }
+
+        // 解析 SSE 流
+        const reader = fetchRes.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullContent = '';
+        let reasoningContent = '';
+        const toolCallAccumulator = {};
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+            const payload = trimmed.slice(6);
+            if (payload === '[DONE]') continue;
+
+            try {
+              const data = JSON.parse(payload);
+              const delta = data.choices?.[0]?.delta;
+              if (!delta) continue;
+
+              if (delta.content) {
+                fullContent += delta.content;
+                safeSSE('content', { delta: delta.content });
+              }
+
+              if (delta.reasoning_content) {
+                reasoningContent += delta.reasoning_content;
+              }
+
+              if (delta.tool_calls) {
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index;
+                  if (!toolCallAccumulator[idx]) {
+                    toolCallAccumulator[idx] = { id: '', name: '', arguments: '' };
+                  }
+                  if (tc.id) toolCallAccumulator[idx].id = tc.id;
+                  if (tc.function?.name) toolCallAccumulator[idx].name = tc.function.name;
+                  if (tc.function?.arguments) toolCallAccumulator[idx].arguments += tc.function.arguments;
+                }
+              }
+            } catch {}
+          }
+        }
+
+        const toolCalls = Object.values(toolCallAccumulator).filter(tc => tc.id && tc.name);
+        logger.log(`[assistant] round ${round} done — content: ${fullContent.length} chars, tool_calls: ${toolCalls.length}`);
+
+        if (toolCalls.length === 0) {
+          safeSSE('done', { reasoning_content: reasoningContent || undefined });
+          break;
+        }
+
+        // 通知前端
+        safeSSE('tool_calls', {
+          reasoning_content: reasoningContent || undefined,
+          calls: toolCalls.map(tc => {
+            let args = {};
+            try { args = JSON.parse(tc.arguments); } catch {}
+            return { id: tc.id, name: tc.name, arguments: args };
+          }),
+        });
+
+        // 追加 assistant 消息到对话历史
+        const assistantMsg = {
+          role: 'assistant',
+          content: fullContent || null,
+          tool_calls: toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        };
+        if (reasoningContent) assistantMsg.reasoning_content = reasoningContent;
+        conversationMessages.push(assistantMsg);
+
+        // 执行工具
+        for (const tc of toolCalls) {
+          let args = {};
+          try { args = JSON.parse(tc.arguments); } catch {}
+          logger.log(`[assistant] EXEC tool: ${tc.name}(${JSON.stringify(args)})`);
+          let result;
+          try {
+            result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+          } catch (err) {
+            logger.log(`[assistant] tool ${tc.name} error: ${err.message}`);
+            result = { error: err.message };
+          }
+
+          const resultStr = JSON.stringify(result);
+          logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars`);
+          safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result });
+
+          conversationMessages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: resultStr,
+          });
+        }
+        // 继续下一轮
+      }
+
+      // 循环正常结束（达到最大轮次）
+      safeSSE('done', {});
+    } catch (err) {
+      logger.log(`[assistant] error: ${err.message}`);
+      if (!res.headersSent) {
+        res.status(502).json({ error: `助手请求失败: ${err.message}` });
+      } else {
+        safeSSE('error', { message: err.message });
+      }
+    } finally {
+      res.end();
+    }
   });
 
   // ==================== 配置导入/导出 ====================

@@ -46,6 +46,11 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
           <span>系统日志</span>
         </a>
+        <a href="#" class="nav-item" data-page="assistant">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          <span>智控助手</span>
+          <span class="nav-badge" style="background:var(--accent);color:#fff">AI</span>
+        </a>
         <a href="#" class="nav-item" data-page="settings">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 5 15.34a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 20.39 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
           <span>设置</span>
@@ -310,6 +315,43 @@
         </div>
         <div class="log-panel" id="log-content">
           <div class="empty-sm">加载中...</div>
+        </div>
+      </div>
+
+      <!-- ==================== Assistant Page ==================== -->
+      <div class="page" id="page-assistant">
+        <div class="assistant-layout">
+          <div class="assistant-toolbar">
+            <div class="assistant-model-select">
+              <label>后端代理</label>
+              <select id="assistant-proxy-select">
+                <option value="">选择后端代理...</option>
+              </select>
+            </div>
+            <div class="toolbar-actions">
+              <button class="btn btn-sm" onclick="clearAssistantChat()">清空对话</button>
+            </div>
+          </div>
+          <div class="assistant-chat" id="assistant-chat">
+            <div class="assistant-welcome">
+              <div class="assistant-welcome-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+              </div>
+              <h3>智控助手</h3>
+              <p>我是你的 Protocol Proxy 智能助手，可以帮你：</p>
+              <ul>
+                <li>查询代理和供应商运行状态</li>
+                <li>分析日志，定位异常原因</li>
+                <li>解读配置并给出优化建议</li>
+                <li>自然语言排障与问答</li>
+              </ul>
+              <p class="assistant-hint">请先选择一个运行中的代理作为对话后端</p>
+            </div>
+          </div>
+          <div class="assistant-input-area">
+            <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？" rows="1"></textarea>
+            <button class="btn btn-primary" id="assistant-send-btn" onclick="sendAssistantMessage()" disabled>发送</button>
+          </div>
         </div>
       </div>
 
