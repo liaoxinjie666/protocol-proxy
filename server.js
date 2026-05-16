@@ -123,6 +123,7 @@ async function init() {
   const configStore = require('./lib/config-store');
   const proxyManager = require('./lib/proxy-manager');
   const statsStore = require('./lib/stats-store');
+  const mcpClient = require('./lib/mcp-client');
 
   const app = express();
   const PORT = process.env.ADMIN_PORT || 3000;
@@ -143,7 +144,7 @@ async function init() {
   }
 
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
 
   // 访问日志
   app.use((req, res, next) => {
@@ -614,6 +615,20 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'invoke_skill',
+        description: '调用指定的技能，获取其指令内容。当用户输入 /技能名 或需要执行预定义流程时使用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '技能名称' },
+          },
+          required: ['name'],
+        },
+      },
+    },
   ];
 
   const TOOL_HANDLERS = {
@@ -865,6 +880,24 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
       } catch (err) {
         return { error: err.message };
       }
+    },
+    invoke_skill: async (args) => {
+      const skill = skillStore.get(args.name);
+      if (!skill) return { error: `技能 "${args.name}" 不存在` };
+      const result = { name: skill.name, description: skill.description, content: skill.content, dirPath: skill.dirPath };
+      if (skill.scripts.length > 0) result.scripts = skill.scripts.map(f => `scripts/${f}`);
+      if (skill.references.length > 0) result.references = skill.references.map(f => `reference/${f}`);
+      // 读取 reference 文件内容（文本文件）
+      for (const ref of skill.references) {
+        try {
+          const refPath = path.join(skill.dirPath, 'reference', ref);
+          const stat = fs.statSync(refPath);
+          if (stat.size < 50000) { // 只读小于 50KB 的文本文件
+            result[`reference:${ref}`] = fs.readFileSync(refPath, 'utf8');
+          }
+        } catch {}
+      }
+      return result;
     },
   };
 
@@ -1654,6 +1687,9 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
   const conversationStore = require('./lib/conversation-store');
   conversationStore.init();
 
+  const skillStore = require('./lib/skill-store');
+  skillStore.init();
+
   // 会话并发锁：convId → true 表示正在 streaming
   const activeStreams = new Set();
 
@@ -1696,6 +1732,201 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     res.json({ providers, defaultModel: proxy.defaultModel || '' });
   });
 
+  // ========== Skill API ==========
+  app.get('/api/skills', (req, res) => {
+    res.json({ skills: skillStore.list() });
+  });
+
+  app.get('/api/skills/:name', (req, res) => {
+    const skill = skillStore.get(req.params.name);
+    if (!skill) return res.status(404).json({ error: '技能不存在' });
+    res.json(skill);
+  });
+
+  app.post('/api/skills', (req, res) => {
+    const { name, description, content } = req.body;
+    if (!name || !content) return res.status(400).json({ error: '需要 name 和 content' });
+    const skill = skillStore.create(name, description || '', content);
+    if (!skill) return res.status(409).json({ error: '技能已存在' });
+    res.json(skill);
+  });
+
+  // 上传技能文件夹创建技能
+  app.post('/api/skills/upload', (req, res) => {
+    const { files } = req.body;
+    if (!files || !files.length) return res.status(400).json({ error: '需要文件列表' });
+    const skillMd = files.find(f => f.path === 'SKILL.md');
+    if (!skillMd) return res.status(400).json({ error: '缺少 SKILL.md' });
+    const MAX_BASE64 = 1024 * 1024;
+    for (const f of files) {
+      if (f.content.length > MAX_BASE64) return res.status(413).json({ error: `文件 ${f.path} 过大` });
+    }
+    const skill = skillStore.createFromUpload(files);
+    if (!skill) return res.status(400).json({ error: 'SKILL.md 缺少 name 字段或技能已存在' });
+    res.json(skill);
+  });
+
+  app.put('/api/skills/:name', (req, res) => {
+    const { description, content } = req.body;
+    const skill = skillStore.update(req.params.name, description || '', content || '');
+    if (!skill) return res.status(404).json({ error: '技能不存在或不可编辑' });
+    res.json(skill);
+  });
+
+  // 上传 skill 附属文件（scripts/reference）
+  app.post('/api/skills/:name/upload', (req, res) => {
+    const skill = skillStore.get(req.params.name);
+    if (!skill) return res.status(404).json({ error: '技能不存在' });
+    if (skill.category === 'system') return res.status(403).json({ error: '系统级技能不可修改' });
+    const { filename, subDir, content } = req.body; // content: base64
+    if (!filename || !content) return res.status(400).json({ error: '需要 filename 和 content' });
+    const MAX_BASE64 = 1024 * 1024; // ~768KB decoded
+    if (content.length > MAX_BASE64) return res.status(413).json({ error: '文件过大，最大 768KB' });
+    const dir = subDir === 'reference' ? 'reference' : 'scripts';
+    const targetDir = path.join(skill.dirPath, dir);
+    fs.mkdirSync(targetDir, { recursive: true });
+    const safeName = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+    fs.writeFileSync(path.join(targetDir, safeName), Buffer.from(content, 'base64'));
+    skillStore.init(); // 重新加载
+    res.json({ success: true, path: `${dir}/${safeName}` });
+  });
+
+  // 删除 skill 附属文件
+  app.delete('/api/skills/:name/file', (req, res) => {
+    const skill = skillStore.get(req.params.name);
+    if (!skill) return res.status(404).json({ error: '技能不存在' });
+    if (skill.category === 'system') return res.status(403).json({ error: '系统级技能不可修改' });
+    const { filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: '需要 filePath' });
+    const fullPath = path.join(skill.dirPath, filePath);
+    if (!fullPath.startsWith(skill.dirPath)) return res.status(400).json({ error: '无效路径' });
+    try { fs.unlinkSync(fullPath); } catch {}
+    skillStore.init();
+    res.json({ success: true });
+  });
+
+  app.delete('/api/skills/:name', (req, res) => {
+    const skill = skillStore.get(req.params.name);
+    if (!skill) return res.status(404).json({ error: '技能不存在' });
+    if (skill.category === 'system') return res.status(403).json({ error: '系统级技能不可删除' });
+    if (!skillStore.remove(req.params.name)) {
+      return res.status(500).json({ error: '删除失败，请检查文件权限' });
+    }
+    res.json({ success: true });
+  });
+
+  // ==================== MCP 服务管理 API ====================
+
+  app.get('/api/mcp/servers', (req, res) => {
+    const servers = configStore.getMcpServers();
+    const status = mcpClient.getStatus();
+    const statusMap = Object.fromEntries(status.map(s => [s.name, s]));
+    const result = Object.entries(servers).map(([name, config]) => ({
+      name,
+      enabled: config.enabled !== false,
+      transport: config.url ? 'http' : 'stdio',
+      command: config.command,
+      url: config.url,
+      ...(statusMap[name] || { status: 'disconnected', tools: [], lastError: null }),
+    }));
+    res.json(result);
+  });
+
+  app.get('/api/mcp/servers/:name', (req, res) => {
+    const config = configStore.getMcpServer(req.params.name);
+    if (!config) return res.status(404).json({ error: 'MCP 服务不存在' });
+    const status = mcpClient.getStatus().find(s => s.name === req.params.name);
+    res.json({ name: req.params.name, config, ...(status || { status: 'disconnected', tools: [] }) });
+  });
+
+  app.post('/api/mcp/servers', async (req, res) => {
+    const { name, command, args, env, url, headers, enabled } = req.body;
+    if (!name) return res.status(400).json({ error: '需要服务名称' });
+    if (!command && !url) return res.status(400).json({ error: '需要 command（本地）或 url（远程）' });
+    const existing = configStore.getMcpServer(name);
+    if (existing) return res.status(409).json({ error: '服务名已存在' });
+    const serverConfig = {};
+    if (url) {
+      serverConfig.url = url;
+      if (headers) serverConfig.headers = headers;
+    } else {
+      serverConfig.command = command;
+      if (args) serverConfig.args = Array.isArray(args) ? args : args.split(/\s+/).filter(Boolean);
+      if (env && Object.keys(env).length) serverConfig.env = env;
+    }
+    serverConfig.enabled = enabled !== false;
+    configStore.addMcpServer(name, serverConfig);
+    if (serverConfig.enabled) {
+      mcpClient.connectServer(name, serverConfig).catch(err => {
+        logger.error(`[MCP] 后台连接 ${name} 失败: ${err.message}`);
+      });
+    }
+    res.json({ success: true, name });
+  });
+
+  app.put('/api/mcp/servers/:name', async (req, res) => {
+    const { command, args, env, url, headers, enabled } = req.body;
+    const existing = configStore.getMcpServer(req.params.name);
+    if (!existing) return res.status(404).json({ error: 'MCP 服务不存在' });
+    const updates = {};
+    if (url !== undefined) {
+      updates.url = url;
+      if (headers !== undefined) updates.headers = headers;
+      delete updates.command;
+      delete updates.args;
+      delete updates.env;
+    }
+    if (command !== undefined) {
+      updates.command = command;
+      if (args !== undefined) updates.args = Array.isArray(args) ? args : args.split(/\s+/).filter(Boolean);
+      if (env !== undefined) updates.env = env;
+      delete updates.url;
+      delete updates.headers;
+    }
+    if (enabled !== undefined) updates.enabled = enabled;
+    configStore.updateMcpServer(req.params.name, updates);
+    const newConfig = configStore.getMcpServer(req.params.name);
+    if (newConfig.enabled) {
+      mcpClient.reconnectIfChanged(req.params.name, newConfig).catch(() => {});
+    } else {
+      await mcpClient.disconnectServer(req.params.name);
+    }
+    res.json({ success: true });
+  });
+
+  app.delete('/api/mcp/servers/:name', async (req, res) => {
+    const existing = configStore.getMcpServer(req.params.name);
+    if (!existing) return res.status(404).json({ error: 'MCP 服务不存在' });
+    await mcpClient.disconnectServer(req.params.name);
+    configStore.removeMcpServer(req.params.name);
+    res.json({ success: true });
+  });
+
+  app.post('/api/mcp/servers/:name/connect', async (req, res) => {
+    const config = configStore.getMcpServer(req.params.name);
+    if (!config) return res.status(404).json({ error: 'MCP 服务不存在' });
+    try {
+      await mcpClient.connectServer(req.params.name, config);
+      const status = mcpClient.getStatus().find(s => s.name === req.params.name);
+      res.json(status || { status: 'error', lastError: '连接失败' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/mcp/servers/:name/disconnect', async (req, res) => {
+    await mcpClient.disconnectServer(req.params.name);
+    res.json({ success: true });
+  });
+
+  app.get('/api/mcp/tools', (req, res) => {
+    const status = mcpClient.getStatus();
+    const allTools = status.filter(s => s.status === 'connected').flatMap(s =>
+      s.tools.map(t => ({ ...t, server: s.name, transport: s.transport }))
+    );
+    res.json(allTools);
+  });
+
   function buildSystemPrompt() {
     const now = new Date().toLocaleString('zh-CN', { hour12: false });
     return `你是 Protocol Proxy 的智能助手，专门帮助管理员监控和排障。当前时间：${now}
@@ -1736,6 +1967,12 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
 4. 用自然语言解释技术问题
 5. 如果发现问题，给出具体的修复步骤
 
+可用技能（当用户输入 /技能名 时，调用 invoke_skill 获取指令并遵循执行）：
+${skillStore.getAvailableForChat().map(s => `- /${s.name}: ${s.description}`).join('\n') || '（暂无可用技能）'}
+
+MCP 外部工具（通过 MCP 协议接入的第三方工具，名称以 mcp__ 开头）：
+${(() => { const mcpStatus = mcpClient.getStatus(); const connected = mcpStatus.filter(s => s.status === 'connected' && s.tools.length); const degraded = mcpStatus.filter(s => s.status !== 'connected'); let out = connected.length ? connected.map(s => `- [${s.name}] ${s.tools.map(t => t.name + (t.description ? ': ' + t.description : '')).join(', ')}`).join('\n') : '（暂无已连接的 MCP 服务）'; if (degraded.length) out += '\n\n⚠️ 以下 MCP 服务当前不可用，相关工具无法使用：\n' + degraded.map(s => `- ${s.name}（${s.status}${s.lastError ? ': ' + s.lastError : ''}）`).join('\n'); return out; })()}
+
 请用中文回答，保持专业且易懂。`;
   }
 
@@ -1773,8 +2010,26 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     conversationStore.touch(conv);
 
     // 追加用户消息到对话历史（压缩请求不追加空消息）
+    // 检测 /skillname 前缀触发技能
+    let activeSkill = null;
     if (!compress && message) {
-      conv.messages.push({ role: 'user', content: message });
+      const slashMatch = message.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
+      if (slashMatch) {
+        const skillName = slashMatch[1];
+        const skill = skillStore.get(skillName);
+        if (skill) {
+          activeSkill = skill;
+          // 将用户消息中的参数部分也保留
+          const args = slashMatch[2]?.trim();
+          if (args) {
+            conv.messages.push({ role: 'user', content: args });
+          }
+        } else {
+          conv.messages.push({ role: 'user', content: message });
+        }
+      } else {
+        conv.messages.push({ role: 'user', content: message });
+      }
       conversationStore.touch(conv);
     }
 
@@ -1838,6 +2093,12 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
       const systemPrompt = buildSystemPrompt();
       const buildMessages = () => {
         const msgs = [{ role: 'system', content: systemPrompt }];
+        if (activeSkill) {
+          let skillInfo = `[技能指令: ${activeSkill.name}]\n${activeSkill.content}`;
+          if (activeSkill.dirPath) skillInfo += `\n\n技能目录: ${activeSkill.dirPath}`;
+          if (activeSkill.scripts?.length > 0) skillInfo += `\n可用脚本: ${activeSkill.scripts.map(f => 'scripts/' + f).join(', ')}`;
+          msgs.push({ role: 'system', content: skillInfo });
+        }
         if (conv.compressionSummary) {
           msgs.push({ role: 'system', content: `[压缩摘要]\n${conv.compressionSummary}\n\n---\n以上是之前对话的压缩摘要。最近的消息保留原文。请继续对话，不要复述摘要内容。` });
         }
@@ -1866,7 +2127,7 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
               model: proxy.defaultModel || 'gpt-4o',
               messages,
               stream: true,
-              tools: TOOL_DEFINITIONS,
+              tools: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
               tool_choice: 'auto',
             }),
           });
@@ -1974,7 +2235,8 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
             result = { error: `工具 ${tc.name} 的参数 JSON 解析失败，原始内容: ${(tc.arguments || '').slice(0, 200)}` };
             isError = true;
           } else try {
-            result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+            const mcpHandler = tc.name.startsWith('mcp__') ? mcpClient.getToolHandlerMap()[tc.name] : null;
+            result = await (TOOL_HANDLERS[tc.name] || mcpHandler)?.(args) || { error: `未知工具: ${tc.name}` };
             if (result && result.error) isError = true;
           } catch (err) {
             logger.log(`[assistant] tool ${tc.name} error: ${err.message}`);
@@ -2254,6 +2516,19 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     requestLog.onEntry((entry) => wsServer.broadcast(entry));
     logger.log(`[Admin] WebSocket 已附加 (ws://localhost:${PORT})`);
 
+    // 初始化 MCP 客户端
+    mcpClient.init({
+      onUpdate: (serverName, status) => {
+        wsServer.broadcast({ type: 'mcp_status', server: serverName, ...status });
+      }
+    }).then(() => {
+      const status = mcpClient.getStatus();
+      const connected = status.filter(s => s.status === 'connected').length;
+      if (status.length > 0) logger.log(`[MCP] ${connected}/${status.length} 个 MCP 服务已连接`);
+    }).catch(err => {
+      logger.error('[MCP] 初始化失败:', err.message);
+    });
+
     openBrowser(adminUrl);
   });
 }
@@ -2265,6 +2540,8 @@ process.on('SIGINT', async () => {
   try {
     const wsServer = require('./lib/ws-server');
     wsServer.close();
+    const mcpClient = require('./lib/mcp-client');
+    await mcpClient.shutdown();
     const proxyManager = require('./lib/proxy-manager');
     const statsStore = require('./lib/stats-store');
     statsStore.flush();
@@ -2280,6 +2557,8 @@ process.on('SIGTERM', async () => {
   try {
     const wsServer = require('./lib/ws-server');
     wsServer.close();
+    const mcpClient = require('./lib/mcp-client');
+    await mcpClient.shutdown();
     const proxyManager = require('./lib/proxy-manager');
     const statsStore = require('./lib/stats-store');
     statsStore.flush();

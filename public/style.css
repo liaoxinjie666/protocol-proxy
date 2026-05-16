@@ -1781,8 +1781,8 @@ body {
 
 /* ---------- Selection ---------- */
 ::selection {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  background: var(--accent);
+  color: var(--text-inverse);
 }
 
 /* ---------- Assistant Page ---------- */
@@ -2129,6 +2129,9 @@ body {
   align-items: flex-end;
   flex-shrink: 0;
 }
+.assistant-input-area .btn {
+  height: 44px;
+}
 
 .assistant-input-area textarea {
   flex: 1;
@@ -2297,4 +2300,269 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--text-secondary);
+}
+
+/* ========== 技能管理 ========== */
+.skill-group {
+  margin-bottom: 24px;
+}
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.skill-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skill-card-header {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.skill-card-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  flex: 1;
+}
+.skill-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.skill-panel {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  margin-bottom: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.skill-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+}
+.skill-panel-list {
+  padding: 4px;
+}
+.skill-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+.skill-panel-item:hover {
+  background: var(--bg-hover);
+}
+.skill-panel-badge {
+  font-size: 10px;
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.skill-panel-item strong {
+  color: var(--accent);
+  white-space: nowrap;
+}
+.skill-panel-desc {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.skill-autocomplete {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.15);
+  margin-bottom: 4px;
+  z-index: 10;
+}
+.skill-ac-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+.skill-ac-item:hover {
+  background: var(--bg-hover);
+}
+.skill-ac-item strong {
+  color: var(--accent);
+  white-space: nowrap;
+}
+.skill-ac-desc {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.skill-file-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.skill-file-upload-row select {
+  height: 30px;
+  padding: 0 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.skill-file-upload-row input[type="file"] {
+  font-size: 12px;
+  flex: 1;
+}
+.skill-tree-dir {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  cursor: pointer;
+  user-select: none;
+}
+.skill-tree-dir:hover { color: var(--accent); }
+.skill-tree-arrow {
+  font-size: 10px;
+  transition: transform 0.15s;
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+}
+.skill-tree-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+}
+.skill-view-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+.skill-view-content h1 { font-size: 20px; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border-subtle); }
+.skill-view-content h2 { font-size: 17px; margin: 18px 0 8px; }
+.skill-view-content h3 { font-size: 15px; margin: 14px 0 6px; }
+.skill-view-content p { margin: 8px 0; }
+.skill-view-content ul, .skill-view-content ol { margin: 8px 0; padding-left: 24px; }
+.skill-view-content li { margin: 4px 0; }
+.skill-view-content pre {
+  background: var(--bg-base);
+  padding: 12px;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+  margin: 10px 0;
+}
+.skill-view-content code {
+  background: var(--bg-base);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+.skill-view-content pre code {
+  background: none;
+  padding: 0;
+  border: none;
+}
+.skill-view-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.skill-view-content th, .skill-view-content td {
+  border: 1px solid var(--border-subtle);
+  padding: 6px 10px;
+  text-align: left;
+}
+.skill-view-content th {
+  background: var(--bg-base);
+  font-weight: 600;
+}
+.skill-view-content blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 10px 0;
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+}
+.skill-view-content hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 16px 0;
+}
+.skill-view-content a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.skill-view-content a:hover {
+  text-decoration: underline;
+}
+
+/* ==================== MCP 服务管理 ==================== */
+
+#mcp-servers-container .skill-card {
+  border-left: 3px solid var(--border);
+  transition: border-color 0.2s;
+}
+#mcp-servers-container .skill-card:hover {
+  border-left-color: var(--accent);
+}
+
+/* MCP key-value editor rows */
+#mcp-env-editor input,
+#mcp-headers-editor input {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+#mcp-env-editor input:focus,
+#mcp-headers-editor input:focus {
+  border-color: var(--accent);
+}
+
+/* MCP tools list in modal */
+#mcp-tools-list > div {
+  transition: background 0.15s;
+}
+#mcp-tools-list > div:hover {
+  background: var(--bg-hover);
 }

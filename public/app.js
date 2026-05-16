@@ -108,6 +108,8 @@ function navigateTo(page) {
     'request-logs': '\u8bf7\u6c42\u65e5\u5fd7',
     'system-logs': '\u7cfb\u7edf\u65e5\u5fd7',
     assistant: '\u667a\u63a7\u52a9\u624b',
+    skills: '\u6280\u80fd\u7ba1\u7406',
+    'mcp-servers': 'MCP \u670d\u52a1',
     settings: '\u8bbe\u7f6e',
   };
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -119,7 +121,9 @@ function navigateTo(page) {
   if (page === 'stats') loadStats();
   if (page === 'system-logs') loadLogs();
   if (page === 'request-logs') renderRequestLogs();
-  if (page === 'assistant') { populateAssistantProxySelect(); loadConversations(); }
+  if (page === 'assistant') { populateAssistantProxySelect(); loadConversations(); loadAssistantSkills(); }
+  if (page === 'skills') loadSkills();
+  if (page === 'mcp-servers') loadMcpServers();
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
@@ -1129,6 +1133,11 @@ function connectRequestLogWS() {
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
+        // MCP 状态更新
+        if (msg.type === 'mcp_status') {
+          updateMcpServerStatus(msg.server, msg);
+          return;
+        }
         const entry = msg.id ? msg : (msg.data || msg);
         if (entry && entry.id) {
           requestLogs.unshift(entry);
@@ -1603,12 +1612,13 @@ async function init() {
   setInterval(loadStats, 30000);
   setInterval(loadKeyHealth, 5 * 60 * 1000);
 
-  // Assistant textarea auto-resize
+  // Assistant textarea auto-resize + skill autocomplete
   const assistantInput = document.getElementById('assistant-input');
   if (assistantInput) {
     assistantInput.addEventListener('input', function() {
       this.style.height = 'auto';
       this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+      updateSkillAutocomplete(this.value);
     });
     assistantInput.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1617,6 +1627,13 @@ async function init() {
       }
     });
   }
+  // 点击外部关闭补全
+  document.addEventListener('click', (e) => {
+    const ac = document.getElementById('skill-autocomplete');
+    if (ac && !ac.contains(e.target) && e.target.id !== 'assistant-input') {
+      ac.style.display = 'none';
+    }
+  });
 }
 
 async function loadRequestLogHistory() {
@@ -2333,5 +2350,656 @@ document.addEventListener('click', (e) => {
     document.getElementById('conversation-dropdown-menu')?.classList.remove('open');
   }
 });
+
+// ========== 助手 Skill 补全 ==========
+let assistantSkills = []; // 助手页面缓存的 skill 列表
+
+async function loadAssistantSkills() {
+  try {
+    const res = await fetch('/api/skills');
+    const data = await res.json();
+    assistantSkills = data.skills || [];
+    renderSkillPanel();
+  } catch {}
+}
+
+function toggleSkillPanel() {
+  const panel = document.getElementById('skill-panel');
+  if (!panel) return;
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+function renderSkillPanel() {
+  const list = document.getElementById('skill-panel-list');
+  if (!list) return;
+  const catColors = { system: 'var(--error)', preset: 'var(--warning)', user: 'var(--success)' };
+  const catLabels = { system: '系统', preset: '预设', user: '用户' };
+  if (assistantSkills.length === 0) {
+    list.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px">暂无可用技能，可前往「技能管理」页面创建</div>';
+    return;
+  }
+  list.innerHTML = assistantSkills.map(s =>
+    `<div class="skill-panel-item" data-name="${escapeHtml(s.name)}">
+      <span class="skill-panel-badge" style="background:${catColors[s.category] || 'var(--text-muted)'}">${catLabels[s.category] || s.category}</span>
+      <strong>/${escapeHtml(s.name)}</strong>
+      <span class="skill-panel-desc">${escapeHtml(s.description || '')}</span>
+    </div>`
+  ).join('');
+  list.onclick = (e) => {
+    const item = e.target.closest('[data-name]');
+    if (item) selectSkill(item.dataset.name);
+  };
+}
+
+function updateSkillAutocomplete(text) {
+  const ac = document.getElementById('skill-autocomplete');
+  if (!ac) return;
+  // 只在输入以 / 开头且没有空格（还没输入参数）时显示
+  const match = text.match(/^\/([a-zA-Z0-9_-]*)$/);
+  if (!match) { ac.style.display = 'none'; return; }
+  const query = match[1].toLowerCase();
+  const filtered = assistantSkills.filter(s => s.name.toLowerCase().includes(query));
+  if (filtered.length === 0) { ac.style.display = 'none'; return; }
+  ac.innerHTML = filtered.map(s =>
+    `<div class="skill-ac-item" data-name="${escapeHtml(s.name)}"><strong>/${escapeHtml(s.name)}</strong><span class="skill-ac-desc">${escapeHtml(s.description || '')}</span></div>`
+  ).join('');
+  ac.style.display = 'block';
+  ac.onclick = (e) => {
+    const item = e.target.closest('[data-name]');
+    if (item) selectSkill(item.dataset.name);
+  };
+}
+
+function selectSkill(name) {
+  const input = document.getElementById('assistant-input');
+  if (input) {
+    input.value = '/' + name + ' ';
+    input.focus();
+  }
+  const ac = document.getElementById('skill-autocomplete');
+  if (ac) ac.style.display = 'none';
+}
+
+// ========== 技能管理 ==========
+let allSkills = [];
+let editingSkillName = '';
+let pendingSkillFiles = null; // 待上传的文件夹 [{path, content(base64)}]
+
+async function loadSkills() {
+  try {
+    const res = await fetch('/api/skills');
+    const data = await res.json();
+    allSkills = data.skills || [];
+    renderSkills();
+    const badge = document.getElementById('nav-skill-count');
+    if (badge) badge.textContent = allSkills.length;
+  } catch (err) {
+    showToast('加载技能失败: ' + err.message, true);
+  }
+}
+
+function renderSkills() {
+  const container = document.getElementById('skills-container');
+  if (!container) return;
+  const groups = { system: [], preset: [], user: [] };
+  for (const s of allSkills) (groups[s.category] || groups.user).push(s);
+  const labels = { system: '系统级', preset: '预设', user: '用户' };
+  const colors = { system: 'var(--error)', preset: 'var(--warning)', user: 'var(--success)' };
+  let html = '';
+  for (const [cat, items] of Object.entries(groups)) {
+    if (items.length === 0) continue;
+    html += `<div class="skill-group"><h3 style="margin:0 0 12px;display:flex;align-items:center;gap:8px"><span class="skill-badge" style="background:${colors[cat]};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">${labels[cat]}</span> ${labels[cat]}技能 (${items.length})</h3><div class="skills-grid">`;
+    for (const s of items) {
+      const canEdit = cat === 'user';
+      const canDelete = cat !== 'system';
+      html += `<div class="skill-card">
+        <div class="skill-card-header"><strong>${escapeHtml(s.name)}</strong></div>
+        <div class="skill-card-desc">${escapeHtml(s.description || '无描述')}</div>
+        <div class="skill-card-actions">
+          <button class="btn btn-sm" data-action="view" data-name="${escapeHtml(s.name)}">查看</button>
+          ${canEdit ? `<button class="btn btn-sm" data-action="edit" data-name="${escapeHtml(s.name)}">编辑</button>` : ''}
+          ${canDelete ? `<button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeHtml(s.name)}">删除</button>` : ''}
+        </div>
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+  container.innerHTML = html || '<p style="color:var(--text-muted)">暂无技能</p>';
+  container.onclick = (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const name = btn.dataset.name;
+    const action = btn.dataset.action;
+    if (action === 'view') viewSkill(name);
+    else if (action === 'edit') editSkill(name);
+    else if (action === 'delete') deleteSkill(name);
+  };
+}
+
+function showSkillModal(name) {
+  editingSkillName = name || '';
+  pendingSkillFile = null;
+  const isEdit = !!name;
+  document.getElementById('skill-modal-title').textContent = isEdit ? '编辑技能' : '上传技能';
+  document.getElementById('skill-save-btn').textContent = isEdit ? '保存' : '上传';
+  document.getElementById('skill-upload-section').style.display = isEdit ? 'none' : 'block';
+  document.getElementById('skill-edit-section').style.display = isEdit ? 'block' : 'none';
+  if (isEdit) {
+    document.getElementById('skill-name').value = name;
+    document.getElementById('skill-name').disabled = true;
+    document.getElementById('skill-existing-files').innerHTML = '';
+    fetch(`/api/skills/${encodeURIComponent(name)}`).then(r => r.json()).then(s => {
+      document.getElementById('skill-description').value = s.description || '';
+      document.getElementById('skill-content').value = s.content || '';
+      renderSkillFiles(s);
+    });
+  } else {
+    document.getElementById('skill-file-input').value = '';
+    document.getElementById('skill-file-preview').innerHTML = '';
+  }
+  showModal('skill-modal');
+}
+
+function renderSkillFiles(skill) {
+  const el = document.getElementById('skill-existing-files');
+  const allPaths = [];
+  if (skill.scripts?.length) allPaths.push(...skill.scripts.map(f => `scripts/${f}`));
+  if (skill.references?.length) allPaths.push(...skill.references.map(f => `reference/${f}`));
+  if (allPaths.length === 0) { el.innerHTML = '<span style="color:var(--text-muted)">暂无附属文件</span>'; return; }
+  // 构建树：{ name, children: [...dirs], files: [{name, fullPath}] }
+  const tree = { name: '', children: [], files: [] };
+  for (const p of allPaths) {
+    const parts = p.split('/');
+    let node = tree;
+    for (let i = 0; i < parts.length - 1; i++) {
+      let child = node.children.find(c => c.name === parts[i]);
+      if (!child) { child = { name: parts[i], children: [], files: [] }; node.children.push(child); }
+      node = child;
+    }
+    node.files.push({ name: parts[parts.length - 1], fullPath: p });
+  }
+  const canDelete = skill.category !== 'system';
+  function countAll(node) {
+    return node.files.length + node.children.reduce((s, c) => s + countAll(c), 0);
+  }
+  function renderNode(node, depth) {
+    let html = '';
+    html += renderFiles(node.files, depth);
+    for (const dir of node.children) {
+      html += `<div class="skill-tree-dir" style="padding-left:${depth * 16}px">` +
+        `<span class="skill-tree-arrow">&#9654;</span> <code>${escapeHtml(dir.name)}/</code> <span style="color:var(--text-muted);font-size:11px">(${countAll(dir)})</span></div>`;
+      html += `<div class="skill-tree-children" style="display:none">`;
+      html += renderNode(dir, depth + 1);
+      html += '</div>';
+    }
+    return html;
+  }
+  function renderFiles(files, depth) {
+    return files.map(f =>
+      `<div class="skill-tree-file" style="padding-left:${depth * 16}px">` +
+      `<code>${escapeHtml(f.name)}</code>${canDelete ? ` <button class="btn btn-sm btn-danger" style="padding:0 6px;font-size:11px" data-action="delete-file" data-path="${escapeHtml(f.fullPath)}">删除</button>` : ''}</div>`
+    ).join('');
+  }
+  el.innerHTML = renderNode(tree, 0);
+  el.onclick = (e) => {
+    const dir = e.target.closest('.skill-tree-dir');
+    if (dir) {
+      const children = dir.nextElementSibling;
+      const arrow = dir.querySelector('.skill-tree-arrow');
+      const open = children.style.display === 'none';
+      children.style.display = open ? 'block' : 'none';
+      arrow.style.transform = open ? 'rotate(90deg)' : '';
+      return;
+    }
+    const btn = e.target.closest('[data-action="delete-file"]');
+    if (btn) deleteSkillFile(btn.dataset.path);
+  };
+}
+
+async function uploadSkillFiles() {
+  if (!editingSkillName) return;
+  const input = document.getElementById('skill-upload-input');
+  const subDir = document.getElementById('skill-upload-dir').value;
+  const files = input.files;
+  if (!files.length) return showToast('请选择文件', true);
+  for (const file of files) {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result.split(',')[1];
+      try {
+        const res = await fetch(`/api/skills/${editingSkillName}/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: file.name, subDir, content: base64 }),
+        });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+        showToast(`已上传 ${file.name}`);
+        // 刷新文件列表
+        const s = await (await fetch(`/api/skills/${editingSkillName}`)).json();
+        renderSkillFiles(s);
+      } catch (err) {
+        showToast('上传失败: ' + err.message, true);
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+  input.value = '';
+}
+
+async function deleteSkillFile(filePath) {
+  if (!editingSkillName) return;
+  const ok = await showConfirm(`确定删除文件 <strong>${escapeHtml(filePath)}</strong>？`);
+  if (!ok) return;
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(editingSkillName)}/file`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath }),
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+    showToast('文件已删除');
+    const s = await (await fetch(`/api/skills/${editingSkillName}`)).json();
+    renderSkillFiles(s);
+  } catch (err) {
+    showToast('删除失败: ' + err.message, true);
+  }
+}
+
+function closeSkillModal() {
+  hideModal('skill-modal');
+  editingSkillName = '';
+  pendingSkillFiles = null;
+}
+
+// 技能文件夹选择预览
+document.getElementById('skill-file-input')?.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  const preview = document.getElementById('skill-file-preview');
+  if (!files.length) { pendingSkillFiles = null; preview.innerHTML = ''; return; }
+  // 找到 SKILL.md（可能在子目录中）
+  const skillMd = files.find(f => f.webkitRelativePath.endsWith('/SKILL.md') || f.name === 'SKILL.md');
+  if (!skillMd) {
+    pendingSkillFiles = null;
+    preview.innerHTML = '<div style="color:var(--error);font-size:13px">文件夹中未找到 SKILL.md</div>';
+    return;
+  }
+  // 读取 SKILL.md 解析 frontmatter
+  const text = await skillMd.text();
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  let name = '', desc = '';
+  if (fm) {
+    for (const line of fm[1].split('\n')) {
+      const nm = line.trim().match(/^name:\s*['"]?(.+?)['"]?\s*$/);
+      const dm = line.trim().match(/^description:\s*['"]?(.+?)['"]?\s*$/);
+      if (nm) name = nm[1];
+      if (dm) desc = dm[1];
+    }
+  }
+  if (!name) {
+    pendingSkillFiles = null;
+    preview.innerHTML = '<div style="color:var(--error);font-size:13px">SKILL.md 缺少 name 字段</div>';
+    return;
+  }
+  // 读取所有文件为 base64
+  const prefix = skillMd.webkitRelativePath.split('/')[0] + '/';
+  pendingSkillFiles = await Promise.all(files.map(async f => {
+    const buf = await f.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    return { path: f.webkitRelativePath.replace(prefix, ''), content: btoa(binary) };
+  }));
+  // 预览
+  const fileList = pendingSkillFiles.map(f => `<code>${escapeHtml(f.path)}</code>`).join(' ');
+  preview.innerHTML =
+    `<div style="padding:8px 12px;background:var(--bg-elevated);border-radius:6px;font-size:13px">` +
+    `<div><strong>名称：</strong>${escapeHtml(name)}</div>` +
+    `<div style="color:var(--text-muted)"><strong>描述：</strong>${escapeHtml(desc || '无')}</div>` +
+    `<div style="color:var(--text-muted);font-size:12px;margin-top:4px">文件 (${pendingSkillFiles.length})：${fileList}</div></div>`;
+});
+
+async function saveSkill() {
+  if (!editingSkillName) {
+    // 上传模式
+    if (!pendingSkillFiles) return showToast('请选择技能文件夹', true);
+    try {
+      const res = await fetch('/api/skills/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: pendingSkillFiles }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+      closeSkillModal();
+      await loadSkills();
+      showToast('技能已上传');
+    } catch (err) {
+      showToast('上传失败: ' + err.message, true);
+    }
+    return;
+  }
+  // 编辑模式
+  const name = document.getElementById('skill-name').value.trim();
+  const description = document.getElementById('skill-description').value.trim();
+  const content = document.getElementById('skill-content').value.trim();
+  if (!name || !content) return showToast('名称和内容不能为空', true);
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(editingSkillName)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, content }),
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+    closeSkillModal();
+    await loadSkills();
+    showToast('技能已更新');
+  } catch (err) {
+    showToast('保存失败: ' + err.message, true);
+  }
+}
+
+function editSkill(name) {
+  showSkillModal(name);
+}
+
+async function deleteSkill(name) {
+  const ok = await showConfirm(`确定删除技能 <strong>${escapeHtml(name)}</strong>？`);
+  if (!ok) return;
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+    await loadSkills();
+    showToast('技能已删除');
+  } catch (err) {
+    showToast('删除失败: ' + err.message, true);
+  }
+}
+
+async function viewSkill(name) {
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(name)}`);
+    const s = await res.json();
+    const catColors = { system: 'var(--error)', preset: 'var(--warning)', user: 'var(--success)' };
+    const catLabels = { system: '系统级', preset: '预设', user: '用户' };
+    document.getElementById('skill-view-title').textContent = s.name;
+    const badge = document.getElementById('skill-view-badge');
+    badge.textContent = catLabels[s.category] || s.category;
+    badge.style.background = catColors[s.category] || 'var(--text-muted)';
+    badge.style.color = '#fff';
+    document.getElementById('skill-view-desc').textContent = s.description || '';
+    // 显示附属文件
+    const filesEl = document.getElementById('skill-view-files');
+    const files = [];
+    if (s.scripts?.length) files.push(...s.scripts.map(f => `<code>scripts/${escapeHtml(f)}</code>`));
+    if (s.references?.length) files.push(...s.references.map(f => `<code>reference/${escapeHtml(f)}</code>`));
+    filesEl.innerHTML = files.length > 0 ? `<div style="font-size:12px;color:var(--text-muted)">附属文件: ${files.join(' ')}</div>` : '';
+    // 内容（markdown 渲染）
+    const rawHtml = typeof marked !== 'undefined' ? marked.parse(s.content) : formatAssistantContent(s.content);
+    const contentHtml = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
+    document.getElementById('skill-view-content').innerHTML = contentHtml;
+    showModal('skill-view-modal');
+  } catch (err) {
+    showToast('加载失败: ' + err.message, true);
+  }
+}
+
+function closeSkillViewModal() {
+  hideModal('skill-view-modal');
+}
+
+// ==================== MCP 服务管理 ====================
+
+let mcpServersData = [];
+let editingMcpName = '';
+
+async function loadMcpServers() {
+  try {
+    const res = await fetch('/api/mcp/servers');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    mcpServersData = await res.json();
+    renderMcpServers();
+    const navBadge = document.getElementById('nav-mcp-count');
+    if (navBadge) navBadge.textContent = mcpServersData.length;
+  } catch (err) {
+    document.getElementById('mcp-servers-container').innerHTML = `<div style="color:var(--error);padding:20px">加载失败: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderMcpServers() {
+  const container = document.getElementById('mcp-servers-container');
+  if (!mcpServersData.length) {
+    container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom:12px;opacity:0.4"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path><path d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12z"></path><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"></path></svg>
+      <p>暂无 MCP 服务配置</p>
+      <p style="font-size:13px">点击上方「添加 MCP 服务」开始</p>
+    </div>`;
+    return;
+  }
+
+  container.innerHTML = `<div class="skills-grid">${mcpServersData.map(s => {
+    const statusColors = { connected: 'var(--success)', connecting: 'var(--warning)', error: 'var(--error)', disconnected: 'var(--text-muted)' };
+    const statusTexts = { connected: '已连接', connecting: '连接中...', error: '错误', disconnected: '已断开' };
+    const color = statusColors[s.status] || 'var(--text-muted)';
+    const statusText = statusTexts[s.status] || s.status;
+    const transportBadge = s.transport === 'http' ? '<span class="skill-badge" style="background:var(--accent-subtle);color:var(--accent);font-size:11px;padding:1px 6px">HTTP</span>' : '<span class="skill-badge" style="background:var(--success-subtle);color:var(--success);font-size:11px;padding:1px 6px">stdio</span>';
+
+    return `<div class="skill-card" data-mcp-name="${escapeHtml(s.name)}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0"></span>
+          <strong style="font-size:15px">${escapeHtml(s.name)}</strong>
+          ${transportBadge}
+          ${!s.enabled ? '<span class="skill-badge" style="background:var(--text-muted);color:#fff;font-size:11px;padding:1px 6px">已禁用</span>' : ''}
+        </div>
+        <span style="font-size:12px;color:${color}">${statusText}</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+        ${s.transport === 'stdio' ? escapeHtml(s.command || '') : escapeHtml(s.url || '')}
+        ${s.tools ? ` · ${s.tools.length} 个工具` : ''}
+        ${s.lastError ? `<br><span style="color:var(--error)">${escapeHtml(s.lastError)}</span>` : ''}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${s.status === 'connected' ? `<button class="btn btn-sm" onclick="disconnectMcpServer('${escapeAttr(s.name)}')">断开</button>` : `<button class="btn btn-sm btn-primary" onclick="connectMcpServer('${escapeAttr(s.name)}')">连接</button>`}
+        ${s.tools && s.tools.length ? `<button class="btn btn-sm" onclick="viewMcpTools('${escapeAttr(s.name)}')">查看工具</button>` : ''}
+        <button class="btn btn-sm" onclick="editMcpServer('${escapeAttr(s.name)}')">编辑</button>
+        <button class="btn btn-sm" style="color:var(--error)" onclick="deleteMcpServer('${escapeAttr(s.name)}')">删除</button>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function toggleMcpTransport() {
+  const val = document.querySelector('input[name="mcp-transport"]:checked').value;
+  document.getElementById('mcp-stdio-fields').style.display = val === 'stdio' ? '' : 'none';
+  document.getElementById('mcp-http-fields').style.display = val === 'http' ? '' : 'none';
+}
+
+function addMcpEnvRow(key, value) {
+  const editor = document.getElementById('mcp-env-editor');
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;margin-bottom:4px;align-items:center';
+  row.innerHTML = `<input type="text" placeholder="KEY" style="flex:1;font-size:12px;padding:4px 8px" class="mcp-env-key" value="${escapeAttr(key || '')}"> <input type="text" placeholder="value" style="flex:1;font-size:12px;padding:4px 8px" class="mcp-env-val" value="${escapeAttr(value || '')}"> <button class="btn btn-sm" style="color:var(--error);padding:2px 6px" onclick="this.parentElement.remove()">&times;</button>`;
+  editor.appendChild(row);
+}
+
+function addMcpHeaderRow(key, value) {
+  const editor = document.getElementById('mcp-headers-editor');
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;margin-bottom:4px;align-items:center';
+  row.innerHTML = `<input type="text" placeholder="Header-Name" style="flex:1;font-size:12px;padding:4px 8px" class="mcp-header-key" value="${escapeAttr(key || '')}"> <input type="text" placeholder="value" style="flex:1;font-size:12px;padding:4px 8px" class="mcp-header-val" value="${escapeAttr(value || '')}"> <button class="btn btn-sm" style="color:var(--error);padding:2px 6px" onclick="this.parentElement.remove()">&times;</button>`;
+  editor.appendChild(row);
+}
+
+function collectMcpKvPairs(containerId, keyClass, valClass) {
+  const result = {};
+  document.querySelectorAll(`#${containerId} .${keyClass}`).forEach((input, i) => {
+    const key = input.value.trim();
+    const val = input.closest('div').querySelector(`.${valClass}`).value;
+    if (key) result[key] = val;
+  });
+  return result;
+}
+
+function showMcpModal(name) {
+  editingMcpName = name || '';
+  document.getElementById('mcp-modal-title').textContent = name ? '编辑 MCP 服务' : '添加 MCP 服务';
+  document.getElementById('mcp-name').value = name || '';
+  document.getElementById('mcp-name').disabled = !!name;
+  document.getElementById('mcp-command').value = '';
+  document.getElementById('mcp-args').value = '';
+  document.getElementById('mcp-url').value = '';
+  document.getElementById('mcp-enabled').checked = true;
+  document.getElementById('mcp-env-editor').innerHTML = '';
+  document.getElementById('mcp-headers-editor').innerHTML = '';
+  document.querySelector('input[name="mcp-transport"][value="stdio"]').checked = true;
+  toggleMcpTransport();
+
+  if (name) {
+    const s = mcpServersData.find(x => x.name === name);
+    if (s) {
+      document.getElementById('mcp-enabled').checked = s.enabled !== false;
+      if (s.transport === 'http') {
+        document.querySelector('input[name="mcp-transport"][value="http"]').checked = true;
+        toggleMcpTransport();
+        // 从 config 获取 url/headers
+        fetch(`/api/mcp/servers/${encodeURIComponent(name)}`).then(r => r.json()).then(detail => {
+          if (detail.config?.url) document.getElementById('mcp-url').value = detail.config.url;
+          if (detail.config?.headers) {
+            Object.entries(detail.config.headers).forEach(([k, v]) => addMcpHeaderRow(k, v));
+          }
+        });
+      } else {
+        fetch(`/api/mcp/servers/${encodeURIComponent(name)}`).then(r => r.json()).then(detail => {
+          if (detail.config?.command) document.getElementById('mcp-command').value = detail.config.command;
+          if (detail.config?.args) document.getElementById('mcp-args').value = (Array.isArray(detail.config.args) ? detail.config.args : [detail.config.args]).join(' ');
+          if (detail.config?.env) {
+            Object.entries(detail.config.env).forEach(([k, v]) => addMcpEnvRow(k, v));
+          }
+        });
+      }
+    }
+  }
+  showModal('mcp-modal');
+}
+
+function closeMcpModal() {
+  hideModal('mcp-modal');
+  editingMcpName = '';
+}
+
+async function saveMcpServer() {
+  const name = document.getElementById('mcp-name').value.trim();
+  if (!name) return showToast('请输入服务名称', true);
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) return showToast('名称只能包含英文、数字、连字符、下划线', true);
+
+  const transport = document.querySelector('input[name="mcp-transport"]:checked').value;
+  const enabled = document.getElementById('mcp-enabled').checked;
+  const body = { name, enabled };
+
+  if (transport === 'stdio') {
+    body.command = document.getElementById('mcp-command').value.trim();
+    if (!body.command) return showToast('请输入命令', true);
+    const argsStr = document.getElementById('mcp-args').value.trim();
+    if (argsStr) body.args = argsStr.split(/\s+/);
+    const env = collectMcpKvPairs('mcp-env-editor', 'mcp-env-key', 'mcp-env-val');
+    if (Object.keys(env).length) body.env = env;
+  } else {
+    body.url = document.getElementById('mcp-url').value.trim();
+    if (!body.url) return showToast('请输入 URL', true);
+    const headers = collectMcpKvPairs('mcp-headers-editor', 'mcp-header-key', 'mcp-header-val');
+    if (Object.keys(headers).length) body.headers = headers;
+  }
+
+  try {
+    const url = editingMcpName ? `/api/mcp/servers/${encodeURIComponent(editingMcpName)}` : '/api/mcp/servers';
+    const method = editingMcpName ? 'PUT' : 'POST';
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) return showToast(data.error || '操作失败', true);
+    showToast(editingMcpName ? '已更新' : '已添加');
+    closeMcpModal();
+    loadMcpServers();
+  } catch (err) {
+    showToast('操作失败: ' + err.message, true);
+  }
+}
+
+async function deleteMcpServer(name) {
+  if (!await showConfirm(`确定删除 MCP 服务「${escapeHtml(name)}」？`)) return;
+  try {
+    const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (!res.ok) { const d = await res.json(); return showToast(d.error || '删除失败', true); }
+    showToast('已删除');
+    loadMcpServers();
+  } catch (err) {
+    showToast('删除失败: ' + err.message, true);
+  }
+}
+
+async function connectMcpServer(name) {
+  try {
+    const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/connect`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) return showToast(data.error || '连接失败', true);
+    showToast(`已连接 ${name}`);
+    loadMcpServers();
+  } catch (err) {
+    showToast('连接失败: ' + err.message, true);
+  }
+}
+
+async function disconnectMcpServer(name) {
+  try {
+    await fetch(`/api/mcp/servers/${encodeURIComponent(name)}/disconnect`, { method: 'POST' });
+    showToast(`已断开 ${name}`);
+    loadMcpServers();
+  } catch (err) {
+    showToast('断开失败: ' + err.message, true);
+  }
+}
+
+function editMcpServer(name) {
+  showMcpModal(name);
+}
+
+async function viewMcpTools(name) {
+  try {
+    const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`);
+    const data = await res.json();
+    const tools = data.tools || [];
+    document.getElementById('mcp-tools-title').textContent = `${name} 的工具列表`;
+    const container = document.getElementById('mcp-tools-list');
+    if (!tools.length) {
+      container.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px">暂无工具</div>';
+    } else {
+      container.innerHTML = tools.map(t => `<div style="padding:10px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px"><code>mcp__${escapeHtml(sanitizeName(name))}__${escapeHtml(t.name)}</code></div>
+        <div style="font-size:12px;color:var(--text-muted)">${escapeHtml(t.description || '')}</div>
+      </div>`).join('');
+    }
+    showModal('mcp-tools-modal');
+  } catch (err) {
+    showToast('加载工具失败: ' + err.message, true);
+  }
+}
+
+function closeMcpToolsModal() {
+  hideModal('mcp-tools-modal');
+}
+
+function sanitizeName(name) {
+  return name.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/-/g, '_');
+}
+
+function updateMcpServerStatus(serverName, statusData) {
+  const idx = mcpServersData.findIndex(s => s.name === serverName);
+  if (idx >= 0) {
+    Object.assign(mcpServersData[idx], statusData);
+    if (currentPage === 'mcp-servers') renderMcpServers();
+  }
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 init();

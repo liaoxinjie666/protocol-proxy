@@ -51,6 +51,16 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
           <span>系统日志</span>
         </a>
+        <a href="#" class="nav-item" data-page="skills">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+          <span>技能管理</span>
+          <span class="nav-badge" id="nav-skill-count">0</span>
+        </a>
+        <a href="#" class="nav-item" data-page="mcp-servers">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path><path d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12z"></path><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"></path></svg>
+          <span>MCP 服务</span>
+          <span class="nav-badge" id="nav-mcp-count">0</span>
+        </a>
         <a href="#" class="nav-item" data-page="settings">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 5 15.34a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 20.39 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
           <span>设置</span>
@@ -378,14 +388,36 @@
             </div>
             <button class="btn btn-sm context-compress-btn" id="context-compress-btn" onclick="compressAssistantContext()" style="display:none">压缩</button>
           </div>
-          <div class="assistant-input-area">
-            <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？" rows="1"></textarea>
+          <div class="skill-panel" id="skill-panel" style="display:none">
+            <div class="skill-panel-header"><span>可用技能</span><button class="btn btn-sm" onclick="toggleSkillPanel()">收起</button></div>
+            <div class="skill-panel-list" id="skill-panel-list"></div>
+          </div>
+          <div class="assistant-input-area" style="position:relative">
+            <div class="skill-autocomplete" id="skill-autocomplete"></div>
+            <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？ 输入 / 触发技能" rows="1"></textarea>
+            <button class="btn" onclick="toggleSkillPanel()" title="查看可用技能" style="padding:0 10px;font-size:16px">⚡</button>
             <button class="btn btn-primary" id="assistant-send-btn" onclick="sendAssistantMessage()" disabled>发送</button>
           </div>
         </div>
       </div>
 
       <!-- ==================== Settings Page ==================== -->
+      <div class="page" id="page-skills">
+        <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+          <h2 style="margin:0">技能管理</h2>
+          <button class="btn btn-primary" onclick="showSkillModal()">上传技能</button>
+        </div>
+        <div id="skills-container"></div>
+      </div>
+
+      <div class="page" id="page-mcp-servers">
+        <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+          <h2 style="margin:0">MCP 服务管理</h2>
+          <button class="btn btn-primary" onclick="showMcpModal()">添加 MCP 服务</button>
+        </div>
+        <div id="mcp-servers-container"></div>
+      </div>
+
       <div class="page" id="page-settings">
         <div class="settings-grid">
           <div class="panel">
@@ -698,9 +730,158 @@
     </div>
   </div>
 
+  <!-- Skill Modal -->
+  <div class="modal-overlay" id="skill-modal">
+    <div class="modal" style="max-width:600px">
+      <div class="modal-header">
+        <h3 id="skill-modal-title">新建技能</h3>
+        <button class="modal-close" onclick="closeSkillModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- 上传新技能 -->
+        <div id="skill-upload-section">
+          <div class="form-group">
+            <label>选择技能文件夹 <span style="color:var(--text-muted)">(包含 SKILL.md)</span></label>
+            <input type="file" id="skill-file-input" webkitdirectory>
+            <div id="skill-file-preview" style="margin-top:12px"></div>
+          </div>
+        </div>
+        <!-- 编辑已有技能 -->
+        <div id="skill-edit-section" style="display:none">
+          <div class="form-group">
+            <label>名称 <span style="color:var(--text-muted)">(英文、数字、连字符)</span></label>
+            <input type="text" id="skill-name" placeholder="my-skill" pattern="[a-zA-Z0-9_-]+">
+          </div>
+          <div class="form-group">
+            <label>描述</label>
+            <input type="text" id="skill-description" placeholder="简短描述这个技能的用途">
+          </div>
+          <div class="form-group">
+            <label>指令内容 <span style="color:var(--text-muted)">(Markdown)</span></label>
+            <textarea id="skill-content" rows="10" placeholder="# 技能标题&#10;&#10;在此编写技能指令..."></textarea>
+          </div>
+          <div class="form-group" id="skill-files-section">
+            <label>附属文件</label>
+            <div class="skill-file-upload-row">
+              <select id="skill-upload-dir"><option value="scripts">scripts/</option><option value="reference">reference/</option></select>
+              <input type="file" id="skill-upload-input" multiple>
+              <button class="btn btn-sm" onclick="uploadSkillFiles()">上传</button>
+            </div>
+            <div id="skill-existing-files" style="margin-top:8px;font-size:12px"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeSkillModal()">取消</button>
+        <button class="btn btn-primary" id="skill-save-btn" onclick="saveSkill()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Skill View Modal -->
+  <div class="modal-overlay" id="skill-view-modal">
+    <div class="modal" style="max-width:700px;max-height:80vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <h3 id="skill-view-title">查看技能</h3>
+        <button class="modal-close" onclick="closeSkillViewModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1">
+        <div style="margin-bottom:12px">
+          <span class="skill-badge" id="skill-view-badge" style="font-size:12px;padding:2px 8px;border-radius:4px"></span>
+          <span style="color:var(--text-muted);font-size:13px;margin-left:8px" id="skill-view-desc"></span>
+        </div>
+        <div id="skill-view-files" style="margin-bottom:12px"></div>
+        <div class="skill-view-content" id="skill-view-content"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeSkillViewModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP Server Modal -->
+  <div class="modal-overlay" id="mcp-modal">
+    <div class="modal" style="max-width:550px">
+      <div class="modal-header">
+        <h3 id="mcp-modal-title">添加 MCP 服务</h3>
+        <button class="modal-close" onclick="closeMcpModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>服务名称 <span style="color:var(--text-muted)">(英文、数字、连字符)</span></label>
+          <input type="text" id="mcp-name" placeholder="my-mcp-server" pattern="[a-zA-Z0-9_-]+">
+        </div>
+        <div class="form-group">
+          <label>传输方式</label>
+          <div style="display:flex;gap:16px;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="mcp-transport" value="stdio" checked onchange="toggleMcpTransport()"> 本地进程 (stdio)
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="mcp-transport" value="http" onchange="toggleMcpTransport()"> 远程 HTTP
+            </label>
+          </div>
+        </div>
+        <div id="mcp-stdio-fields">
+          <div class="form-group">
+            <label>命令</label>
+            <input type="text" id="mcp-command" placeholder="npx">
+          </div>
+          <div class="form-group">
+            <label>参数 <span style="color:var(--text-muted)">(空格分隔)</span></label>
+            <input type="text" id="mcp-args" placeholder="-y @modelcontextprotocol/server-filesystem /tmp">
+          </div>
+          <div class="form-group">
+            <label>环境变量 <span style="color:var(--text-muted)">(可选)</span></label>
+            <div id="mcp-env-editor"></div>
+            <button class="btn btn-sm" style="margin-top:6px" onclick="addMcpEnvRow()">+ 添加</button>
+          </div>
+        </div>
+        <div id="mcp-http-fields" style="display:none">
+          <div class="form-group">
+            <label>URL</label>
+            <input type="text" id="mcp-url" placeholder="https://example.com/mcp">
+          </div>
+          <div class="form-group">
+            <label>请求头 <span style="color:var(--text-muted)">(可选)</span></label>
+            <div id="mcp-headers-editor"></div>
+            <button class="btn btn-sm" style="margin-top:6px" onclick="addMcpHeaderRow()">+ 添加</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="mcp-enabled" checked> 启用
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeMcpModal()">取消</button>
+        <button class="btn btn-primary" onclick="saveMcpServer()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP Tools Modal -->
+  <div class="modal-overlay" id="mcp-tools-modal">
+    <div class="modal" style="max-width:600px;max-height:70vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <h3 id="mcp-tools-title">MCP 工具列表</h3>
+        <button class="modal-close" onclick="closeMcpToolsModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1">
+        <div id="mcp-tools-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeMcpToolsModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div class="toast" id="toast" style="display:none"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

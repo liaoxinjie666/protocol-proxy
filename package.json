@@ -26,6 +26,7 @@
     "build": "pkg . --out-path=dist"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "ws": "^8.20.1"
