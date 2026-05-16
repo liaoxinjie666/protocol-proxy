@@ -1588,6 +1588,12 @@ async function init() {
     document.getElementById('provider-azure-row').style.display = this.value === 'openai' ? 'grid' : 'none';
   });
 
+  // 加载版本号
+  fetch('/api/health').then(r => r.json()).then(d => {
+    const el = document.getElementById('app-version');
+    if (el && d.version) el.textContent = 'v' + d.version;
+  }).catch(() => {});
+
   await Promise.all([loadProxies(), loadProviders(), loadKeyHealth()]);
   loadStats();
   loadLogs();

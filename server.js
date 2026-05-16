@@ -2905,7 +2905,7 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
 
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
-      const systemPrompt = promptBuilder.buildSystemPrompt({ toolDefinitions: TOOL_DEFINITIONS, skillStore, mcpClient });
+      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient });
       const buildMessages = () => {
         const msgs = [{ role: 'system', content: systemPrompt }];
         if (activeSkill) {
