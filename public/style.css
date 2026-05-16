@@ -573,6 +573,16 @@ body {
   border-color: var(--accent-hover);
 }
 
+.btn-stop {
+  background: var(--danger, #e74c3c);
+  border-color: var(--danger, #e74c3c);
+  color: #fff;
+}
+.btn-stop:hover {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+
 .btn-danger {
   background: var(--error);
   border-color: var(--error);
@@ -1876,7 +1886,7 @@ body {
   gap: 8px;
 }
 .conversation-dropdown-item:hover {
-  background: var(--bg-hover);
+  background: var(--bg-surface-hover);
 }
 .conversation-dropdown-item.active {
   background: var(--bg-selected);
@@ -2369,7 +2379,7 @@ body {
   font-size: 13px;
 }
 .skill-panel-item:hover {
-  background: var(--bg-hover);
+  background: var(--bg-surface-hover);
 }
 .skill-panel-badge {
   font-size: 10px;
@@ -2414,7 +2424,12 @@ body {
   font-size: 13px;
 }
 .skill-ac-item:hover {
-  background: var(--bg-hover);
+  background: var(--bg-surface-hover);
+}
+.skill-ac-item.active {
+  background: var(--bg-surface-hover);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 .skill-ac-item strong {
   color: var(--accent);
@@ -2564,5 +2579,21 @@ body {
   transition: background 0.15s;
 }
 #mcp-tools-list > div:hover {
-  background: var(--bg-hover);
+  background: var(--bg-surface-hover);
 }
+
+/* Help panel */
+.help-panel { font-size: 13px; }
+.help-table { width: 100%; border-collapse: collapse; margin: 4px 0 8px; }
+.help-table td { padding: 3px 8px; }
+.help-table code { background: var(--bg-secondary); padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+
+/* Model picker */
+.model-picker { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; outline: none; }
+.model-pick-item {
+  padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  background: var(--bg-secondary); transition: background 0.15s; font-size: 13px;
+}
+.model-pick-item:hover { background: var(--bg-surface-hover); }
+.model-pick-item.active { background: var(--bg-surface-hover); outline: 1px solid var(--accent); outline-offset: -1px; }
+.model-pick-item.selected { background: var(--accent-bg, rgba(88,166,255,0.15)); color: var(--accent); font-weight: 500; }

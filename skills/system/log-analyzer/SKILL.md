@@ -1,6 +1,7 @@
 ---
 name: log-analyzer
 description: 分析系统日志，识别错误模式和异常趋势
+trigger: 用户要求分析日志、查找错误、排查问题趋势、日志中有什么异常
 ---
 
 # 日志分析

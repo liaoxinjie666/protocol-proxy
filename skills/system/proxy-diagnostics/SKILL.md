@@ -1,6 +1,7 @@
 ---
 name: proxy-diagnostics
 description: 深入诊断代理连接问题和转发失败
+trigger: 用户报告代理连接失败、转发异常、响应慢、请求超时
 ---
 
 # 代理诊断

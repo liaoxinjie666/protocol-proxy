@@ -1,6 +1,7 @@
 ---
 name: config-audit
 description: 审计系统配置，检查安全性和最佳实践
+trigger: 用户要求检查配置安全性、审计配置、检查最佳实践
 ---
 
 # 配置审计

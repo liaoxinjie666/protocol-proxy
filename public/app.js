@@ -31,6 +31,16 @@ let contextMaxTokens = 200000;
 let contextPercent = 0;
 let contextMessages = 0;
 let assistantMaxRounds = 10;
+let skillAcIndex = -1; // 自动补全高亮索引
+
+// ---------- Slash Commands ----------
+const SLASH_COMMANDS = [
+  { name: 'help', description: '显示帮助信息' },
+  { name: 'clear', description: '清空当前对话' },
+  { name: 'new', description: '开启新会话' },
+  { name: 'compact', description: '压缩对话历史' },
+  { name: 'model', description: '切换模型' },
+];
 
 // ---------- Theme ----------
 const THEMES = [
@@ -1627,9 +1637,33 @@ async function init() {
       updateSkillAutocomplete(this.value);
     });
     assistantInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      const ac = document.getElementById('skill-autocomplete');
+      const isOpen = ac && ac.style.display === 'block';
+      const items = isOpen ? ac.querySelectorAll('.skill-ac-item') : [];
+
+      if (e.key === 'ArrowDown' && isOpen) {
         e.preventDefault();
-        sendAssistantMessage();
+        skillAcIndex = skillAcIndex < items.length - 1 ? skillAcIndex + 1 : 0;
+        highlightAcItem(items, skillAcIndex);
+      } else if (e.key === 'ArrowUp' && isOpen) {
+        e.preventDefault();
+        skillAcIndex = skillAcIndex > 0 ? skillAcIndex - 1 : items.length - 1;
+        highlightAcItem(items, skillAcIndex);
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        if (isOpen && skillAcIndex >= 0 && items[skillAcIndex]) {
+          e.preventDefault();
+          selectSkill(items[skillAcIndex].dataset.name);
+        } else {
+          e.preventDefault();
+          sendAssistantMessage();
+        }
+      } else if (e.key === 'Escape') {
+        if (isOpen) {
+          ac.style.display = 'none';
+          skillAcIndex = -1;
+        } else if (assistantAbortController) {
+          assistantAbortController.abort();
+        }
       }
     });
   }
@@ -1677,11 +1711,41 @@ function populateAssistantProxySelect() {
   }
 }
 
+function setSendBtnState(running) {
+  const btn = document.getElementById('assistant-send-btn');
+  if (!btn) return;
+  if (running) {
+    btn.textContent = '停止';
+    btn.classList.add('btn-stop');
+    btn.onclick = () => { if (assistantAbortController) assistantAbortController.abort(); };
+  } else {
+    btn.textContent = '发送';
+    btn.classList.remove('btn-stop');
+    btn.onclick = sendAssistantMessage;
+  }
+}
+
 async function sendAssistantMessage() {
   if (assistantAbortController) return; // 已有请求进行中，防连点
   const input = document.getElementById('assistant-input');
   const text = input.value.trim();
-  if (!text || !assistantProxyId) return;
+  if (!text) return;
+
+  // 客户端命令拦截（在代理检查之前，/help 等命令不需要代理）
+  if (text.startsWith('/')) {
+    const cmdMatch = text.match(/^\/(\w+)(?:\s+(.*))?$/);
+    if (cmdMatch) {
+      const cmd = cmdMatch[1].toLowerCase();
+      const handled = handleSlashCommand(cmd, cmdMatch[2]);
+      if (handled) {
+        input.value = '';
+        input.style.height = 'auto';
+        return;
+      }
+    }
+  }
+
+  if (!assistantProxyId) return;
 
   addAssistantMessage('user', text);
   input.value = '';
@@ -1696,6 +1760,7 @@ async function sendAssistantMessage() {
   const thinkingId = addAssistantMessage('thinking', '');
   const myController = new AbortController();
   assistantAbortController = myController;
+  setSendBtnState(true);
 
   try {
     const providerVal = document.getElementById('assistant-provider-select')?.value || '';
@@ -1846,6 +1911,7 @@ async function sendAssistantMessage() {
     }
   } finally {
     if (assistantAbortController === myController) assistantAbortController = null;
+    setSendBtnState(false);
   }
 }
 
@@ -2221,6 +2287,169 @@ function applyCompression(data) {
   }
 }
 
+// ========== 斜杠命令 ==========
+
+function handleSlashCommand(cmd, args) {
+  switch (cmd) {
+    case 'help': showHelp(); return true;
+    case 'clear': clearAssistantChat(); return true;
+    case 'new': switchConversation(''); return true;
+    case 'compact': compactConversation(); return true;
+    case 'model': showModelPicker(); return true;
+    default: return false;
+  }
+}
+
+function showHelp() {
+  const cmdList = SLASH_COMMANDS.map(c => `<tr><td><code>/${escapeHtml(c.name)}</code></td><td>${escapeHtml(c.description)}</td></tr>`).join('');
+  const skillList = assistantSkills.length
+    ? assistantSkills.map(s => {
+      const desc = (s.description || '').length > 30 ? s.description.slice(0, 30) + '...' : (s.description || '');
+      return `<tr><td><code>/${escapeHtml(s.name)}</code></td><td>${escapeHtml(desc)}</td></tr>`;
+    }).join('')
+    : '<tr><td colspan="2" style="color:var(--text-muted)">暂无技能</td></tr>';
+  const html = `<div class="help-panel">
+    <strong>命令</strong>
+    <table class="help-table">${cmdList}</table>
+    <strong style="margin-top:12px;display:block">技能</strong>
+    <table class="help-table">${skillList}</table>
+  </div>`;
+  const id = addAssistantMessage('assistant', '');
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+async function compactConversation() {
+  if (!assistantConversationId) {
+    addAssistantMessage('assistant', '当前无对话可压缩。请先发送消息创建对话。');
+    return;
+  }
+  if (!assistantProxyId) {
+    addAssistantMessage('assistant', '请先选择代理。');
+    return;
+  }
+  const msgId = addAssistantMessage('assistant', '正在压缩对话...');
+  try {
+    const res = await fetch('/api/assistant/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proxyId: assistantProxyId, conversationId: assistantConversationId, message: '', compress: true,
+        ...(document.getElementById('assistant-provider-select')?.value && { providerId: document.getElementById('assistant-provider-select').value }),
+        ...(document.getElementById('assistant-model-select')?.value && { model: document.getElementById('assistant-model-select').value }),
+      }),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+    let summary = null;
+    let removedCount = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith('event: ')) { currentEvent = trimmed.slice(7); continue; }
+        if (!trimmed.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(trimmed.slice(6)); } catch { continue; }
+        if (currentEvent === 'compressed') {
+          if (data.summary) {
+            summary = data.summary;
+            removedCount = data.removedCount;
+            applyCompression(data);
+          }
+        }
+        if (currentEvent === 'context') {
+          contextTokens = data.tokens;
+          contextMaxTokens = data.maxTokens;
+          contextPercent = data.percent;
+          contextMessages = data.messages;
+          updateContextBar();
+        }
+      }
+    }
+    if (summary) {
+      updateAssistantMessage(msgId, `已压缩 ${removedCount} 条消息。\n\n**摘要：**\n${summary}`);
+    } else {
+      updateAssistantMessage(msgId, '无需压缩，对话内容较少。');
+    }
+  } catch (err) {
+    updateAssistantMessage(msgId, `压缩失败: ${err.message}`);
+  }
+}
+
+function showModelPicker() {
+  const select = document.getElementById('assistant-model-select');
+  if (!select || select.options.length === 0) {
+    addAssistantMessage('assistant', '当前无可用模型。请先选择代理和供应商。');
+    return;
+  }
+  const currentVal = select.value;
+  const models = Array.from(select.options).map(o => ({
+    value: o.value, label: o.textContent, selected: o.value === currentVal,
+  }));
+  const pickerId = addAssistantMessage('assistant', '');
+  const items = models.map((m, i) =>
+    `<div class="model-pick-item${m.selected ? ' selected' : ''}" data-model="${escapeHtml(m.value)}" data-index="${i}">${escapeHtml(m.label)}${m.selected ? ' (当前)' : ''}</div>`
+  ).join('');
+  const el = document.getElementById(pickerId);
+  if (!el) return;
+
+  el.innerHTML = `<strong>选择模型</strong><div class="model-picker" tabindex="0">${items}</div>`;
+  const picker = el.querySelector('.model-picker');
+  let activeIdx = models.findIndex(m => m.selected);
+  if (activeIdx < 0) activeIdx = 0;
+
+  function highlight(idx) {
+    const all = picker.querySelectorAll('.model-pick-item');
+    all.forEach((item, i) => item.classList.toggle('active', i === idx));
+    if (all[idx]) all[idx].scrollIntoView({ block: 'nearest' });
+  }
+
+  function choose(idx) {
+    const model = models[idx]?.value;
+    if (!model) return;
+    select.value = model;
+    saveAssistantSelection();
+    const label = models[idx].label;
+    el.innerHTML = `已切换到 <strong>${escapeHtml(label)}</strong>`;
+    document.getElementById('assistant-input')?.focus();
+  }
+
+  highlight(activeIdx);
+  picker.focus();
+
+  picker.onkeydown = (e) => {
+    const all = picker.querySelectorAll('.model-pick-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIdx = activeIdx < all.length - 1 ? activeIdx + 1 : 0;
+      highlight(activeIdx);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIdx = activeIdx > 0 ? activeIdx - 1 : all.length - 1;
+      highlight(activeIdx);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      choose(activeIdx);
+    } else if (e.key === 'Escape') {
+      document.getElementById('assistant-input')?.focus();
+    }
+  };
+
+  picker.onclick = (e) => {
+    const item = e.target.closest('.model-pick-item');
+    if (!item) return;
+    choose(parseInt(item.dataset.index));
+  };
+}
+
 // 加载代理的候选供应商列表
 async function loadProxyProviders(proxyId) {
   assistantProviderId = '';
@@ -2359,18 +2588,26 @@ function updateSkillAutocomplete(text) {
   if (!ac) return;
   // 只在输入以 / 开头且没有空格（还没输入参数）时显示
   const match = text.match(/^\/([a-zA-Z0-9_-]*)$/);
-  if (!match) { ac.style.display = 'none'; return; }
+  if (!match) { ac.style.display = 'none'; skillAcIndex = -1; return; }
   const query = match[1].toLowerCase();
-  const filtered = assistantSkills.filter(s => s.name.toLowerCase().includes(query));
-  if (filtered.length === 0) { ac.style.display = 'none'; return; }
-  ac.innerHTML = filtered.map(s =>
-    `<div class="skill-ac-item" data-name="${escapeHtml(s.name)}"><strong>/${escapeHtml(s.name)}</strong><span class="skill-ac-desc">${escapeHtml(s.description || '')}</span></div>`
+  const cmdItems = SLASH_COMMANDS.filter(c => c.name.includes(query)).map(c => ({ name: c.name, description: c.description, isCommand: true }));
+  const skillItems = assistantSkills.filter(s => s.name.toLowerCase().includes(query)).map(s => ({ name: s.name, description: s.description || '', isCommand: false }));
+  const filtered = [...cmdItems, ...skillItems];
+  if (filtered.length === 0) { ac.style.display = 'none'; skillAcIndex = -1; return; }
+  skillAcIndex = -1;
+  ac.innerHTML = filtered.map((s, i) =>
+    `<div class="skill-ac-item" data-name="${escapeHtml(s.name)}" data-index="${i}"><strong>/${escapeHtml(s.name)}</strong><span class="skill-ac-desc">${s.isCommand ? '[命令] ' : ''}${escapeHtml(s.description)}</span></div>`
   ).join('');
   ac.style.display = 'block';
   ac.onclick = (e) => {
     const item = e.target.closest('[data-name]');
     if (item) selectSkill(item.dataset.name);
   };
+}
+
+function highlightAcItem(items, index) {
+  items.forEach((item, i) => item.classList.toggle('active', i === index));
+  if (items[index]) items[index].scrollIntoView({ block: 'nearest' });
 }
 
 function selectSkill(name) {
@@ -2453,10 +2690,12 @@ function showSkillModal(name) {
     document.getElementById('skill-existing-files').innerHTML = '';
     fetch(`/api/skills/${encodeURIComponent(name)}`).then(r => r.json()).then(s => {
       document.getElementById('skill-description').value = s.description || '';
+      document.getElementById('skill-trigger').value = s.trigger || '';
       document.getElementById('skill-content').value = s.content || '';
       renderSkillFiles(s);
     });
   } else {
+    document.getElementById('skill-trigger').value = '';
     document.getElementById('skill-file-input').value = '';
     document.getElementById('skill-file-preview').innerHTML = '';
   }
@@ -2643,13 +2882,14 @@ async function saveSkill() {
   // 编辑模式
   const name = document.getElementById('skill-name').value.trim();
   const description = document.getElementById('skill-description').value.trim();
+  const trigger = document.getElementById('skill-trigger').value.trim();
   const content = document.getElementById('skill-content').value.trim();
   if (!name || !content) return showToast('名称和内容不能为空', true);
   try {
     const res = await fetch(`/api/skills/${encodeURIComponent(editingSkillName)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, content }),
+      body: JSON.stringify({ name, description, trigger, content }),
     });
     if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
     closeSkillModal();

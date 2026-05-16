@@ -916,12 +916,13 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
       type: 'function',
       function: {
         name: 'create_skill',
-        description: '创建新技能。技能是预定义的指令模板，用户可通过 /技能名 触发。',
+        description: '创建新技能。技能是预定义的指令模板，用户可通过 /技能名 触发，也可由模型根据触发条件自主调用。',
         parameters: {
           type: 'object',
           properties: {
             name: { type: 'string', description: '技能名称（英文、数字、下划线、连字符）' },
             description: { type: 'string', description: '技能描述' },
+            trigger: { type: 'string', description: '触发条件，描述何时应调用此技能（如：用户询问系统健康状态时）' },
             content: { type: 'string', description: '技能指令内容（Markdown 格式）' },
           },
           required: ['name', 'content'],
@@ -932,12 +933,13 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
       type: 'function',
       function: {
         name: 'update_skill',
-        description: '更新现有技能的描述或指令内容。',
+        description: '更新现有技能的描述、触发条件或指令内容。',
         parameters: {
           type: 'object',
           properties: {
             name: { type: 'string', description: '技能名称' },
             description: { type: 'string', description: '新的描述' },
+            trigger: { type: 'string', description: '新的触发条件' },
             content: { type: 'string', description: '新的指令内容' },
           },
           required: ['name'],
@@ -1658,13 +1660,13 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
 
     create_skill: async (args) => {
       if (!args.name || !args.content) return { error: '需要 name 和 content' };
-      const skill = skillStore.create(args.name, args.description || '', args.content);
+      const skill = skillStore.create(args.name, args.description || '', args.content, args.trigger || '');
       if (!skill) return { error: '技能已存在' };
       return { success: true, name: skill.name };
     },
 
     update_skill: async (args) => {
-      const skill = skillStore.update(args.name, args.description || '', args.content || '');
+      const skill = skillStore.update(args.name, args.description || '', args.content || '', args.trigger || '');
       if (!skill) return { error: `技能 "${args.name}" 不存在或不可编辑` };
       return { success: true, name: skill.name };
     },
@@ -2607,9 +2609,9 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
   });
 
   app.post('/api/skills', (req, res) => {
-    const { name, description, content } = req.body;
+    const { name, description, content, trigger } = req.body;
     if (!name || !content) return res.status(400).json({ error: '需要 name 和 content' });
-    const skill = skillStore.create(name, description || '', content);
+    const skill = skillStore.create(name, description || '', content, trigger || '');
     if (!skill) return res.status(409).json({ error: '技能已存在' });
     res.json(skill);
   });
@@ -2630,8 +2632,8 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
   });
 
   app.put('/api/skills/:name', (req, res) => {
-    const { description, content } = req.body;
-    const skill = skillStore.update(req.params.name, description || '', content || '');
+    const { description, content, trigger } = req.body;
+    const skill = skillStore.update(req.params.name, description || '', content || '', trigger || '');
     if (!skill) return res.status(404).json({ error: '技能不存在或不可编辑' });
     res.json(skill);
   });
@@ -2834,11 +2836,9 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
         const skill = skillStore.get(skillName);
         if (skill) {
           activeSkill = skill;
-          // 将用户消息中的参数部分也保留
+          // 将用户消息中的参数部分保留，无参数时生成触发消息
           const args = slashMatch[2]?.trim();
-          if (args) {
-            conv.messages.push({ role: 'user', content: args });
-          }
+          conv.messages.push({ role: 'user', content: args || `请执行 ${skillName} 技能` });
         } else {
           conv.messages.push({ role: 'user', content: message });
         }

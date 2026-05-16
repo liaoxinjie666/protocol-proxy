@@ -1,6 +1,7 @@
 ---
 name: performance-report
 description: 生成系统性能报告，包括请求量、延迟和 Token 使用统计
+trigger: 用户要求查看性能数据、请求统计、延迟分析、Token 用量
 ---
 
 # 性能报告
