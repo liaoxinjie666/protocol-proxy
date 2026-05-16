@@ -24,6 +24,11 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
           <span>总览</span>
         </a>
+        <a href="#" class="nav-item" data-page="assistant">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          <span>智控助手</span>
+          <span class="nav-badge" style="background:var(--accent);color:#fff">AI</span>
+        </a>
         <a href="#" class="nav-item" data-page="proxies">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
           <span>代理管理</span>
@@ -45,11 +50,6 @@
         <a href="#" class="nav-item" data-page="system-logs">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
           <span>系统日志</span>
-        </a>
-        <a href="#" class="nav-item" data-page="assistant">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-          <span>智控助手</span>
-          <span class="nav-badge" style="background:var(--accent);color:#fff">AI</span>
         </a>
         <a href="#" class="nav-item" data-page="settings">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 5 15.34a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 20.39 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
@@ -328,8 +328,27 @@
                 <option value="">选择后端代理...</option>
               </select>
             </div>
+            <div class="assistant-model-select">
+              <label>供应商</label>
+              <select id="assistant-provider-select" onchange="onAssistantProviderChange(this.value)">
+                <option value="">自动（跟随代理）</option>
+              </select>
+            </div>
+            <div class="assistant-model-select">
+              <label>模型</label>
+              <select id="assistant-model-select">
+                <option value="">自动（跟随代理）</option>
+              </select>
+            </div>
+            <div class="assistant-model-select">
+              <label>会话</label>
+              <div class="conversation-dropdown" id="conversation-dropdown">
+                <button class="conversation-dropdown-trigger" id="conversation-dropdown-trigger" onclick="toggleConversationDropdown()">新会话</button>
+                <div class="conversation-dropdown-menu" id="conversation-dropdown-menu"></div>
+              </div>
+            </div>
             <div class="toolbar-actions">
-              <button class="btn btn-sm" onclick="clearAssistantChat()">清空对话</button>
+              <button class="btn btn-sm" onclick="clearAssistantChat()">新会话</button>
             </div>
           </div>
           <div class="assistant-chat" id="assistant-chat">
@@ -347,6 +366,17 @@
               </ul>
               <p class="assistant-hint">请先选择一个运行中的代理作为对话后端</p>
             </div>
+          </div>
+          <div class="assistant-context-bar" id="assistant-context-bar" style="display:none">
+            <div class="context-bar-track">
+              <div class="context-bar-fill" id="context-bar-fill" style="width:0%"></div>
+            </div>
+            <div class="context-bar-info">
+              <span id="context-bar-tokens">0</span> / <span id="context-bar-max">200K</span> tokens
+              (<span id="context-bar-percent">0</span>%)
+              · <span id="context-bar-messages">0</span> 条消息
+            </div>
+            <button class="btn btn-sm context-compress-btn" id="context-compress-btn" onclick="compressAssistantContext()" style="display:none">压缩</button>
           </div>
           <div class="assistant-input-area">
             <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？" rows="1"></textarea>
@@ -406,6 +436,37 @@
                   <option value="ocean">海洋青</option>
                   <option value="sakura">樱花粉</option>
                 </select>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>智控助手</h3>
+            </div>
+            <div class="settings-body">
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">模型上下文大小</div>
+                  <div class="setting-desc">设置所用模型的上下文窗口大小（Token），影响压缩触发阈值</div>
+                </div>
+                <input type="number" id="settings-max-context" value="200000" min="10000" step="10000"
+                       style="width:120px" onchange="updateMaxContext(this.value)">
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">最大工具调用轮次</div>
+                  <div class="setting-desc">单次对话中模型可连续调用工具的最大轮数，达到上限后模型会自动总结回复</div>
+                </div>
+                <input type="number" id="settings-max-rounds" value="10" min="1" max="100"
+                       style="width:120px" onchange="updateMaxRounds(this.value)">
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">最大会话数</div>
+                  <div class="setting-desc">保存的历史会话数量上限，超出时自动删除最早的会话，0 表示不限制</div>
+                </div>
+                <input type="number" id="settings-max-conversations" value="0" min="0"
+                       style="width:120px" onchange="updateMaxConversations(this.value)">
               </div>
             </div>
           </div>

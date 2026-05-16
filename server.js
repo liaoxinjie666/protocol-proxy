@@ -242,6 +242,139 @@ async function init() {
       : 'primary_fallback';
   }
 
+  // ==================== Token 估算与会话压缩 ====================
+
+  function estimateMessageTokens(msg) {
+    const len = (s) => (typeof s === 'string' ? s.length : JSON.stringify(s || '').length);
+    let chars = 0;
+    if (typeof msg.content === 'string') chars += len(msg.content);
+    else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        // 多模态格式：只取文本内容，不序列化整个对象
+        if (typeof block === 'string') chars += len(block);
+        else if (block?.text) chars += len(block.text);
+        else if (block?.content) chars += len(block.content);
+        else chars += len(block); // fallback
+      }
+    }
+    if (msg.reasoning_content) chars += len(msg.reasoning_content);
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        chars += len(tc.function?.name || '') + len(tc.function?.arguments || '');
+      }
+    }
+    // chars/2 对中文更保守（中文 ~1-2 token/字），宁可高估触发压缩也别低估撑爆上下文
+    return Math.ceil(chars / 2) + 4;
+  }
+
+  function estimateConversationTokens(messages) {
+    return messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
+  }
+
+  async function compressConversation(conv, maxContext, proxyUrl, proxyHeaders, defaultModel) {
+    const messages = conv.messages;
+    const PRESERVE_RECENT = 6;
+
+    // 提取之前的压缩摘要（存储在 conv.compressionSummary 中）
+    let existingSummary = conv.compressionSummary || '';
+
+    // 分割：旧消息（压缩）和新消息（保留）
+    let keepFrom = messages.length - PRESERVE_RECENT;
+    // 边界处理：向后扫描，不拆开 assistant(tool_calls) + tool 配对
+    while (keepFrom > 0) {
+      const msg = messages[keepFrom];
+      if (msg?.role === 'tool') {
+        let j = keepFrom - 1;
+        while (j > 0 && messages[j]?.role === 'tool') j--;
+        if (messages[j]?.role === 'assistant' && messages[j]?.tool_calls) {
+          keepFrom = j;
+        }
+        break;
+      }
+      break;
+    }
+
+    const oldMessages = messages.slice(0, keepFrom);
+    const recentMessages = messages.slice(keepFrom);
+
+    if (oldMessages.length === 0) return null;
+
+    // 构建启发式摘要信息
+    const userMsgs = oldMessages.filter(m => m.role === 'user').length;
+    const assistantMsgs = oldMessages.filter(m => m.role === 'assistant').length;
+    const toolMsgs = oldMessages.filter(m => m.role === 'tool').length;
+    const toolNames = [...new Set(
+      oldMessages.filter(m => m.tool_calls).flatMap(m => m.tool_calls.map(tc => tc.function?.name)).filter(Boolean)
+    )];
+
+    const stats = [
+      `- 范围: ${oldMessages.length} 条旧消息 (user=${userMsgs}, assistant=${assistantMsgs}, tool=${toolMsgs})`,
+      toolNames.length > 0 ? `- 使用的工具: ${toolNames.join(', ')}` : null,
+      existingSummary ? `- 之前的摘要:\n${existingSummary}` : null,
+    ].filter(Boolean).join('\n');
+
+    const recentUserMsgs = oldMessages.filter(m => m.role === 'user').slice(-3)
+      .map(m => typeof m.content === 'string' ? m.content.slice(0, 200) : '').filter(Boolean);
+
+    // 调用 LLM 生成摘要
+    const compressPrompt = `请将以下对话历史压缩为简洁的摘要。保留所有关键信息：用户的问题意图、发现的问题、工具调用的关键结果、得出的结论和建议。
+
+对话统计:
+${stats}
+
+最近的用户问题:
+${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
+
+请用中文输出摘要，格式：
+1. 用户的主要目标/问题
+2. 已完成的调查/操作
+3. 关键发现和结论
+4. 未完成的工作（如有）
+
+摘要控制在 500 字以内。`;
+
+    let summary;
+    try {
+      const res = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: proxyHeaders,
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({
+          model: defaultModel || 'gpt-4o',
+          messages: [
+            { role: 'system', content: '你是一个对话摘要助手。简洁准确地总结对话要点。' },
+            { role: 'user', content: compressPrompt },
+          ],
+          max_tokens: 1024,
+          stream: false,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        summary = data.choices?.[0]?.message?.content || '';
+      }
+    } catch (err) {
+      logger.log(`[compress] LLM 摘要失败: ${err.message}`);
+    }
+
+    // LLM 失败 → 启发式降级
+    if (!summary) {
+      const lastAssistant = oldMessages.filter(m => m.role === 'assistant' && m.content).pop();
+      const userQuestions = oldMessages.filter(m => m.role === 'user')
+        .map(m => typeof m.content === 'string' ? m.content.slice(0, 100) : '')
+        .filter(Boolean).slice(-3);
+      summary = stats +
+        (userQuestions.length ? '\n- 最近用户问题:\n' + userQuestions.map((q, i) => `  ${i + 1}. ${q}`).join('\n') : '') +
+        '\n- 最近内容: ' + (lastAssistant?.content || '').slice(0, 300);
+      logger.log('[compress] 使用启发式降级摘要');
+    }
+
+    // 重建消息数组（不含 system 消息，由 buildMessages() 负责注入）
+    const newMessages = [...recentMessages];
+    const newTokens = estimateConversationTokens(newMessages);
+    return { messages: newMessages, summary, removedCount: oldMessages.length, newTokens };
+  }
+
   // ==================== 助手工具定义与执行器 ====================
 
   const MAX_TOOL_OUTPUT = 16384; // 16KB — 防止工具输出撑爆 LLM 上下文
@@ -1518,24 +1651,153 @@ async function init() {
 
   // ==================== 智控助手 Tool Calling API ====================
 
+  const conversationStore = require('./lib/conversation-store');
+  conversationStore.init();
+
+  // 会话并发锁：convId → true 表示正在 streaming
+  const activeStreams = new Set();
+
   function sendSSE(res, event, data) {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
+  // 会话管理 API
+  app.get('/api/assistant/conversations', (req, res) => {
+    res.json({ conversations: conversationStore.list() });
+  });
+
+  app.delete('/api/assistant/conversations/:id', (req, res) => {
+    const conv = conversationStore.get(req.params.id);
+    if (!conv) return res.status(404).json({ error: '会话不存在' });
+    conversationStore.remove(req.params.id);
+    res.json({ success: true });
+  });
+
+  // 获取单个会话的消息历史（用于恢复会话显示）
+  app.get('/api/assistant/conversations/:id/messages', (req, res) => {
+    const conv = conversationStore.get(req.params.id);
+    if (!conv) return res.status(404).json({ error: '会话不存在' });
+    // 返回消息历史（过滤掉 system 消息，前端不需要显示）
+    const messages = (conv.messages || []).filter(m => m.role !== 'system');
+    const compressionSummary = conv.compressionSummary || null;
+    res.json({ id: conv.id, proxyId: conv.proxyId, messages, compressionSummary });
+  });
+
+  // 获取代理的候选供应商及其模型列表（供前端级联选择）
+  app.get('/api/assistant/proxy-providers/:proxyId', (req, res) => {
+    const proxy = configStore.getProxyById(req.params.proxyId);
+    if (!proxy) return res.status(404).json({ error: '代理不存在' });
+    const providers = configStore.getProviders().map(p => ({
+      id: p.id,
+      name: p.name,
+      protocol: p.protocol,
+      models: p.models || [],
+    }));
+    res.json({ providers, defaultModel: proxy.defaultModel || '' });
+  });
+
+  function buildSystemPrompt() {
+    const now = new Date().toLocaleString('zh-CN', { hour12: false });
+    return `你是 Protocol Proxy 的智能助手，专门帮助管理员监控和排障。当前时间：${now}
+
+你有以下工具可以调用：
+
+系统查询：
+- get_system_status: 获取系统概览（代理运行状态、供应商数量、运行时长）
+- get_providers / get_provider: 获取供应商列表或详情
+- get_proxies / get_proxy: 获取代理列表或详情
+- get_usage_stats: 查询用量统计（支持按时间范围、代理筛选）
+- get_recent_requests: 获取最近请求日志
+- get_system_logs: 获取系统日志
+- get_key_health: 获取 API Key 健康检查结果
+- get_settings: 获取系统设置项
+- get_config_history: 获取配置快照历史
+
+文件与命令：
+- read_file: 读取任意文件内容（支持指定行范围，自动检测二进制文件）
+- write_file: 写入文件（会覆盖已有内容）
+- edit_file: 精确替换文件中的字符串（比 write_file 更安全，只替换匹配内容）
+- list_directory: 列出目录内容
+- search_files: 按文件名 glob 模式搜索文件
+- grep_search: 按正则表达式搜索文件内容（用于查找代码、日志关键字等）
+- execute_command: 执行 shell 命令
+
+规则：
+- 当用户询问系统状态、代理、供应商、日志、用量等运维相关问题时，调用工具获取实时数据后再回答
+- 当用户需要查看或修改文件、执行命令时，使用对应的文件和命令工具
+- 当用户只是打招呼、闲聊、或询问与系统无关的问题时，直接回答，不要调用工具
+- 不要凭空猜测系统状态，需要数据时必须调用工具
+- 执行写操作或危险命令前，先告知用户将要做什么
+
+你的职责：
+1. 回答关于代理配置和运行状态的问题
+2. 分析日志，指出异常和可能原因
+3. 根据数据给出优化建议（负载均衡、模型选择、故障切换策略）
+4. 用自然语言解释技术问题
+5. 如果发现问题，给出具体的修复步骤
+
+请用中文回答，保持专业且易懂。`;
+  }
+
   app.post('/api/assistant/chat', async (req, res) => {
-    const { proxyId, messages } = req.body;
-    if (!proxyId || !Array.isArray(messages)) {
-      return res.status(400).json({ error: '需要 proxyId 和 messages' });
+    const { proxyId, conversationId, message, compress, providerId, model } = req.body;
+    if (!proxyId || (!compress && !message)) {
+      return res.status(400).json({ error: '需要 proxyId 和 message' });
     }
 
     const proxy = configStore.getProxyById(proxyId);
     if (!proxy) return res.status(404).json({ error: '代理不存在' });
     if (!resolveTarget(proxy)) return res.status(500).json({ error: '代理目标未配置' });
 
+    // 查找或创建对话
+    const settings = configStore.getSettings();
+    let convId = conversationId;
+    let conv;
+    if (convId) {
+      conv = conversationStore.get(convId);
+    }
+    if (!conv && compress) {
+      return res.status(404).json({ error: '会话不存在，无法压缩' });
+    }
+    if (!conv) {
+      const maxConvs = parseInt(settings.maxConversations) || 0;
+      conv = conversationStore.create(proxyId, maxConvs);
+      convId = conv.id;
+    }
+
+    // 并发锁：同一会话正在 streaming 时拒绝新请求
+    if (activeStreams.has(convId)) {
+      return res.status(429).json({ error: '该会话正在处理中，请稍后再试' });
+    }
+    activeStreams.add(convId);
+    conversationStore.touch(conv);
+
+    // 追加用户消息到对话历史（压缩请求不追加空消息）
+    if (!compress && message) {
+      conv.messages.push({ role: 'user', content: message });
+      conversationStore.touch(conv);
+    }
+
     const proxyUrl = `http://localhost:${proxy.port}/v1/chat/completions`;
     const proxyHeaders = { 'Content-Type': 'application/json' };
     if (proxy.requireAuth && proxy.authToken) {
       proxyHeaders['Authorization'] = `Bearer ${proxy.authToken}`;
+    }
+    if (providerId) proxyHeaders['x-pp-provider-id'] = providerId;
+    if (model) proxyHeaders['x-pp-model'] = model;
+    // 若供应商不在代理候选池中，传递完整供应商配置供代理动态构建临时候选
+    if (providerId) {
+      const target = resolveTarget(proxy);
+      const inPool = target?.providerPool?.some(c => c.providerId === providerId);
+      if (!inPool) {
+        const provider = configStore.getProviderById(providerId);
+        if (provider) {
+          proxyHeaders['x-pp-provider-url'] = provider.url;
+          proxyHeaders['x-pp-provider-protocol'] = provider.protocol;
+          const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false).map(k => k.key);
+          if (enabledKeys.length > 0) proxyHeaders['x-pp-provider-keys'] = JSON.stringify(enabledKeys);
+        }
+      }
     }
 
     // SSE 响应头
@@ -1543,19 +1805,57 @@ async function init() {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    // 发送 SSE 的辅助函数，忽略写入错误
     function safeSSE(event, data) {
       try { sendSSE(res, event, data); } catch {}
     }
+    const MAX_CONTEXT = Math.max(10000, parseInt(settings.maxContext) || 200000);
+    const MAX_TOOL_ROUNDS = Math.max(1, Math.min(100, parseInt(settings.maxRounds) || 10));
 
-    const MAX_TOOL_ROUNDS = 10;
-    const conversationMessages = [...messages];
+    // 手动压缩请求
+    if (compress) {
+      logger.log(`[assistant] 压缩请求 — ${conv.messages.length} messages`);
+      safeSSE('compressing', {});
+      const result = await compressConversation(conv, MAX_CONTEXT, proxyUrl, proxyHeaders, proxy.defaultModel);
+      if (result) {
+        conv.messages = result.messages;
+        conv.compressionSummary = result.summary;
+        conversationStore.touch(conv);
+        safeSSE('compressed', { summary: result.summary, removedCount: result.removedCount, tokens: result.newTokens, maxTokens: MAX_CONTEXT, messages: conv.messages.length });
+        logger.log(`[assistant] 压缩完成 — 移除 ${result.removedCount} 条`);
+      } else {
+        safeSSE('compressed', { summary: null, removedCount: 0, tokens: estimateConversationTokens(conv.messages), maxTokens: MAX_CONTEXT, messages: conv.messages.length });
+      }
+      safeSSE('done', {});
+      res.end();
+      return;
+    }
+
+    // 发送 conversationId 给前端
+    safeSSE('conversation', { id: convId });
 
     try {
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        logger.log(`[assistant] round ${round} — ${conversationMessages.length} messages`);
+      // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
+      const systemPrompt = buildSystemPrompt();
+      const buildMessages = () => {
+        const msgs = [{ role: 'system', content: systemPrompt }];
+        if (conv.compressionSummary) {
+          msgs.push({ role: 'system', content: `[压缩摘要]\n${conv.compressionSummary}\n\n---\n以上是之前对话的压缩摘要。最近的消息保留原文。请继续对话，不要复述摘要内容。` });
+        }
+        msgs.push(...conv.messages);
+        return msgs;
+      };
 
-        // 调用本地代理
+      let currentTokens = estimateConversationTokens(buildMessages());
+      const sendContext = () => {
+        const pct = Math.round(currentTokens / MAX_CONTEXT * 1000) / 10;
+        safeSSE('context', { tokens: currentTokens, maxTokens: MAX_CONTEXT, percent: pct, messages: conv.messages.length });
+      };
+      sendContext();
+
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const messages = buildMessages();
+        logger.log(`[assistant] round ${round} — ${messages.length} messages, ~${currentTokens} tokens`);
+
         let fetchRes;
         try {
           fetchRes = await fetch(proxyUrl, {
@@ -1564,7 +1864,7 @@ async function init() {
             signal: AbortSignal.timeout(300000),
             body: JSON.stringify({
               model: proxy.defaultModel || 'gpt-4o',
-              messages: conversationMessages,
+              messages,
               stream: true,
               tools: TOOL_DEFINITIONS,
               tool_choice: 'auto',
@@ -1594,37 +1894,24 @@ async function init() {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop();
-
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed || !trimmed.startsWith('data: ')) continue;
             const payload = trimmed.slice(6);
             if (payload === '[DONE]') continue;
-
             try {
               const data = JSON.parse(payload);
               const delta = data.choices?.[0]?.delta;
               if (!delta) continue;
-
-              if (delta.content) {
-                fullContent += delta.content;
-                safeSSE('content', { delta: delta.content });
-              }
-
-              if (delta.reasoning_content) {
-                reasoningContent += delta.reasoning_content;
-              }
-
+              if (delta.content) { fullContent += delta.content; safeSSE('content', { delta: delta.content }); }
+              if (delta.reasoning_content) reasoningContent += delta.reasoning_content;
               if (delta.tool_calls) {
                 for (const tc of delta.tool_calls) {
                   const idx = tc.index;
-                  if (!toolCallAccumulator[idx]) {
-                    toolCallAccumulator[idx] = { id: '', name: '', arguments: '' };
-                  }
+                  if (!toolCallAccumulator[idx]) toolCallAccumulator[idx] = { id: '', name: '', arguments: '' };
                   if (tc.id) toolCallAccumulator[idx].id = tc.id;
                   if (tc.function?.name) toolCallAccumulator[idx].name = tc.function.name;
                   if (tc.function?.arguments) toolCallAccumulator[idx].arguments += tc.function.arguments;
@@ -1635,9 +1922,17 @@ async function init() {
         }
 
         const toolCalls = Object.values(toolCallAccumulator).filter(tc => tc.id && tc.name);
-        logger.log(`[assistant] round ${round} done — ${fullContent.length} chars content, ${toolCalls.length} tool calls`);
+        logger.log(`[assistant] round ${round} done — ${fullContent.length} chars, ${toolCalls.length} tool calls`);
 
         if (toolCalls.length === 0) {
+          // 最终回复，追加到对话历史（跳过空响应避免 null content 污染历史）
+          if (fullContent || reasoningContent) {
+            const assistantMsg = { role: 'assistant', content: fullContent || null };
+            if (reasoningContent) assistantMsg.reasoning_content = reasoningContent;
+            conv.messages.push(assistantMsg);
+          }
+          currentTokens = estimateConversationTokens(buildMessages());
+          sendContext();
           safeSSE('done', { reasoning_content: reasoningContent || undefined });
           break;
         }
@@ -1647,32 +1942,38 @@ async function init() {
           reasoning_content: reasoningContent || undefined,
           calls: toolCalls.map(tc => {
             let args = {};
-            try { args = JSON.parse(tc.arguments); } catch {}
+            try { args = JSON.parse(tc.arguments); } catch (e) {
+              logger.log(`[assistant] tool_calls args parse error (${tc.name}): ${e.message}, raw: ${(tc.arguments || '').slice(0, 200)}`);
+              args = { _raw: tc.arguments, _parseError: true };
+            }
             return { id: tc.id, name: tc.name, arguments: args };
           }),
         });
 
-        // 追加 assistant 消息到对话历史
+        // 追加 assistant(tool_calls) 到对话历史
         const assistantMsg = {
           role: 'assistant',
           content: fullContent || null,
-          tool_calls: toolCalls.map(tc => ({
-            id: tc.id,
-            type: 'function',
-            function: { name: tc.name, arguments: tc.arguments },
-          })),
+          tool_calls: toolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments } })),
         };
         if (reasoningContent) assistantMsg.reasoning_content = reasoningContent;
-        conversationMessages.push(assistantMsg);
+        conv.messages.push(assistantMsg);
 
         // 执行工具
         for (const tc of toolCalls) {
           let args = {};
-          try { args = JSON.parse(tc.arguments); } catch {}
+          let argsParseError = false;
+          try { args = JSON.parse(tc.arguments); } catch (e) {
+            logger.log(`[assistant] tool args parse error (${tc.name}): ${e.message}`);
+            argsParseError = true;
+          }
           logger.log(`[assistant] EXEC tool: ${tc.name}`);
           let result;
           let isError = false;
-          try {
+          if (argsParseError) {
+            result = { error: `工具 ${tc.name} 的参数 JSON 解析失败，原始内容: ${(tc.arguments || '').slice(0, 200)}` };
+            isError = true;
+          } else try {
             result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
             if (result && result.error) isError = true;
           } catch (err) {
@@ -1680,26 +1981,83 @@ async function init() {
             result = { error: err.message };
             isError = true;
           }
-
-          // 截断过大的工具输出
           result = truncateOutput(result);
           const resultStr = JSON.stringify(result);
           logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}`);
           safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError });
-
-          // 在 tool result 消息中追加 is_error 标记，让模型明确知道这是错误
-          const toolContent = isError ? `[ERROR] ${resultStr}` : resultStr;
-          conversationMessages.push({
-            role: 'tool',
-            tool_call_id: tc.id,
-            content: toolContent,
-          });
+          conv.messages.push({ role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
         }
-        // 继续下一轮
+
+        // token 检查 + 压缩
+        currentTokens = estimateConversationTokens(buildMessages());
+        sendContext();
+        if (currentTokens >= MAX_CONTEXT * 0.8) {
+          logger.log(`[assistant] 上下文 ${Math.round(currentTokens / MAX_CONTEXT * 100)}%，自动压缩`);
+          safeSSE('compressing', {});
+          const compResult = await compressConversation(conv, MAX_CONTEXT, proxyUrl, proxyHeaders, proxy.defaultModel);
+          if (compResult) {
+            conv.messages = compResult.messages;
+            conv.compressionSummary = compResult.summary;
+            conversationStore.touch(conv);
+            currentTokens = compResult.newTokens;
+            safeSSE('compressed', { summary: compResult.summary, removedCount: compResult.removedCount, tokens: currentTokens, maxTokens: MAX_CONTEXT, messages: conv.messages.length });
+            sendContext();
+            logger.log(`[assistant] 压缩完成 — 移除 ${compResult.removedCount} 条`);
+          }
+        }
       }
 
-      // 循环正常结束（达到最大轮次）
-      safeSSE('done', {});
+      // 达到最大轮次 → 总结回复
+      logger.log(`[assistant] max rounds reached, requesting summary`);
+      try {
+        const summaryRes = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: proxyHeaders,
+          signal: AbortSignal.timeout(120000),
+          body: JSON.stringify({
+            model: proxy.defaultModel || 'gpt-4o',
+            messages: [
+              ...buildMessages(),
+              { role: 'system', content: '你已达到最大工具调用轮次限制（' + MAX_TOOL_ROUNDS + ' 轮），无法继续调用工具。请基于已获取的信息给出回复，并明确告知用户：由于达到工具调用轮次上限，信息获取可能不完整或操作被迫中断。如果还有未完成的工作，请说明并建议用户重新提问以继续。' },
+            ],
+            stream: true,
+          }),
+        });
+        if (summaryRes.ok) {
+          const sr = summaryRes.body.getReader();
+          const sd = new TextDecoder();
+          let sb = '';
+          let summaryContent = '';
+          let summaryReasoning = '';
+          while (true) {
+            const { done: finished, value: v } = await sr.read();
+            if (finished) break;
+            sb += sd.decode(v, { stream: true });
+            const lines = sb.split('\n');
+            sb = lines.pop();
+            for (const line of lines) {
+              const t = line.trim();
+              if (!t || !t.startsWith('data: ') || t === 'data: [DONE]') continue;
+              try {
+                const chunk = JSON.parse(t.slice(6));
+                const delta = chunk.choices?.[0]?.delta;
+                if (!delta) continue;
+                if (delta.content) { summaryContent += delta.content; safeSSE('content', { delta: delta.content }); }
+                if (delta.reasoning_content) summaryReasoning += delta.reasoning_content;
+              } catch {}
+            }
+          }
+          // 追加总结到对话历史
+          const summaryMsg = { role: 'assistant', content: summaryContent || null };
+          if (summaryReasoning) summaryMsg.reasoning_content = summaryReasoning;
+          conv.messages.push(summaryMsg);
+          safeSSE('done', { reasoning_content: summaryReasoning || undefined });
+        } else {
+          safeSSE('done', {});
+        }
+      } catch {
+        safeSSE('done', {});
+      }
     } catch (err) {
       logger.log(`[assistant] error: ${err.message}`);
       if (!res.headersSent) {
@@ -1708,6 +2066,8 @@ async function init() {
         safeSSE('error', { message: err.message });
       }
     } finally {
+      activeStreams.delete(convId);
+      conversationStore.touch(conv); // 保存最终对话状态
       res.end();
     }
   });

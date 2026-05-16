@@ -1828,6 +1828,86 @@ body {
   cursor: pointer;
 }
 
+.conversation-dropdown {
+  position: relative;
+}
+.conversation-dropdown-trigger {
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  text-align: left;
+  min-width: 180px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  min-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  margin-top: 4px;
+}
+.conversation-dropdown-menu.open {
+  display: block;
+}
+.conversation-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  gap: 8px;
+}
+.conversation-dropdown-item:hover {
+  background: var(--bg-hover);
+}
+.conversation-dropdown-item.active {
+  background: var(--bg-selected);
+}
+.conversation-dropdown-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.conversation-dropdown-item-delete {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+.conversation-dropdown-item-delete:hover {
+  background: var(--error);
+  color: #fff;
+}
+
 .assistant-chat {
   flex: 1;
   overflow-y: auto;
@@ -1897,6 +1977,32 @@ body {
   margin-bottom: 0;
 }
 
+.think-block {
+  margin: 8px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  font-size: 12px;
+}
+.think-block summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-muted);
+  user-select: none;
+}
+.think-block summary:hover {
+  color: var(--text-secondary);
+}
+.think-content {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  line-height: 1.5;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 .assistant-message.assistant ul,
 .assistant-message.assistant ol {
   margin: 8px 0;
@@ -1950,6 +2056,73 @@ body {
   margin-top: 16px;
 }
 
+.compression-summary {
+  margin: 12px 24px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.compression-summary summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.compression-summary-content {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+/* 上下文占用栏 */
+.assistant-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.context-bar-track {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-base);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.context-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease, background 0.3s ease;
+  background: var(--success);
+}
+
+.context-bar-fill.mid {
+  background: var(--warning);
+}
+
+.context-bar-fill.high {
+  background: var(--error);
+}
+
+.context-bar-info {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.context-compress-btn {
+  white-space: nowrap;
+  color: var(--warning) !important;
+  border-color: var(--warning) !important;
+}
+
 .assistant-input-area {
   display: flex;
   gap: 8px;
@@ -1990,6 +2163,13 @@ body {
   color: var(--text-muted);
   font-size: 13px;
   border: 1px solid var(--border-default);
+}
+
+.assistant-message.thinking {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 14px 18px;
 }
 
 .assistant-dot {
