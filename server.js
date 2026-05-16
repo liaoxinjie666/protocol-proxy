@@ -629,6 +629,411 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
         },
       },
     },
+    // --- 供应商管理 ---
+    {
+      type: 'function',
+      function: {
+        name: 'create_provider',
+        description: '创建新的供应商。需提供名称、URL 和协议（默认自动检测）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '供应商名称' },
+            url: { type: 'string', description: '供应商 API 地址' },
+            protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini'], description: '协议类型，默认自动检测' },
+            apiKey: { type: 'string', description: 'API Key（单个）' },
+            apiKeys: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, alias: { type: 'string' } } }, description: '多个 API Key 数组' },
+            models: { type: 'array', items: { type: 'string' }, description: '可用模型列表' },
+          },
+          required: ['name', 'url'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_provider',
+        description: '更新供应商配置。只传需要修改的字段即可。',
+        parameters: {
+          type: 'object',
+          properties: {
+            providerId: { type: 'string', description: '供应商 ID' },
+            name: { type: 'string', description: '新的名称' },
+            url: { type: 'string', description: '新的 URL' },
+            protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini'], description: '新的协议' },
+            apiKey: { type: 'string', description: '新的 API Key' },
+            models: { type: 'array', items: { type: 'string' }, description: '新的模型列表' },
+          },
+          required: ['providerId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_provider',
+        description: '删除供应商。如果有代理正在使用该供应商则无法删除。',
+        parameters: {
+          type: 'object',
+          properties: {
+            providerId: { type: 'string', description: '供应商 ID' },
+          },
+          required: ['providerId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'test_provider_keys',
+        description: '测试供应商的 API Key 是否可用，返回每个 Key 的连通状态和延迟。',
+        parameters: {
+          type: 'object',
+          properties: {
+            providerId: { type: 'string', description: '供应商 ID' },
+          },
+          required: ['providerId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_provider_models',
+        description: '从供应商 API 拉取实际可用的模型列表。',
+        parameters: {
+          type: 'object',
+          properties: {
+            providerId: { type: 'string', description: '供应商 ID' },
+          },
+          required: ['providerId'],
+        },
+      },
+    },
+    // --- 代理管理 ---
+    {
+      type: 'function',
+      function: {
+        name: 'create_proxy',
+        description: '创建新代理并自动启动。需要指定名称、端口和关联的供应商 ID。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '代理名称' },
+            port: { type: 'number', description: '监听端口（不能与已有代理冲突）' },
+            providerId: { type: 'string', description: '关联的供应商 ID' },
+            defaultModel: { type: 'string', description: '默认模型名' },
+            routingStrategy: { type: 'string', enum: ['primary_fallback', 'round_robin', 'weighted', 'fastest'], description: '路由策略' },
+          },
+          required: ['name', 'port', 'providerId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_proxy',
+        description: '更新代理配置。只传需要修改的字段即可。修改端口会自动重启代理。',
+        parameters: {
+          type: 'object',
+          properties: {
+            proxyId: { type: 'string', description: '代理 ID' },
+            name: { type: 'string', description: '新名称' },
+            port: { type: 'number', description: '新端口' },
+            providerId: { type: 'string', description: '新的供应商 ID' },
+            defaultModel: { type: 'string', description: '新的默认模型' },
+            routingStrategy: { type: 'string', enum: ['primary_fallback', 'round_robin', 'weighted', 'fastest'], description: '新的路由策略' },
+          },
+          required: ['proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_proxy',
+        description: '删除代理，会先停止其运行。',
+        parameters: {
+          type: 'object',
+          properties: {
+            proxyId: { type: 'string', description: '代理 ID' },
+          },
+          required: ['proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'start_proxy',
+        description: '启动指定代理。',
+        parameters: {
+          type: 'object',
+          properties: {
+            proxyId: { type: 'string', description: '代理 ID' },
+          },
+          required: ['proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'stop_proxy',
+        description: '停止指定代理。',
+        parameters: {
+          type: 'object',
+          properties: {
+            proxyId: { type: 'string', description: '代理 ID' },
+          },
+          required: ['proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'start_all_proxies',
+        description: '批量启动所有代理。已在运行中的会跳过。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'stop_all_proxies',
+        description: '批量停止所有运行中的代理。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    // --- MCP 服务器管理 ---
+    {
+      type: 'function',
+      function: {
+        name: 'get_mcp_servers',
+        description: '获取所有 MCP 服务器列表及运行状态。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'add_mcp_server',
+        description: '添加新的 MCP 服务器。本地进程用 command，远程服务用 url。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '服务名称' },
+            command: { type: 'string', description: '本地进程启动命令（如 npx、uvx）' },
+            args: { type: 'array', items: { type: 'string' }, description: '命令参数' },
+            env: { type: 'object', description: '环境变量' },
+            url: { type: 'string', description: '远程 MCP 服务 URL' },
+            headers: { type: 'object', description: 'HTTP 请求头' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_mcp_server',
+        description: '更新 MCP 服务器配置。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '服务名称' },
+            command: { type: 'string', description: '新的启动命令' },
+            args: { type: 'array', items: { type: 'string' }, description: '新的参数' },
+            env: { type: 'object', description: '新的环境变量' },
+            url: { type: 'string', description: '新的 URL' },
+            enabled: { type: 'boolean', description: '是否启用' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_mcp_server',
+        description: '删除 MCP 服务器，会先断开连接。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '服务名称' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'connect_mcp_server',
+        description: '连接指定的 MCP 服务器。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '服务名称' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'disconnect_mcp_server',
+        description: '断开指定的 MCP 服务器。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '服务名称' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_mcp_tools',
+        description: '获取所有已连接 MCP 服务器提供的工具列表。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    // --- 技能管理 ---
+    {
+      type: 'function',
+      function: {
+        name: 'get_skills',
+        description: '获取所有已创建的技能列表。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_skill',
+        description: '创建新技能。技能是预定义的指令模板，用户可通过 /技能名 触发。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '技能名称（英文、数字、下划线、连字符）' },
+            description: { type: 'string', description: '技能描述' },
+            content: { type: 'string', description: '技能指令内容（Markdown 格式）' },
+          },
+          required: ['name', 'content'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_skill',
+        description: '更新现有技能的描述或指令内容。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '技能名称' },
+            description: { type: 'string', description: '新的描述' },
+            content: { type: 'string', description: '新的指令内容' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_skill',
+        description: '删除技能。系统级技能不可删除。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '技能名称' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    // --- 配置管理 ---
+    {
+      type: 'function',
+      function: {
+        name: 'export_config',
+        description: '导出当前系统配置（供应商和代理），可用于备份或迁移。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'import_config',
+        description: '导入配置。overwrite 模式替换全部，merge 模式按 ID 合并。',
+        parameters: {
+          type: 'object',
+          properties: {
+            config: {
+              type: 'object',
+              description: '配置对象，包含 providers 和 proxies 数组',
+              properties: {
+                providers: { type: 'array', description: '供应商数组' },
+                proxies: { type: 'array', description: '代理数组' },
+              },
+            },
+            mode: { type: 'string', enum: ['overwrite', 'merge'], description: '导入模式' },
+          },
+          required: ['config', 'mode'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'rollback_config',
+        description: '回滚到指定的配置快照。',
+        parameters: {
+          type: 'object',
+          properties: {
+            file: { type: 'string', description: '快照文件名（从 get_config_history 获取）' },
+          },
+          required: ['file'],
+        },
+      },
+    },
+    // --- 系统操作 ---
+    {
+      type: 'function',
+      function: {
+        name: 'update_settings',
+        description: '更新系统设置。传入需要修改的键值对即可。',
+        parameters: {
+          type: 'object',
+          properties: {
+            settings: { type: 'object', description: '要更新的设置键值对' },
+          },
+          required: ['settings'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'trigger_key_health_check',
+        description: '手动触发所有供应商的 API Key 健康检查。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'check_health',
+        description: '系统健康检查，返回版本、运行时长、代理状态。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
   ];
 
   const TOOL_HANDLERS = {
@@ -898,6 +1303,462 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
         } catch {}
       }
       return result;
+    },
+
+    // --- 供应商管理 ---
+    create_provider: async (args) => {
+      if (!args.name || !args.url) return { error: 'name 和 url 是必填项' };
+      const provider = configStore.addProvider({
+        name: args.name,
+        url: args.url,
+        protocol: args.protocol || (/anthropic/i.test(args.url) ? 'anthropic' : 'openai'),
+        apiKey: args.apiKey || '',
+        apiKeys: Array.isArray(args.apiKeys) ? args.apiKeys.filter(k => k && k.key && k.key.trim()) : [],
+        models: args.models || [],
+      });
+      return { success: true, id: provider.id, name: provider.name };
+    },
+
+    update_provider: async (args) => {
+      const existing = configStore.getProviderById(args.providerId);
+      if (!existing) return { error: `供应商 ${args.providerId} 不存在` };
+      const updates = {};
+      if (args.name !== undefined) updates.name = args.name;
+      if (args.url !== undefined) updates.url = args.url;
+      if (args.protocol !== undefined) updates.protocol = args.protocol;
+      if (args.apiKey !== undefined && args.apiKey !== '') updates.apiKey = args.apiKey;
+      if (args.apiKeys !== undefined) {
+        updates.apiKeys = Array.isArray(args.apiKeys) ? args.apiKeys.filter(k => k && k.key && k.key.trim()) : [];
+      }
+      if (args.models !== undefined) updates.models = args.models;
+      const updated = configStore.updateProvider(args.providerId, updates);
+      // 同步更新引用此供应商的运行中代理
+      const affectedProxies = configStore.getProxies().filter(p => p.providerId === args.providerId);
+      for (const proxy of affectedProxies) {
+        if (!proxyManager.isRunning(proxy.id)) continue;
+        const target = resolveTarget(proxy);
+        if (target) proxyManager.updateProxyConfig({ ...proxy, target });
+      }
+      return { success: true, id: updated.id, name: updated.name };
+    },
+
+    delete_provider: async (args) => {
+      const existing = configStore.getProviderById(args.providerId);
+      if (!existing) return { error: `供应商 ${args.providerId} 不存在` };
+      const inUse = configStore.getProxies().some(p => p.providerId === args.providerId);
+      if (inUse) return { error: '该供应商正在被代理使用，无法删除' };
+      configStore.removeProvider(args.providerId);
+      return { success: true };
+    },
+
+    test_provider_keys: async (args) => {
+      const provider = configStore.getProviderById(args.providerId);
+      if (!provider) return { error: `供应商 ${args.providerId} 不存在` };
+      const existingKeys = provider.apiKeys || [];
+      if (existingKeys.length === 0) return { ok: false, message: '没有可用的 API Key', results: [] };
+      const protocol = provider.protocol || 'openai';
+      const base = provider.url.replace(/\/$/, '');
+      const hasV1Suffix = base.endsWith('/v1');
+      const isAzure = protocol === 'openai' && !!provider.azureDeployment;
+
+      function buildTestUrl(key) {
+        if (protocol === 'openai') {
+          if (isAzure) {
+            const ver = provider.azureApiVersion || '2024-02-01';
+            return { url: `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`, opts: { headers: { 'api-key': key } } };
+          }
+          return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
+        }
+        if (protocol === 'anthropic') {
+          const testModel = (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
+          return { url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) } };
+        }
+        if (protocol === 'gemini') return { url: `${base}/v1beta/models?key=${key}`, opts: {} };
+        return null;
+      }
+
+      const results = await Promise.all(existingKeys.map(async (k, i) => {
+        const { url: testUrl, opts: fetchOpts } = buildTestUrl(k.key);
+        if (!testUrl) return { ok: false, index: i, message: `不支持的协议: ${protocol}` };
+        try {
+          const startedAt = Date.now();
+          const fetchRes = await fetch(testUrl, { ...fetchOpts, signal: AbortSignal.timeout(15000) });
+          const latencyMs = Date.now() - startedAt;
+          if (!fetchRes.ok) {
+            const errText = await fetchRes.text().catch(() => '');
+            const hint = fetchRes.status === 401 || fetchRes.status === 403 ? 'API Key 无效或无权限' : `HTTP ${fetchRes.status}`;
+            return { ok: false, alias: k.alias || '', index: i, message: hint, latencyMs };
+          }
+          return { ok: true, alias: k.alias || '', index: i, latencyMs };
+        } catch (err) {
+          const msg = err.name === 'TimeoutError' ? '连接超时 (15s)' : `连接失败: ${err.message}`;
+          return { ok: false, alias: k.alias || '', index: i, message: msg };
+        }
+      }));
+      const passed = results.filter(r => r.ok).length;
+      return { ok: passed === existingKeys.length, passed, failed: existingKeys.length - passed, results };
+    },
+
+    get_provider_models: async (args) => {
+      const provider = configStore.getProviderById(args.providerId);
+      if (!provider) return { error: `供应商 ${args.providerId} 不存在` };
+      const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false).map(k => k.key);
+      if (enabledKeys.length === 0) return { error: '没有可用的 API Key' };
+      const key = enabledKeys[0];
+      const protocol = provider.protocol || 'openai';
+      const base = provider.url.replace(/\/$/, '');
+      const hasV1Suffix = base.endsWith('/v1');
+      const isAzure = protocol === 'openai' && !!provider.azureDeployment;
+      let url, headers = {};
+      if (protocol === 'openai') {
+        if (isAzure) {
+          const ver = provider.azureApiVersion || '2024-02-01';
+          url = `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`;
+          headers['api-key'] = key;
+        } else {
+          url = hasV1Suffix ? `${base}/models` : `${base}/v1/models`;
+          headers['Authorization'] = `Bearer ${key}`;
+        }
+      } else if (protocol === 'anthropic') {
+        return { models: provider.models || [], message: 'Anthropic 不支持模型列表查询' };
+      } else if (protocol === 'gemini') {
+        url = `${base}/v1beta/models?key=${key}`;
+      } else {
+        return { error: `不支持的协议: ${protocol}` };
+      }
+      try {
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+        if (!res.ok) return { error: `HTTP ${res.status}: ${await res.text().catch(() => '')}` };
+        const data = await res.json();
+        const models = (data.data || data.models || []).map(m => m.id || m.name).filter(Boolean);
+        return { models };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    // --- 代理管理 ---
+    create_proxy: async (args) => {
+      if (!args.name || !args.port || !args.providerId) return { error: 'name, port, providerId 是必填项' };
+      const provider = configStore.getProviderById(args.providerId);
+      if (!provider) return { error: '供应商不存在' };
+      const parsedPort = parseInt(args.port);
+      const existing = configStore.getProxies().find(p => p.port === parsedPort);
+      if (existing) return { error: `端口 ${parsedPort} 已被代理「${existing.name}」占用` };
+      configStore.saveSnapshot('create-proxy');
+      const proxy = configStore.addProxy({
+        name: args.name,
+        port: parsedPort,
+        providerId: args.providerId,
+        defaultModel: args.defaultModel || '',
+        providerWeight: 1,
+        routingStrategy: normalizeRoutingStrategyInput(args.routingStrategy),
+        providerPool: normalizeProviderPoolInput(args.providerPool),
+      });
+      try {
+        await startProxyWithProvider(proxy);
+        return { success: true, id: proxy.id, name: proxy.name, port: proxy.port, running: true };
+      } catch (err) {
+        configStore.removeProxy(proxy.id);
+        return { error: `代理启动失败: ${err.message}` };
+      }
+    },
+
+    update_proxy: async (args) => {
+      const existing = configStore.getProxyById(args.proxyId);
+      if (!existing) return { error: `代理 ${args.proxyId} 不存在` };
+      configStore.saveSnapshot('update-proxy');
+      const updates = {};
+      if (args.name !== undefined) updates.name = args.name;
+      if (args.port !== undefined) updates.port = parseInt(args.port);
+      if (args.providerId !== undefined) {
+        if (!configStore.getProviderById(args.providerId)) return { error: '供应商不存在' };
+        updates.providerId = args.providerId;
+      }
+      if (args.defaultModel !== undefined) updates.defaultModel = args.defaultModel;
+      if (args.routingStrategy !== undefined) updates.routingStrategy = normalizeRoutingStrategyInput(args.routingStrategy);
+      const needRestart = updates.port !== undefined && updates.port !== existing.port;
+      if (needRestart) {
+        const conflict = configStore.getProxies().find(p => p.id !== args.proxyId && p.port === updates.port);
+        if (conflict) return { error: `端口 ${updates.port} 已被代理「${conflict.name}」占用` };
+      }
+      const updated = configStore.updateProxy(args.proxyId, updates);
+      if (needRestart) {
+        try {
+          await startProxyWithProvider(updated);
+        } catch (err) {
+          return { error: `代理重启失败: ${err.message}` };
+        }
+      } else {
+        const target = resolveTarget(updated);
+        if (target) proxyManager.updateProxyConfig({ ...updated, target });
+      }
+      return { success: true, id: updated.id, name: updated.name, running: proxyManager.isRunning(updated.id) };
+    },
+
+    delete_proxy: async (args) => {
+      const existing = configStore.getProxyById(args.proxyId);
+      if (!existing) return { error: `代理 ${args.proxyId} 不存在` };
+      configStore.saveSnapshot('delete-proxy');
+      await proxyManager.stopProxy(args.proxyId);
+      configStore.removeProxy(args.proxyId);
+      return { success: true };
+    },
+
+    start_proxy: async (args) => {
+      const proxy = configStore.getProxyById(args.proxyId);
+      if (!proxy) return { error: `代理 ${args.proxyId} 不存在` };
+      try {
+        await startProxyWithProvider(proxy);
+        return { success: true, running: true };
+      } catch (err) {
+        return { error: `启动失败: ${err.message}` };
+      }
+    },
+
+    stop_proxy: async (args) => {
+      const proxy = configStore.getProxyById(args.proxyId);
+      if (!proxy) return { error: `代理 ${args.proxyId} 不存在` };
+      await proxyManager.stopProxy(args.proxyId);
+      return { success: true, running: false };
+    },
+
+    start_all_proxies: async () => {
+      const proxies = configStore.getProxies();
+      const results = [];
+      for (const proxy of proxies) {
+        if (proxyManager.isRunning(proxy.id)) {
+          results.push({ id: proxy.id, name: proxy.name, skipped: true });
+          continue;
+        }
+        try {
+          await startProxyWithProvider(proxy);
+          results.push({ id: proxy.id, name: proxy.name, success: true });
+        } catch (err) {
+          results.push({ id: proxy.id, name: proxy.name, success: false, error: err.message });
+        }
+      }
+      return { results };
+    },
+
+    stop_all_proxies: async () => {
+      const running = proxyManager.getRunningPorts();
+      const results = [];
+      for (const r of running) {
+        await proxyManager.stopProxy(r.id);
+        results.push({ id: r.id, name: r.name, success: true });
+      }
+      return { results };
+    },
+
+    // --- MCP 服务器管理 ---
+    get_mcp_servers: async () => {
+      const servers = configStore.getMcpServers();
+      const status = mcpClient.getStatus();
+      const statusMap = Object.fromEntries(status.map(s => [s.name, s]));
+      return Object.entries(servers).map(([name, config]) => ({
+        name,
+        enabled: config.enabled !== false,
+        transport: config.url ? 'http' : 'stdio',
+        command: config.command,
+        url: config.url,
+        ...(statusMap[name] || { status: 'disconnected', tools: [], lastError: null }),
+      }));
+    },
+
+    add_mcp_server: async (args) => {
+      if (!args.name) return { error: '需要服务名称' };
+      if (!args.command && !args.url) return { error: '需要 command（本地）或 url（远程）' };
+      const existing = configStore.getMcpServer(args.name);
+      if (existing) return { error: '服务名已存在' };
+      const serverConfig = {};
+      if (args.url) {
+        serverConfig.url = args.url;
+        if (args.headers) serverConfig.headers = args.headers;
+      } else {
+        serverConfig.command = args.command;
+        if (args.args) serverConfig.args = Array.isArray(args.args) ? args.args : String(args.args).split(/\s+/).filter(Boolean);
+        if (args.env && Object.keys(args.env).length) serverConfig.env = args.env;
+      }
+      serverConfig.enabled = args.enabled !== false;
+      configStore.addMcpServer(args.name, serverConfig);
+      if (serverConfig.enabled) {
+        mcpClient.connectServer(args.name, serverConfig).catch(err => {
+          logger.error(`[MCP] 后台连接 ${args.name} 失败: ${err.message}`);
+        });
+      }
+      return { success: true, name: args.name };
+    },
+
+    update_mcp_server: async (args) => {
+      const existing = configStore.getMcpServer(args.name);
+      if (!existing) return { error: `MCP 服务 "${args.name}" 不存在` };
+      const updates = {};
+      if (args.url !== undefined) {
+        updates.url = args.url;
+        if (args.headers !== undefined) updates.headers = args.headers;
+        delete updates.command;
+        delete updates.args;
+        delete updates.env;
+      }
+      if (args.command !== undefined) {
+        updates.command = args.command;
+        if (args.args !== undefined) updates.args = Array.isArray(args.args) ? args.args : String(args.args).split(/\s+/).filter(Boolean);
+        if (args.env !== undefined) updates.env = args.env;
+        delete updates.url;
+        delete updates.headers;
+      }
+      if (args.enabled !== undefined) updates.enabled = args.enabled;
+      configStore.updateMcpServer(args.name, updates);
+      const newConfig = configStore.getMcpServer(args.name);
+      if (newConfig.enabled) {
+        await mcpClient.reconnectIfChanged(args.name, newConfig).catch(() => {});
+      } else {
+        await mcpClient.disconnectServer(args.name);
+      }
+      return { success: true };
+    },
+
+    delete_mcp_server: async (args) => {
+      const existing = configStore.getMcpServer(args.name);
+      if (!existing) return { error: `MCP 服务 "${args.name}" 不存在` };
+      await mcpClient.disconnectServer(args.name);
+      configStore.removeMcpServer(args.name);
+      return { success: true };
+    },
+
+    connect_mcp_server: async (args) => {
+      const config = configStore.getMcpServer(args.name);
+      if (!config) return { error: `MCP 服务 "${args.name}" 不存在` };
+      try {
+        await mcpClient.connectServer(args.name, config);
+        const status = mcpClient.getStatus().find(s => s.name === args.name);
+        return status || { status: 'error', lastError: '连接失败' };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    disconnect_mcp_server: async (args) => {
+      await mcpClient.disconnectServer(args.name);
+      return { success: true };
+    },
+
+    get_mcp_tools: async () => {
+      const status = mcpClient.getStatus();
+      return status.filter(s => s.status === 'connected').flatMap(s =>
+        s.tools.map(t => ({ ...t, server: s.name, transport: s.transport }))
+      );
+    },
+
+    // --- 技能管理 ---
+    get_skills: async () => {
+      return { skills: skillStore.list() };
+    },
+
+    create_skill: async (args) => {
+      if (!args.name || !args.content) return { error: '需要 name 和 content' };
+      const skill = skillStore.create(args.name, args.description || '', args.content);
+      if (!skill) return { error: '技能已存在' };
+      return { success: true, name: skill.name };
+    },
+
+    update_skill: async (args) => {
+      const skill = skillStore.update(args.name, args.description || '', args.content || '');
+      if (!skill) return { error: `技能 "${args.name}" 不存在或不可编辑` };
+      return { success: true, name: skill.name };
+    },
+
+    delete_skill: async (args) => {
+      const skill = skillStore.get(args.name);
+      if (!skill) return { error: `技能 "${args.name}" 不存在` };
+      if (skill.category === 'system') return { error: '系统级技能不可删除' };
+      if (!skillStore.remove(args.name)) return { error: '删除失败' };
+      return { success: true };
+    },
+
+    // --- 配置管理 ---
+    export_config: async () => {
+      const providers = configStore.getProviders();
+      const proxies = configStore.getProxies().map(p => {
+        const provider = configStore.getProviderById(p.providerId);
+        return { id: p.id, name: p.name, port: p.port, providerId: p.providerId, defaultModel: p.defaultModel || '', routingStrategy: p.routingStrategy || 'primary_fallback', providerName: provider?.name || '' };
+      });
+      return { providers, proxies, exportedAt: new Date().toISOString() };
+    },
+
+    import_config: async (args) => {
+      if (!args.config || !args.mode || !['overwrite', 'merge'].includes(args.mode)) {
+        return { error: '需要 config 和 mode（overwrite/merge）' };
+      }
+      if (!Array.isArray(args.config.providers) || !Array.isArray(args.config.proxies)) {
+        return { error: '配置格式错误：需要 providers 和 proxies 数组' };
+      }
+      configStore.saveSnapshot('import-' + args.mode);
+      if (args.mode === 'overwrite') {
+        const newConfig = {
+          providers: args.config.providers.map(p => ({
+            id: p.id, name: p.name, url: p.url, protocol: p.protocol,
+            apiKey: p.apiKey || '', models: Array.isArray(p.models) ? p.models : [],
+          })),
+          proxies: args.config.proxies.map(p => ({
+            id: p.id, name: p.name, port: p.port, providerId: p.providerId,
+            defaultModel: p.defaultModel || '', routingStrategy: normalizeRoutingStrategyInput(p.routingStrategy),
+            providerPool: normalizeProviderPoolInput(p.providerPool),
+          })),
+        };
+        configStore.saveConfig(newConfig);
+        return { success: true, mode: 'overwrite', providers: newConfig.providers.length, proxies: newConfig.proxies.length };
+      }
+      // merge 模式
+      const existingProviders = configStore.getProviders();
+      const existingProxies = configStore.getProxies();
+      const providerMap = new Map(existingProviders.map(p => [p.id, p]));
+      for (const p of args.config.providers) {
+        providerMap.set(p.id, { id: p.id, name: p.name, url: p.url, protocol: p.protocol, apiKey: p.apiKey || '', models: Array.isArray(p.models) ? p.models : [] });
+      }
+      const proxyMap = new Map(existingProxies.map(p => [p.id, p]));
+      for (const p of args.config.proxies) {
+        const conflict = proxyMap.get(p.id) ? null : Array.from(proxyMap.values()).find(ep => ep.port === p.port);
+        if (conflict) return { error: `端口 ${p.port} 已被代理「${conflict.name}」占用` };
+        proxyMap.set(p.id, { id: p.id, name: p.name, port: p.port, providerId: p.providerId, defaultModel: p.defaultModel || '', routingStrategy: normalizeRoutingStrategyInput(p.routingStrategy), providerPool: normalizeProviderPoolInput(p.providerPool) });
+      }
+      const merged = { providers: Array.from(providerMap.values()), proxies: Array.from(proxyMap.values()) };
+      configStore.saveConfig(merged);
+      return { success: true, mode: 'merge', providers: merged.providers.length, proxies: merged.proxies.length };
+    },
+
+    rollback_config: async (args) => {
+      if (!args.file) return { error: '需要指定快照文件' };
+      const result = configStore.restoreSnapshot(args.file);
+      if (result.error) return { error: result.error };
+      return { success: true };
+    },
+
+    // --- 系统操作 ---
+    update_settings: async (args) => {
+      if (!args.settings || typeof args.settings !== 'object') return { error: '需要 settings 对象' };
+      for (const [key, value] of Object.entries(args.settings)) {
+        configStore.setSetting(key, value);
+      }
+      return { success: true, settings: configStore.getSettings() };
+    },
+
+    trigger_key_health_check: async () => {
+      await checkAllProviderKeys();
+      return { success: true };
+    },
+
+    check_health: async () => {
+      return {
+        status: 'ok',
+        version: require('./package.json').version,
+        uptime: Math.floor(process.uptime()),
+        proxies: {
+          total: configStore.getProxies().length,
+          running: proxyManager.getRunningPorts().length,
+        },
+      };
     },
   };
 
@@ -1690,6 +2551,8 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
   const skillStore = require('./lib/skill-store');
   skillStore.init();
 
+  const promptBuilder = require('./lib/prompt-builder');
+
   // 会话并发锁：convId → true 表示正在 streaming
   const activeStreams = new Set();
 
@@ -1927,54 +2790,6 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     res.json(allTools);
   });
 
-  function buildSystemPrompt() {
-    const now = new Date().toLocaleString('zh-CN', { hour12: false });
-    return `你是 Protocol Proxy 的智能助手，专门帮助管理员监控和排障。当前时间：${now}
-
-你有以下工具可以调用：
-
-系统查询：
-- get_system_status: 获取系统概览（代理运行状态、供应商数量、运行时长）
-- get_providers / get_provider: 获取供应商列表或详情
-- get_proxies / get_proxy: 获取代理列表或详情
-- get_usage_stats: 查询用量统计（支持按时间范围、代理筛选）
-- get_recent_requests: 获取最近请求日志
-- get_system_logs: 获取系统日志
-- get_key_health: 获取 API Key 健康检查结果
-- get_settings: 获取系统设置项
-- get_config_history: 获取配置快照历史
-
-文件与命令：
-- read_file: 读取任意文件内容（支持指定行范围，自动检测二进制文件）
-- write_file: 写入文件（会覆盖已有内容）
-- edit_file: 精确替换文件中的字符串（比 write_file 更安全，只替换匹配内容）
-- list_directory: 列出目录内容
-- search_files: 按文件名 glob 模式搜索文件
-- grep_search: 按正则表达式搜索文件内容（用于查找代码、日志关键字等）
-- execute_command: 执行 shell 命令
-
-规则：
-- 当用户询问系统状态、代理、供应商、日志、用量等运维相关问题时，调用工具获取实时数据后再回答
-- 当用户需要查看或修改文件、执行命令时，使用对应的文件和命令工具
-- 当用户只是打招呼、闲聊、或询问与系统无关的问题时，直接回答，不要调用工具
-- 不要凭空猜测系统状态，需要数据时必须调用工具
-- 执行写操作或危险命令前，先告知用户将要做什么
-
-你的职责：
-1. 回答关于代理配置和运行状态的问题
-2. 分析日志，指出异常和可能原因
-3. 根据数据给出优化建议（负载均衡、模型选择、故障切换策略）
-4. 用自然语言解释技术问题
-5. 如果发现问题，给出具体的修复步骤
-
-可用技能（当用户输入 /技能名 时，调用 invoke_skill 获取指令并遵循执行）：
-${skillStore.getAvailableForChat().map(s => `- /${s.name}: ${s.description}`).join('\n') || '（暂无可用技能）'}
-
-MCP 外部工具（通过 MCP 协议接入的第三方工具，名称以 mcp__ 开头）：
-${(() => { const mcpStatus = mcpClient.getStatus(); const connected = mcpStatus.filter(s => s.status === 'connected' && s.tools.length); const degraded = mcpStatus.filter(s => s.status !== 'connected'); let out = connected.length ? connected.map(s => `- [${s.name}] ${s.tools.map(t => t.name + (t.description ? ': ' + t.description : '')).join(', ')}`).join('\n') : '（暂无已连接的 MCP 服务）'; if (degraded.length) out += '\n\n⚠️ 以下 MCP 服务当前不可用，相关工具无法使用：\n' + degraded.map(s => `- ${s.name}（${s.status}${s.lastError ? ': ' + s.lastError : ''}）`).join('\n'); return out; })()}
-
-请用中文回答，保持专业且易懂。`;
-  }
 
   app.post('/api/assistant/chat', async (req, res) => {
     const { proxyId, conversationId, message, compress, providerId, model } = req.body;
@@ -2090,7 +2905,7 @@ ${(() => { const mcpStatus = mcpClient.getStatus(); const connected = mcpStatus.
 
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
-      const systemPrompt = buildSystemPrompt();
+      const systemPrompt = promptBuilder.buildSystemPrompt({ toolDefinitions: TOOL_DEFINITIONS, skillStore, mcpClient });
       const buildMessages = () => {
         const msgs = [{ role: 'system', content: systemPrompt }];
         if (activeSkill) {
