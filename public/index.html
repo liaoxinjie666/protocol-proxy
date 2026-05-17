@@ -405,7 +405,10 @@
       <div class="page" id="page-skills">
         <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
           <h2 style="margin:0">技能管理</h2>
-          <button class="btn btn-primary" onclick="showSkillModal()">上传技能</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn" onclick="reloadSkills()">重载技能</button>
+            <button class="btn btn-primary" onclick="showSkillModal()">上传技能</button>
+          </div>
         </div>
         <div id="skills-container"></div>
       </div>

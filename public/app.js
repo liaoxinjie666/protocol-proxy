@@ -2026,12 +2026,17 @@ function formatAssistantContent(text) {
 function clearAssistantChat() {
   assistantMessages = [];
   assistantConversationId = '';
-  assistantProviderId = '';
   const trigger = document.getElementById('conversation-dropdown-trigger');
   if (trigger) trigger.textContent = '新会话';
-  proxyProviders = [];
+  const savedModel = document.getElementById('assistant-model-select')?.value || '';
   populateProviderSelect();
   populateModelSelect();
+  if (savedModel) {
+    const modelSelect = document.getElementById('assistant-model-select');
+    if (modelSelect && modelSelect.querySelector(`option[value="${savedModel}"]`)) {
+      modelSelect.value = savedModel;
+    }
+  }
   contextTokens = 0;
   contextPercent = 0;
   contextMessages = 0;
@@ -2452,6 +2457,10 @@ function showModelPicker() {
 
 // 加载代理的候选供应商列表
 async function loadProxyProviders(proxyId) {
+  // 保存用户当前选择，加载后恢复
+  const prevProviderId = assistantProviderId;
+  const prevModel = document.getElementById('assistant-model-select')?.value || '';
+
   assistantProviderId = '';
   proxyProviders = [];
   populateProviderSelect();
@@ -2461,20 +2470,24 @@ async function loadProxyProviders(proxyId) {
     const res = await fetch(`/api/assistant/proxy-providers/${proxyId}`);
     const data = await res.json();
     proxyProviders = data.providers || [];
-    // 恢复保存的供应商选择
+    // 优先恢复初始化时保存的选择（页面加载一次性）
     if (savedAssistantProviderId && proxyProviders.find(p => p.id === savedAssistantProviderId)) {
       assistantProviderId = savedAssistantProviderId;
-      savedAssistantProviderId = ''; // 只恢复一次
+      savedAssistantProviderId = '';
+    } else if (prevProviderId && proxyProviders.find(p => p.id === prevProviderId)) {
+      // 恢复用户之前的选择
+      assistantProviderId = prevProviderId;
     }
     populateProviderSelect();
     populateModelSelect();
-    // 恢复保存的模型选择
-    if (savedAssistantModel) {
+    // 恢复模型选择
+    const targetModel = savedAssistantModel || prevModel;
+    if (targetModel) {
       const modelSelect = document.getElementById('assistant-model-select');
-      if (modelSelect && modelSelect.querySelector(`option[value="${savedAssistantModel}"]`)) {
-        modelSelect.value = savedAssistantModel;
+      if (modelSelect && modelSelect.querySelector(`option[value="${targetModel}"]`)) {
+        modelSelect.value = targetModel;
       }
-      savedAssistantModel = ''; // 只恢复一次
+      if (savedAssistantModel) savedAssistantModel = '';
     }
   } catch (err) {
     console.warn('[assistant] 加载供应商列表失败:', err.message);
@@ -2624,6 +2637,13 @@ function selectSkill(name) {
 let allSkills = [];
 let editingSkillName = '';
 let pendingSkillFiles = null; // 待上传的文件夹 [{path, content(base64)}]
+
+function reloadSkills() {
+  fetch('/api/skills/reload', { method: 'POST' })
+    .then(r => r.json())
+    .then(() => loadSkills())
+    .catch(() => loadSkills());
+}
 
 async function loadSkills() {
   try {

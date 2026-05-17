@@ -2680,6 +2680,12 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     res.json({ success: true });
   });
 
+  // 热重载 Skill
+  app.post('/api/skills/reload', (req, res) => {
+    skillStore.init();
+    res.json({ success: true, count: skillStore.list().length });
+  });
+
   // ==================== MCP 服务管理 API ====================
 
   app.get('/api/mcp/servers', (req, res) => {
