@@ -124,6 +124,8 @@ async function init() {
   const proxyManager = require('./lib/proxy-manager');
   const statsStore = require('./lib/stats-store');
   const mcpClient = require('./lib/mcp-client');
+  const mcpToolStats = require('./lib/mcp-tool-stats');
+  mcpToolStats.load();
 
   const app = express();
   const PORT = process.env.ADMIN_PORT || 3000;
@@ -272,12 +274,120 @@ async function init() {
     return messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
   }
 
+  // 规则提取：从消息中提取结构化骨架（无需 LLM）
+  function extractStructuredSkeleton(oldMessages, existingSummary) {
+    const userMsgs = oldMessages.filter(m => m.role === 'user').length;
+    const assistantMsgs = oldMessages.filter(m => m.role === 'assistant').length;
+    const toolMsgs = oldMessages.filter(m => m.role === 'tool').length;
+
+    // 工具使用
+    const toolNames = [...new Set(
+      oldMessages.filter(m => m.tool_calls).flatMap(m => m.tool_calls.map(tc => tc.function?.name)).filter(Boolean)
+    )];
+
+    // 用户请求（最近 5 条，截断 300 字符）
+    const userQuestions = oldMessages.filter(m => m.role === 'user')
+      .map(m => typeof m.content === 'string' ? m.content.slice(0, 300) : '')
+      .filter(Boolean).slice(-5);
+
+    // 关键文件（从所有消息中提取路径模式）
+    const filePathRegex = /[A-Za-z]:\\[^\s"'<>]+|\/[\w./-]+\.\w{1,6}|(?:[\w-]+\/){2,}[\w.-]+/g;
+    const allText = oldMessages.map(m => {
+      if (typeof m.content === 'string') return m.content;
+      if (Array.isArray(m.content)) return m.content.map(b => b.text || b.content || '').join(' ');
+      return '';
+    }).join(' ');
+    const keyFiles = [...new Set((allText.match(filePathRegex) || []))]
+      .filter(f => /\.(js|ts|py|json|md|html|css|yaml|yml|toml|rs|go|java|sql|sh)$/i.test(f))
+      .slice(0, 15);
+
+    // 待办/未完成事项（关键词匹配）
+    const pendingPatterns = /(?:todo|待办|未完成|下一步|接下来|pending|next|remaining|还需|需要修改|需要添加|待优化|还需检查)/i;
+    const pendingItems = [];
+    for (const m of oldMessages.filter(m => m.role === 'assistant' && m.content)) {
+      const text = typeof m.content === 'string' ? m.content : '';
+      const lines = text.split('\n').filter(line => pendingPatterns.test(line));
+      for (const line of lines.slice(0, 3)) {
+        const trimmed = line.trim().slice(0, 150);
+        if (trimmed && !pendingItems.includes(trimmed)) pendingItems.push(trimmed);
+      }
+      if (pendingItems.length >= 8) break;
+    }
+
+    // 时间线（每条消息截断 160 字符）
+    const timeline = oldMessages.slice(-15).map(m => {
+      const role = m.role === 'tool' ? 'tool' : m.role;
+      let text = '';
+      if (typeof m.content === 'string') text = m.content.slice(0, 160);
+      else if (Array.isArray(m.content)) text = m.content.map(b => b.text || '').join(' ').slice(0, 160);
+      if (m.tool_calls) text = `[调用 ${m.tool_calls.map(tc => tc.function?.name).join(', ')}] ${text}`;
+      return `- ${role}: ${text}`;
+    });
+
+    // 最近助手回复的关键内容
+    const lastAssistant = oldMessages.filter(m => m.role === 'assistant' && m.content).pop();
+    const currentWork = lastAssistant?.content
+      ? (typeof lastAssistant.content === 'string' ? lastAssistant.content : '').slice(0, 300)
+      : '';
+
+    const sections = [];
+    sections.push(`## 对话范围\n${oldMessages.length} 条消息 (user=${userMsgs}, assistant=${assistantMsgs}, tool=${toolMsgs})`);
+
+    if (toolNames.length) sections.push(`## 使用的工具\n${toolNames.join(', ')}`);
+
+    if (userQuestions.length) {
+      sections.push(`## 用户请求\n${userQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`);
+    }
+
+    if (keyFiles.length) sections.push(`## 涉及文件\n${keyFiles.join('\n')}`);
+
+    if (pendingItems.length) {
+      sections.push(`## 待办/未完成\n${pendingItems.map(p => `- ${p}`).join('\n')}`);
+    }
+
+    if (currentWork) sections.push(`## 最近工作\n${currentWork}`);
+
+    if (existingSummary) sections.push(`## 之前的摘要\n${existingSummary}`);
+
+    sections.push(`## 时间线\n${timeline.join('\n')}`);
+
+    return sections.join('\n\n');
+  }
+
+  // LLM 增强：在骨架基础上补充关键发现和未完成工作
+  async function enhanceSummaryWithLLM(skeleton, proxyUrl, proxyHeaders, defaultModel) {
+    try {
+      const res = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: proxyHeaders,
+        signal: AbortSignal.timeout(45000),
+        body: JSON.stringify({
+          model: defaultModel || 'gpt-4o',
+          messages: [
+            { role: 'system', content: '你是一个对话摘要助手。基于提供的结构化信息，生成简洁的中文摘要。重点关注：1) 用户的核心目标 2) 已取得的关键进展 3) 未完成的工作。控制在 400 字以内。' },
+            { role: 'user', content: `以下是对话的结构化信息：\n\n${skeleton}\n\n请基于以上信息生成精炼的对话摘要。` },
+          ],
+          max_tokens: 800,
+          stream: false,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (content) return content;
+      }
+    } catch (err) {
+      logger.log(`[compress] LLM 增强失败: ${err.message}`);
+    }
+    return null;
+  }
+
   async function compressConversation(conv, maxContext, proxyUrl, proxyHeaders, defaultModel) {
     const messages = conv.messages;
     const PRESERVE_RECENT = 6;
 
-    // 提取之前的压缩摘要（存储在 conv.compressionSummary 中）
-    let existingSummary = conv.compressionSummary || '';
+    // 提取之前的压缩摘要
+    const existingSummary = conv.compressionSummary || '';
 
     // 分割：旧消息（压缩）和新消息（保留）
     let keepFrom = messages.length - PRESERVE_RECENT;
@@ -300,80 +410,34 @@ async function init() {
 
     if (oldMessages.length === 0) return null;
 
-    // 构建启发式摘要信息
-    const userMsgs = oldMessages.filter(m => m.role === 'user').length;
-    const assistantMsgs = oldMessages.filter(m => m.role === 'assistant').length;
-    const toolMsgs = oldMessages.filter(m => m.role === 'tool').length;
-    const toolNames = [...new Set(
-      oldMessages.filter(m => m.tool_calls).flatMap(m => m.tool_calls.map(tc => tc.function?.name)).filter(Boolean)
-    )];
+    // 第一步：规则提取结构化骨架（必然成功）
+    const skeleton = extractStructuredSkeleton(oldMessages, existingSummary);
 
-    const stats = [
-      `- 范围: ${oldMessages.length} 条旧消息 (user=${userMsgs}, assistant=${assistantMsgs}, tool=${toolMsgs})`,
-      toolNames.length > 0 ? `- 使用的工具: ${toolNames.join(', ')}` : null,
-      existingSummary ? `- 之前的摘要:\n${existingSummary}` : null,
-    ].filter(Boolean).join('\n');
-
-    const recentUserMsgs = oldMessages.filter(m => m.role === 'user').slice(-3)
-      .map(m => typeof m.content === 'string' ? m.content.slice(0, 200) : '').filter(Boolean);
-
-    // 调用 LLM 生成摘要
-    const compressPrompt = `请将以下对话历史压缩为简洁的摘要。保留所有关键信息：用户的问题意图、发现的问题、工具调用的关键结果、得出的结论和建议。
-
-对话统计:
-${stats}
-
-最近的用户问题:
-${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
-
-请用中文输出摘要，格式：
-1. 用户的主要目标/问题
-2. 已完成的调查/操作
-3. 关键发现和结论
-4. 未完成的工作（如有）
-
-摘要控制在 500 字以内。`;
-
-    let summary;
-    try {
-      const res = await fetch(proxyUrl, {
-        method: 'POST',
-        headers: proxyHeaders,
-        signal: AbortSignal.timeout(60000),
-        body: JSON.stringify({
-          model: defaultModel || 'gpt-4o',
-          messages: [
-            { role: 'system', content: '你是一个对话摘要助手。简洁准确地总结对话要点。' },
-            { role: 'user', content: compressPrompt },
-          ],
-          max_tokens: 1024,
-          stream: false,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        summary = data.choices?.[0]?.message?.content || '';
-      }
-    } catch (err) {
-      logger.log(`[compress] LLM 摘要失败: ${err.message}`);
-    }
-
-    // LLM 失败 → 启发式降级
-    if (!summary) {
-      const lastAssistant = oldMessages.filter(m => m.role === 'assistant' && m.content).pop();
-      const userQuestions = oldMessages.filter(m => m.role === 'user')
-        .map(m => typeof m.content === 'string' ? m.content.slice(0, 100) : '')
-        .filter(Boolean).slice(-3);
-      summary = stats +
-        (userQuestions.length ? '\n- 最近用户问题:\n' + userQuestions.map((q, i) => `  ${i + 1}. ${q}`).join('\n') : '') +
-        '\n- 最近内容: ' + (lastAssistant?.content || '').slice(0, 300);
-      logger.log('[compress] 使用启发式降级摘要');
+    // 第二步：尝试用 LLM 增强
+    let summary = await enhanceSummaryWithLLM(skeleton, proxyUrl, proxyHeaders, defaultModel);
+    if (summary) {
+      logger.log('[compress] LLM 增强摘要生成成功');
+    } else {
+      // LLM 失败 → 骨架即为最终摘要（比旧版启发式降级信息丰富得多）
+      summary = skeleton;
+      logger.log('[compress] 使用结构化骨架作为摘要');
     }
 
     // 重建消息数组（不含 system 消息，由 buildMessages() 负责注入）
     const newMessages = [...recentMessages];
     const newTokens = estimateConversationTokens(newMessages);
     return { messages: newMessages, summary, removedCount: oldMessages.length, newTokens };
+  }
+
+  // 检测是否为上下文窗口溢出错误
+  function isContextWindowError(status, body) {
+    if (status === 400 || status === 413 || status === 422) {
+      const markers = ['maximum context length', 'too many tokens', 'prompt is too long',
+        'input tokens exceed', 'context_length_exceeded', 'context window', 'max_tokens',
+        '请求体过大', '上下文长度', 'token 数量超过'];
+      return markers.some(m => body.toLowerCase().includes(m));
+    }
+    return false;
   }
 
   // ==================== 助手工具定义与执行器 ====================
@@ -2493,6 +2557,37 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     res.json({ entries: requestLog.getAll(limit), total: requestLog.getCount() });
   });
 
+  // 请求重放
+  app.post('/api/request-logs/:id/replay', async (req, res) => {
+    try {
+      const entry = requestLog.getAll(2000).find(e => e.id === req.params.id);
+      if (!entry) return res.status(404).json({ error: '日志条目不存在' });
+      if (!entry.requestBody) return res.status(400).json({ error: '该请求无可用请求体' });
+
+      const proxy = configStore.getProxyById(entry.proxyId);
+      if (!proxy) return res.status(404).json({ error: '代理配置不存在' });
+      if (!proxyManager.isRunning(entry.proxyId)) {
+        return res.status(400).json({ error: '代理未运行，请先启动代理' });
+      }
+
+      const fetchRes = await fetch(`http://localhost:${proxy.port}${entry.path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Replay': 'true',
+          'X-Replay-From': entry.id,
+        },
+        body: entry.requestBody,
+      });
+
+      res.status(fetchRes.status);
+      res.set('Content-Type', fetchRes.headers.get('content-type') || 'application/json');
+      res.send(await fetchRes.text());
+    } catch (err) {
+      res.status(500).json({ error: '重放失败: ' + err.message });
+    }
+  });
+
   // ==================== 智控助手上下文 API ====================
 
   app.get('/api/assistant/context', async (req, res) => {
@@ -2711,7 +2806,7 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
   });
 
   app.post('/api/mcp/servers', async (req, res) => {
-    const { name, command, args, env, url, headers, enabled } = req.body;
+    const { name, command, args, env, url, headers, enabled, toolCallTimeoutMs } = req.body;
     if (!name) return res.status(400).json({ error: '需要服务名称' });
     if (!command && !url) return res.status(400).json({ error: '需要 command（本地）或 url（远程）' });
     const existing = configStore.getMcpServer(name);
@@ -2726,6 +2821,7 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
       if (env && Object.keys(env).length) serverConfig.env = env;
     }
     serverConfig.enabled = enabled !== false;
+    if (toolCallTimeoutMs) serverConfig.toolCallTimeoutMs = parseInt(toolCallTimeoutMs, 10) || undefined;
     configStore.addMcpServer(name, serverConfig);
     if (serverConfig.enabled) {
       mcpClient.connectServer(name, serverConfig).catch(err => {
@@ -2736,10 +2832,11 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
   });
 
   app.put('/api/mcp/servers/:name', async (req, res) => {
-    const { command, args, env, url, headers, enabled } = req.body;
+    const { command, args, env, url, headers, enabled, toolCallTimeoutMs } = req.body;
     const existing = configStore.getMcpServer(req.params.name);
     if (!existing) return res.status(404).json({ error: 'MCP 服务不存在' });
     const updates = {};
+    if (toolCallTimeoutMs !== undefined) updates.toolCallTimeoutMs = parseInt(toolCallTimeoutMs, 10) || undefined;
     if (url !== undefined) {
       updates.url = url;
       if (headers !== undefined) updates.headers = headers;
@@ -2790,6 +2887,16 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     res.json({ success: true });
   });
 
+  app.get('/api/mcp/presets', (req, res) => {
+    const presets = configStore.getMcpPresets();
+    const existing = configStore.getMcpServers();
+    const result = presets.map(p => ({
+      ...p,
+      added: !!existing[p.name],
+    }));
+    res.json(result);
+  });
+
   app.get('/api/mcp/tools', (req, res) => {
     const status = mcpClient.getStatus();
     const allTools = status.filter(s => s.status === 'connected').flatMap(s =>
@@ -2798,6 +2905,9 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
     res.json(allTools);
   });
 
+  app.get('/api/mcp/tool-stats', (req, res) => {
+    res.json(mcpToolStats.getStats());
+  });
 
   app.post('/api/assistant/chat', async (req, res) => {
     const { proxyId, conversationId, message, compress, providerId, model } = req.body;
@@ -2961,6 +3071,25 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
         if (!fetchRes.ok) {
           const text = await fetchRes.text();
           logger.log(`[assistant] round ${round} HTTP ${fetchRes.status}: ${text.slice(0, 200)}`);
+
+          // 上下文溢出自动压缩重试
+          if (isContextWindowError(fetchRes.status, text)) {
+            logger.log(`[assistant] 检测到上下文溢出，自动压缩并重试`);
+            safeSSE('compressing', { reason: 'context_overflow' });
+            const compResult = await compressConversation(conv, MAX_CONTEXT, proxyUrl, proxyHeaders, proxy.defaultModel);
+            if (compResult) {
+              conv.messages = compResult.messages;
+              conv.compressionSummary = compResult.summary;
+              conversationStore.touch(conv);
+              currentTokens = compResult.newTokens;
+              sendContext();
+              safeSSE('compressed', { summary: compResult.summary, removedCount: compResult.removedCount, tokens: currentTokens, maxTokens: MAX_CONTEXT, messages: conv.messages.length, reason: 'context_overflow' });
+              logger.log(`[assistant] 溢出压缩完成 — 移除 ${compResult.removedCount} 条，剩余 ${conv.messages.length} 条`);
+              round--; // 重试当前轮次
+              continue;
+            }
+          }
+
           safeSSE('error', { message: `代理请求失败: HTTP ${fetchRes.status} - ${text}` });
           break;
         }
@@ -3057,7 +3186,15 @@ ${recentUserMsgs.map((m, i) => `${i + 1}. ${m}`).join('\n')}
             isError = true;
           } else try {
             const mcpHandler = tc.name.startsWith('mcp__') ? mcpClient.getToolHandlerMap()[tc.name] : null;
-            result = await (TOOL_HANDLERS[tc.name] || mcpHandler)?.(args) || { error: `未知工具: ${tc.name}` };
+            if (mcpHandler) {
+              const toolStart = Date.now();
+              result = await mcpHandler(args);
+              const latencyMs = Date.now() - toolStart;
+              const parts = tc.name.split('__');
+              mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
+            } else {
+              result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+            }
             if (result && result.error) isError = true;
           } catch (err) {
             logger.log(`[assistant] tool ${tc.name} error: ${err.message}`);
@@ -3366,6 +3503,7 @@ process.on('SIGINT', async () => {
     const proxyManager = require('./lib/proxy-manager');
     const statsStore = require('./lib/stats-store');
     statsStore.flush();
+    require('./lib/mcp-tool-stats').flush();
     await proxyManager.stopAll();
   } catch (err) {
     logger.error('[Shutdown] stopAll error:', err.message);
@@ -3383,6 +3521,7 @@ process.on('SIGTERM', async () => {
     const proxyManager = require('./lib/proxy-manager');
     const statsStore = require('./lib/stats-store');
     statsStore.flush();
+    require('./lib/mcp-tool-stats').flush();
     await proxyManager.stopAll();
   } catch (err) {
     logger.error('[Shutdown] stopAll error:', err.message);

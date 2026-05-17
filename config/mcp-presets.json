@@ -1,0 +1,63 @@
+[
+  {
+    "name": "context7",
+    "description": "语义搜索代码库文档，查询框架和库的最新文档",
+    "command": "npx",
+    "args": ["-y", "@upstash/context7-mcp"]
+  },
+  {
+    "name": "sequential-thinking",
+    "description": "结构化思维链推理，分解复杂问题逐步分析",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+  },
+  {
+    "name": "open-websearch",
+    "description": "网页搜索和内容抓取，支持搜索引擎和文章提取",
+    "command": "npx",
+    "args": ["-y", "open-websearch"],
+    "env": { "PORT": "55555" }
+  },
+  {
+    "name": "filesystem",
+    "description": "文件系统读写，支持文件创建、编辑、搜索和目录操作",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+  },
+  {
+    "name": "memory",
+    "description": "知识图谱记忆，创建实体和关系、搜索和管理结构化知识",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"]
+  },
+  {
+    "name": "chrome-devtools",
+    "description": "Chrome 浏览器自动化，页面导航、元素操作、截图、性能审计",
+    "command": "npx",
+    "args": ["-y", "chrome-devtools-mcp"]
+  },
+  {
+    "name": "stagehand",
+    "description": "浏览器自动化，智能导航、页面交互、数据提取、截图",
+    "command": "npx",
+    "args": ["-y", "stagehand-mcp"]
+  },
+  {
+    "name": "a2asearch",
+    "description": "MCP生态搜索，搜索4800+ MCP服务器/Agent/工具，发现新MCP",
+    "command": "npx",
+    "args": ["-y", "a2asearch-mcp"]
+  },
+  {
+    "name": "openchrome",
+    "description": "浏览器自动化，通过CDP控制Chrome，支持多标签页、截图、JS执行",
+    "command": "npx",
+    "args": ["-y", "openchrome-mcp", "serve"]
+  },
+  {
+    "name": "pretext-pdf",
+    "description": "PDF生成，从JSON/Markdown生成专业PDF，支持发票、报告、简历",
+    "command": "npx",
+    "args": ["-y", "pretext-pdf-mcp"]
+  }
+]

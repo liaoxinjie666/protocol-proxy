@@ -1260,8 +1260,33 @@ function toggleRequestLogDetail(row, entry) {
       <span class="detail-label">Token</span><span>${entry.promptTokens || 0} 输入 + ${entry.completionTokens || 0} 输出 = ${entry.totalTokens || 0} ${entry.isEstimated ? '(估算)' : ''}</span>
       ${entry.errorMessage ? `<span class="detail-label">错误信息</span><span class="request-log-detail-error">${escapeHtml(entry.errorMessage)}</span>` : ''}
     </div>
+    <div style="margin-top:12px">
+      <button class="btn btn-sm" onclick="replayRequest(this,'${escapeHtml(entry.id)}')">重放请求</button>
+    </div>
   </div></td>`;
   row.after(detailRow);
+}
+
+async function replayRequest(btn, id) {
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = '重放中...';
+  try {
+    const res = await fetch(`/api/request-logs/${encodeURIComponent(id)}/replay`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      btn.textContent = data.error || '重放失败';
+      btn.style.color = 'var(--error)';
+    } else {
+      btn.textContent = '重放成功';
+      btn.style.color = 'var(--success)';
+    }
+  } catch (e) {
+    btn.textContent = '重放错误';
+    btn.style.color = 'var(--error)';
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = origText; btn.style.color = ''; }, 2000);
+  }
 }
 
 function renderRequestLogRow(r, compact) {
@@ -2972,6 +2997,10 @@ function closeSkillViewModal() {
 // ==================== MCP 服务管理 ====================
 
 let mcpServersData = [];
+let mcpPresetsData = [];
+let mcpPresetsCollapsed = true;
+let mcpServersListCollapsed = false;
+let mcpToolStatsCollapsed = true;
 let editingMcpName = '';
 
 async function loadMcpServers() {
@@ -2985,6 +3014,164 @@ async function loadMcpServers() {
   } catch (err) {
     document.getElementById('mcp-servers-container').innerHTML = `<div style="color:var(--error);padding:20px">加载失败: ${escapeHtml(err.message)}</div>`;
   }
+  loadMcpPresets();
+  loadMcpToolStats();
+}
+
+async function loadMcpPresets() {
+  try {
+    const res = await fetch('/api/mcp/presets');
+    if (!res.ok) return;
+    mcpPresetsData = await res.json();
+    renderMcpPresets();
+  } catch {}
+}
+
+function renderMcpPresets() {
+  const section = document.getElementById('mcp-presets-section');
+  const container = document.getElementById('mcp-presets-container');
+  if (!section || !container || !mcpPresetsData.length) {
+    if (section) section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  container.style.display = mcpPresetsCollapsed ? 'none' : '';
+
+  container.innerHTML = `<div class="skills-grid">${mcpPresetsData.map(p => {
+    const added = p.added;
+    return `<div class="skill-card" style="opacity:${added ? '0.5' : '1'}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <strong style="font-size:14px">${escapeHtml(p.name)}</strong>
+        ${added ? '<span class="skill-badge" style="background:var(--success-subtle);color:var(--success);font-size:11px;padding:1px 6px">已添加</span>' : ''}
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;line-height:1.4">${escapeHtml(p.description)}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">${escapeHtml((p.args || []).join(' '))}</div>
+      ${added ? '' : `<button class="btn btn-sm btn-primary" onclick="addMcpPreset('${escapeAttr(p.name)}')">添加</button>`}
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function toggleMcpPresets() {
+  mcpPresetsCollapsed = !mcpPresetsCollapsed;
+  const container = document.getElementById('mcp-presets-container');
+  const toggle = document.getElementById('mcp-presets-toggle');
+  if (container) container.style.display = mcpPresetsCollapsed ? 'none' : '';
+  if (toggle) toggle.textContent = mcpPresetsCollapsed ? '▶' : '▼';
+}
+
+function toggleMcpServersList() {
+  mcpServersListCollapsed = !mcpServersListCollapsed;
+  const container = document.getElementById('mcp-servers-container');
+  const toggle = document.getElementById('mcp-servers-toggle');
+  if (container) container.style.display = mcpServersListCollapsed ? 'none' : '';
+  if (toggle) toggle.textContent = mcpServersListCollapsed ? '▶' : '▼';
+}
+
+async function addMcpPreset(name) {
+  const preset = mcpPresetsData.find(p => p.name === name);
+  if (!preset) return;
+  try {
+    const res = await fetch('/api/mcp/servers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: preset.name,
+        command: preset.command,
+        args: preset.args,
+        env: preset.env,
+        enabled: true,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      alert(data.error || '添加失败');
+      return;
+    }
+    await loadMcpServers();
+  } catch (err) {
+    alert('添加失败: ' + err.message);
+  }
+}
+
+async function loadMcpToolStats() {
+  try {
+    const res = await fetch('/api/mcp/tool-stats');
+    if (!res.ok) return;
+    renderMcpToolStats(await res.json());
+  } catch {}
+}
+
+function toggleMcpToolStats() {
+  mcpToolStatsCollapsed = !mcpToolStatsCollapsed;
+  const container = document.getElementById('mcp-tool-stats-container');
+  const toggle = document.getElementById('mcp-tool-stats-toggle');
+  if (container) container.style.display = mcpToolStatsCollapsed ? 'none' : '';
+  if (toggle) toggle.textContent = mcpToolStatsCollapsed ? '▶' : '▼';
+}
+
+function renderMcpToolStats(data) {
+  const section = document.getElementById('mcp-tool-stats-section');
+  const container = document.getElementById('mcp-tool-stats-container');
+  if (!section || !container) return;
+  if (!data.total.calls) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  container.style.display = mcpToolStatsCollapsed ? 'none' : '';
+
+  const t = data.total;
+  let html = `<div style="display:flex;gap:24px;margin-bottom:16px;flex-wrap:wrap">
+    <div class="panel" style="flex:1;min-width:140px;padding:12px 16px">
+      <div style="font-size:12px;color:var(--text-muted)">总调用</div>
+      <div style="font-size:20px;font-weight:600">${t.calls}</div>
+    </div>
+    <div class="panel" style="flex:1;min-width:140px;padding:12px 16px">
+      <div style="font-size:12px;color:var(--text-muted)">成功率</div>
+      <div style="font-size:20px;font-weight:600;color:${t.successRate >= 90 ? 'var(--success)' : t.successRate >= 70 ? 'var(--warning)' : 'var(--error)'}">${t.successRate}%</div>
+    </div>
+    <div class="panel" style="flex:1;min-width:140px;padding:12px 16px">
+      <div style="font-size:12px;color:var(--text-muted)">平均延迟</div>
+      <div style="font-size:20px;font-weight:600">${t.avgLatency}ms</div>
+    </div>
+    <div class="panel" style="flex:1;min-width:140px;padding:12px 16px">
+      <div style="font-size:12px;color:var(--text-muted)">成功 / 失败</div>
+      <div style="font-size:20px;font-weight:600"><span style="color:var(--success)">${t.success}</span> / <span style="color:var(--error)">${t.fail}</span></div>
+    </div>
+  </div>`;
+
+  if (data.byServer.length) {
+    html += `<div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--text)">按服务器</div>`;
+    html += `<table class="table" style="margin-bottom:16px"><thead><tr>
+      <th>服务器</th><th>调用次数</th><th>成功率</th><th>平均延迟</th><th>近 24h</th>
+    </tr></thead><tbody>`;
+    for (const s of data.byServer) {
+      html += `<tr>
+        <td><code>${escapeHtml(s.server)}</code></td>
+        <td class="num">${s.calls}</td>
+        <td style="color:${s.successRate >= 90 ? 'var(--success)' : s.successRate >= 70 ? 'var(--warning)' : 'var(--error)'}">${s.successRate}%</td>
+        <td class="num">${s.avgLatency}ms</td>
+        <td class="num">${s.recentCalls}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  if (data.byTool.length) {
+    html += `<div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--text)">按工具 <span style="font-weight:400;color:var(--text-muted)">(Top 20)</span></div>`;
+    html += `<table class="table"><thead><tr>
+      <th>服务器</th><th>工具</th><th>调用次数</th><th>成功率</th><th>平均延迟</th>
+    </tr></thead><tbody>`;
+    for (const t of data.byTool.slice(0, 20)) {
+      html += `<tr>
+        <td><code>${escapeHtml(t.server)}</code></td>
+        <td><code style="font-size:12px">${escapeHtml(t.tool)}</code></td>
+        <td class="num">${t.calls}</td>
+        <td style="color:${t.successRate >= 90 ? 'var(--success)' : t.successRate >= 70 ? 'var(--warning)' : 'var(--error)'}">${t.successRate}%</td>
+        <td class="num">${t.avgLatency}ms</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  container.innerHTML = html;
 }
 
 function renderMcpServers() {
@@ -3073,6 +3260,7 @@ function showMcpModal(name) {
   document.getElementById('mcp-enabled').checked = true;
   document.getElementById('mcp-env-editor').innerHTML = '';
   document.getElementById('mcp-headers-editor').innerHTML = '';
+  document.getElementById('mcp-timeout').value = '';
   document.querySelector('input[name="mcp-transport"][value="stdio"]').checked = true;
   toggleMcpTransport();
 
@@ -3089,6 +3277,7 @@ function showMcpModal(name) {
           if (detail.config?.headers) {
             Object.entries(detail.config.headers).forEach(([k, v]) => addMcpHeaderRow(k, v));
           }
+          if (detail.config?.toolCallTimeoutMs) document.getElementById('mcp-timeout').value = Math.round(detail.config.toolCallTimeoutMs / 1000);
         });
       } else {
         fetch(`/api/mcp/servers/${encodeURIComponent(name)}`).then(r => r.json()).then(detail => {
@@ -3097,6 +3286,7 @@ function showMcpModal(name) {
           if (detail.config?.env) {
             Object.entries(detail.config.env).forEach(([k, v]) => addMcpEnvRow(k, v));
           }
+          if (detail.config?.toolCallTimeoutMs) document.getElementById('mcp-timeout').value = Math.round(detail.config.toolCallTimeoutMs / 1000);
         });
       }
     }
@@ -3131,6 +3321,9 @@ async function saveMcpServer() {
     const headers = collectMcpKvPairs('mcp-headers-editor', 'mcp-header-key', 'mcp-header-val');
     if (Object.keys(headers).length) body.headers = headers;
   }
+
+  const timeoutVal = document.getElementById('mcp-timeout').value.trim();
+  if (timeoutVal) body.toolCallTimeoutMs = parseInt(timeoutVal, 10) * 1000;
 
   try {
     const url = editingMcpName ? `/api/mcp/servers/${encodeURIComponent(editingMcpName)}` : '/api/mcp/servers';

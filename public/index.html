@@ -418,7 +418,28 @@
           <h2 style="margin:0">MCP 服务管理</h2>
           <button class="btn btn-primary" onclick="showMcpModal()">添加 MCP 服务</button>
         </div>
-        <div id="mcp-servers-container"></div>
+        <div id="mcp-tool-stats-section" style="margin-bottom:16px;display:none">
+          <div style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:10px" onclick="toggleMcpToolStats()">
+            <span style="font-size:14px;font-weight:500;color:var(--text)">工具使用统计</span>
+            <span id="mcp-tool-stats-toggle" style="font-size:12px;color:var(--text-muted);margin-left:auto">▶</span>
+          </div>
+          <div id="mcp-tool-stats-container" style="display:none"></div>
+        </div>
+        <div id="mcp-presets-section" style="margin-bottom:16px;display:none">
+          <div style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:10px" onclick="toggleMcpPresets()">
+            <span style="font-size:14px;font-weight:500;color:var(--text)">预设 MCP 服务</span>
+            <span style="font-size:12px;color:var(--text-muted)">免费、开箱即用</span>
+            <span id="mcp-presets-toggle" style="font-size:12px;color:var(--text-muted);margin-left:auto">▶</span>
+          </div>
+          <div id="mcp-presets-container" style="display:none"></div>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:10px" onclick="toggleMcpServersList()">
+            <span style="font-size:14px;font-weight:500;color:var(--text)">已安装 MCP 服务</span>
+            <span id="mcp-servers-toggle" style="font-size:12px;color:var(--text-muted);margin-left:auto">▼</span>
+          </div>
+          <div id="mcp-servers-container"></div>
+        </div>
       </div>
 
       <div class="page" id="page-settings">
@@ -854,6 +875,10 @@
             <div id="mcp-headers-editor"></div>
             <button class="btn btn-sm" style="margin-top:6px" onclick="addMcpHeaderRow()">+ 添加</button>
           </div>
+        </div>
+        <div class="form-group">
+          <label>工具调用超时 <span style="color:var(--text-muted)">(秒，默认 30)</span></label>
+          <input type="number" id="mcp-timeout" placeholder="30" min="5" max="300" step="5">
         </div>
         <div class="form-group">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
