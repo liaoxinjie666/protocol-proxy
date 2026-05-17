@@ -3088,6 +3088,11 @@ async function init() {
         return msgs;
       };
 
+      // 请求级工具缓存：只读工具在同一请求的多轮调用间复用结果
+      const toolResultCache = new Map();
+      const makeCacheKey = (name, args) => name + '\0' + JSON.stringify(args, Object.keys(args).sort());
+      const isCacheable = (name) => !name.startsWith('mcp__') && (TOOL_PERMISSION[name] || 2) === 1;
+
       let currentTokens = estimateConversationTokens(buildMessages());
       const sendContext = () => {
         const pct = Math.round(currentTokens / MAX_CONTEXT * 1000) / 10;
@@ -3095,6 +3100,7 @@ async function init() {
       };
       sendContext();
 
+      let loopCompleted = false;
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const messages = buildMessages();
         logger.log(`[assistant] round ${round} — ${messages.length} messages, ~${currentTokens} tokens`);
@@ -3196,6 +3202,7 @@ async function init() {
           currentTokens = estimateConversationTokens(buildMessages());
           sendContext();
           safeSSE('done', { reasoning_content: reasoningContent || undefined });
+          loopCompleted = true;
           break;
         }
 
@@ -3255,17 +3262,27 @@ async function init() {
               }
             }
             if (!isError) {
-              const mcpHandler = tc.name.startsWith('mcp__') ? mcpClient.getToolHandlerMap()[tc.name] : null;
-              if (mcpHandler) {
-                const toolStart = Date.now();
-                result = await mcpHandler(args);
-                const latencyMs = Date.now() - toolStart;
-                const parts = tc.name.split('__');
-                mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
+              // 缓存命中检查（仅限只读工具）
+              const cacheKey = isCacheable(tc.name) ? makeCacheKey(tc.name, args) : null;
+              const cached = cacheKey ? toolResultCache.get(cacheKey) : undefined;
+              if (cached !== undefined) {
+                result = cached;
+                logger.log(`[assistant] tool ${tc.name} cache hit`);
               } else {
-                result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+                const mcpHandler = tc.name.startsWith('mcp__') ? mcpClient.getToolHandlerMap()[tc.name] : null;
+                if (mcpHandler) {
+                  const toolStart = Date.now();
+                  result = await mcpHandler(args);
+                  const latencyMs = Date.now() - toolStart;
+                  const parts = tc.name.split('__');
+                  mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
+                } else {
+                  result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+                }
+                if (result && result.error) isError = true;
+                // 缓存成功的只读结果
+                if (cacheKey && !isError) toolResultCache.set(cacheKey, result);
               }
-              if (result && result.error) isError = true;
             }
           } catch (err) {
             logger.log(`[assistant] tool ${tc.name} error: ${err.message}`);
@@ -3298,56 +3315,57 @@ async function init() {
         }
       }
 
-      // 达到最大轮次 → 总结回复
-      logger.log(`[assistant] max rounds reached, requesting summary`);
-      try {
-        const summaryRes = await fetch(proxyUrl, {
-          method: 'POST',
-          headers: proxyHeaders,
-          signal: AbortSignal.timeout(120000),
-          body: JSON.stringify({
-            model: proxy.defaultModel || 'gpt-4o',
-            messages: [
-              ...buildMessages(),
-              { role: 'system', content: '你已达到最大工具调用轮次限制（' + MAX_TOOL_ROUNDS + ' 轮），无法继续调用工具。请基于已获取的信息给出回复，并明确告知用户：由于达到工具调用轮次上限，信息获取可能不完整或操作被迫中断。如果还有未完成的工作，请说明并建议用户重新提问以继续。' },
-            ],
-            stream: true,
-          }),
-        });
-        if (summaryRes.ok) {
-          const sr = summaryRes.body.getReader();
-          const sd = new TextDecoder();
-          let sb = '';
-          let summaryContent = '';
-          let summaryReasoning = '';
-          while (true) {
-            const { done: finished, value: v } = await sr.read();
-            if (finished) break;
-            sb += sd.decode(v, { stream: true });
-            const lines = sb.split('\n');
-            sb = lines.pop();
-            for (const line of lines) {
-              const t = line.trim();
-              if (!t || !t.startsWith('data: ') || t === 'data: [DONE]') continue;
-              try {
-                const chunk = JSON.parse(t.slice(6));
-                const delta = chunk.choices?.[0]?.delta;
-                if (!delta) continue;
-                if (delta.content) { summaryContent += delta.content; safeSSE('content', { delta: delta.content }); }
-                if (delta.reasoning_content) summaryReasoning += delta.reasoning_content;
-              } catch {}
+      // 达到最大轮次 → 总结回复（仅在循环因轮次耗尽而结束时触发，正常 break 不执行）
+      if (!loopCompleted) {
+        logger.log(`[assistant] max rounds reached, requesting summary`);
+        try {
+          const summaryRes = await fetch(proxyUrl, {
+            method: 'POST',
+            headers: proxyHeaders,
+            signal: AbortSignal.timeout(120000),
+            body: JSON.stringify({
+              model: proxy.defaultModel || 'gpt-4o',
+              messages: [
+                ...buildMessages(),
+                { role: 'system', content: '你已达到最大工具调用轮次限制（' + MAX_TOOL_ROUNDS + ' 轮），无法继续调用工具。请基于已获取的信息给出回复，并明确告知用户：由于达到工具调用轮次上限，信息获取可能不完整或操作被迫中断。如果还有未完成的工作，请说明并建议用户重新提问以继续。' },
+              ],
+              stream: true,
+            }),
+          });
+          if (summaryRes.ok) {
+            const sr = summaryRes.body.getReader();
+            const sd = new TextDecoder();
+            let sb = '';
+            let summaryContent = '';
+            let summaryReasoning = '';
+            while (true) {
+              const { done: finished, value: v } = await sr.read();
+              if (finished) break;
+              sb += sd.decode(v, { stream: true });
+              const lines = sb.split('\n');
+              sb = lines.pop();
+              for (const line of lines) {
+                const t = line.trim();
+                if (!t || !t.startsWith('data: ') || t === 'data: [DONE]') continue;
+                try {
+                  const chunk = JSON.parse(t.slice(6));
+                  const delta = chunk.choices?.[0]?.delta;
+                  if (!delta) continue;
+                  if (delta.content) { summaryContent += delta.content; safeSSE('content', { delta: delta.content }); }
+                  if (delta.reasoning_content) summaryReasoning += delta.reasoning_content;
+                } catch {}
+              }
             }
+            const summaryMsg = { role: 'assistant', content: summaryContent || null };
+            if (summaryReasoning) summaryMsg.reasoning_content = summaryReasoning;
+            conv.messages.push(summaryMsg);
+            safeSSE('done', { reasoning_content: summaryReasoning || undefined });
+          } else {
+            safeSSE('done', {});
           }
-          // 追加总结到对话历史
-          const summaryMsg = { role: 'assistant', content: summaryContent || null };
-          if (summaryReasoning) summaryMsg.reasoning_content = summaryReasoning;
-          conv.messages.push(summaryMsg);
-          safeSSE('done', { reasoning_content: summaryReasoning || undefined });
-        } else {
+        } catch {
           safeSSE('done', {});
         }
-      } catch {
-        safeSSE('done', {});
       }
     } catch (err) {
       logger.log(`[assistant] error: ${err.message}`);
