@@ -1102,6 +1102,43 @@ async function init() {
     },
   ];
 
+  // ==================== 工具权限分级 ====================
+  // 1: 只读（查询+文件读取）  2: 配置写入  3: 危险操作（需确认）  4: 完全放开
+  const TOOL_PERMISSION = {
+    // 1: 只读
+    get_system_status: 1, get_providers: 1, get_provider: 1, get_proxies: 1, get_proxy: 1,
+    get_usage_stats: 1, get_recent_requests: 1, get_system_logs: 1, get_key_health: 1,
+    get_settings: 1, get_config_history: 1, read_file: 1, list_directory: 1,
+    search_files: 1, grep_search: 1, get_mcp_servers: 1, get_mcp_tools: 1,
+    get_skills: 1, export_config: 1, check_health: 1, invoke_skill: 1,
+    test_provider_keys: 1, get_provider_models: 1,
+    // 2: 配置写入
+    create_provider: 2, update_provider: 2, delete_provider: 2,
+    create_proxy: 2, update_proxy: 2, delete_proxy: 2,
+    start_proxy: 2, stop_proxy: 2, start_all_proxies: 2, stop_all_proxies: 2,
+    add_mcp_server: 2, update_mcp_server: 2, delete_mcp_server: 2,
+    connect_mcp_server: 2, disconnect_mcp_server: 2,
+    create_skill: 2, update_skill: 2, delete_skill: 2,
+    import_config: 2, rollback_config: 2, update_settings: 2, trigger_key_health_check: 2,
+    // 3: 危险操作（需确认）
+    execute_command: 3, write_file: 3, edit_file: 3,
+  };
+
+  // 工具审批等待机制
+  const pendingApprovals = new Map();
+
+  function requestToolApproval(id, name, args) {
+    return new Promise((resolve) => {
+      pendingApprovals.set(id, { resolve, name, arguments: args, timestamp: Date.now() });
+      setTimeout(() => {
+        if (pendingApprovals.has(id)) {
+          pendingApprovals.get(id).resolve(false);
+          pendingApprovals.delete(id);
+        }
+      }, 60000);
+    });
+  }
+
   const TOOL_HANDLERS = {
     get_system_status: async () => {
       const proxies = configStore.getProxies().map(p => {
@@ -2790,6 +2827,7 @@ async function init() {
     const result = Object.entries(servers).map(([name, config]) => ({
       name,
       enabled: config.enabled !== false,
+      dangerous: !!config.dangerous,
       transport: config.url ? 'http' : 'stdio',
       command: config.command,
       url: config.url,
@@ -2806,7 +2844,7 @@ async function init() {
   });
 
   app.post('/api/mcp/servers', async (req, res) => {
-    const { name, command, args, env, url, headers, enabled, toolCallTimeoutMs } = req.body;
+    const { name, command, args, env, url, headers, enabled, toolCallTimeoutMs, dangerous } = req.body;
     if (!name) return res.status(400).json({ error: '需要服务名称' });
     if (!command && !url) return res.status(400).json({ error: '需要 command（本地）或 url（远程）' });
     const existing = configStore.getMcpServer(name);
@@ -2821,6 +2859,7 @@ async function init() {
       if (env && Object.keys(env).length) serverConfig.env = env;
     }
     serverConfig.enabled = enabled !== false;
+    serverConfig.dangerous = !!dangerous;
     if (toolCallTimeoutMs) serverConfig.toolCallTimeoutMs = parseInt(toolCallTimeoutMs, 10) || undefined;
     configStore.addMcpServer(name, serverConfig);
     if (serverConfig.enabled) {
@@ -2832,7 +2871,7 @@ async function init() {
   });
 
   app.put('/api/mcp/servers/:name', async (req, res) => {
-    const { command, args, env, url, headers, enabled, toolCallTimeoutMs } = req.body;
+    const { command, args, env, url, headers, enabled, toolCallTimeoutMs, dangerous } = req.body;
     const existing = configStore.getMcpServer(req.params.name);
     if (!existing) return res.status(404).json({ error: 'MCP 服务不存在' });
     const updates = {};
@@ -2852,6 +2891,7 @@ async function init() {
       delete updates.headers;
     }
     if (enabled !== undefined) updates.enabled = enabled;
+    if (dangerous !== undefined) updates.dangerous = !!dangerous;
     configStore.updateMcpServer(req.params.name, updates);
     const newConfig = configStore.getMcpServer(req.params.name);
     if (newConfig.enabled) {
@@ -2907,6 +2947,17 @@ async function init() {
 
   app.get('/api/mcp/tool-stats', (req, res) => {
     res.json(mcpToolStats.getStats());
+  });
+
+  // 工具审批端点
+  app.post('/api/assistant/approve', (req, res) => {
+    const { id, approved } = req.body;
+    const pending = pendingApprovals.get(id);
+    if (!pending) return res.status(404).json({ error: '审批请求不存在或已超时' });
+    logger.log(`[assistant] 工具审批: ${pending.name} → ${approved ? '批准' : '拒绝'}`);
+    pending.resolve(!!approved);
+    pendingApprovals.delete(id);
+    res.json({ ok: true });
   });
 
   app.post('/api/assistant/chat', async (req, res) => {
@@ -3185,17 +3236,37 @@ async function init() {
             result = { error: `工具 ${tc.name} 的参数 JSON 解析失败，原始内容: ${(tc.arguments || '').slice(0, 200)}` };
             isError = true;
           } else try {
-            const mcpHandler = tc.name.startsWith('mcp__') ? mcpClient.getToolHandlerMap()[tc.name] : null;
-            if (mcpHandler) {
-              const toolStart = Date.now();
-              result = await mcpHandler(args);
-              const latencyMs = Date.now() - toolStart;
-              const parts = tc.name.split('__');
-              mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
-            } else {
-              result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+            // 权限检查
+            const toolLevel = tc.name.startsWith('mcp__')
+              ? (() => { const parts = tc.name.split('__'); const cfg = mcpClient.getServerConfig(parts[1]); return cfg?.dangerous ? 3 : 1; })()
+              : (TOOL_PERMISSION[tc.name] || 2);
+            const currentLevel = parseInt(req.body.permissionLevel) || 3;
+            if (toolLevel > currentLevel) {
+              result = { error: `权限不足: ${tc.name} 需要级别 ${toolLevel}，当前级别 ${currentLevel}` };
+              isError = true;
+            } else if (currentLevel === 3 && toolLevel === 3) {
+              // 级别 3 + 危险工具 → 请求用户确认
+              logger.log(`[assistant] 工具 ${tc.name} 需要用户确认`);
+              safeSSE('tool_approval', { id: tc.id, name: tc.name, arguments: args });
+              const approved = await requestToolApproval(tc.id, tc.name, args);
+              if (!approved) {
+                result = { error: '用户拒绝执行此工具' };
+                isError = true;
+              }
             }
-            if (result && result.error) isError = true;
+            if (!isError) {
+              const mcpHandler = tc.name.startsWith('mcp__') ? mcpClient.getToolHandlerMap()[tc.name] : null;
+              if (mcpHandler) {
+                const toolStart = Date.now();
+                result = await mcpHandler(args);
+                const latencyMs = Date.now() - toolStart;
+                const parts = tc.name.split('__');
+                mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
+              } else {
+                result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+              }
+              if (result && result.error) isError = true;
+            }
           } catch (err) {
             logger.log(`[assistant] tool ${tc.name} error: ${err.message}`);
             result = { error: err.message };

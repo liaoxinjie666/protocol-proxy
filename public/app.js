@@ -95,6 +95,13 @@ function cycleTheme() {
     if (settings.assistantProxyId) savedAssistantProxyId = settings.assistantProxyId;
     if (settings.assistantProviderId) savedAssistantProviderId = settings.assistantProviderId;
     if (settings.assistantModel) savedAssistantModel = settings.assistantModel;
+    if (settings.assistantPermissionLevel) {
+      const permSel = document.getElementById('assistant-permission-select');
+      if (permSel) permSel.value = settings.assistantPermissionLevel;
+    }
+    if (settings.assistantConversationId) {
+      assistantConversationId = settings.assistantConversationId;
+    }
   } catch {
     applyTheme(localStorage.getItem('theme') || 'dark');
   }
@@ -131,7 +138,15 @@ function navigateTo(page) {
   if (page === 'stats') loadStats();
   if (page === 'system-logs') loadLogs();
   if (page === 'request-logs') renderRequestLogs();
-  if (page === 'assistant') { populateAssistantProxySelect(); loadConversations(); loadAssistantSkills(); }
+  if (page === 'assistant') {
+    populateAssistantProxySelect();
+    loadConversations();
+    loadAssistantSkills();
+    // 恢复上次会话（等代理列表加载完成后再切换）
+    if (assistantConversationId) {
+      setTimeout(() => switchConversation(assistantConversationId), 300);
+    }
+  }
   if (page === 'skills') loadSkills();
   if (page === 'mcp-servers') loadMcpServers();
 }
@@ -1797,6 +1812,7 @@ async function sendAssistantMessage() {
         proxyId: proxy.id, conversationId: assistantConversationId, message: text,
         ...(providerVal && { providerId: providerVal }),
         ...(modelVal && { model: modelVal }),
+        permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
       }),
       signal: assistantAbortController.signal,
     });
@@ -1863,6 +1879,23 @@ async function sendAssistantMessage() {
             break;
           }
 
+          case 'tool_approval': {
+            if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
+            const argsDisplay = data.arguments ? JSON.stringify(data.arguments, null, 2) : '{}';
+            const approvalHtml = `<div class="tool-approval-card" id="approval-${escapeHtml(data.id)}">
+              <div class="tool-approval-header">⚠️ 需要确认执行</div>
+              <div class="tool-approval-name">${escapeHtml(data.name)}</div>
+              <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
+              <div class="tool-approval-actions">
+                <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 批准执行</button>
+                <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
+                <span class="approval-status"></span>
+              </div>
+            </div>`;
+            addAssistantMessage('tool-approval', approvalHtml);
+            break;
+          }
+
           case 'tool_result': {
             const resultStr = JSON.stringify(data.result, null, 2);
             addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error });
@@ -1911,6 +1944,7 @@ async function sendAssistantMessage() {
 
           case 'conversation': {
             assistantConversationId = data.id;
+            saveAssistantSelection();
             loadConversations();
             break;
           }
@@ -1947,7 +1981,7 @@ function addAssistantMessage(role, content) {
   const chat = document.getElementById('assistant-chat');
   if (!chat) return id;
 
-  const displayRoles = ['user', 'assistant', 'tool', 'tool-calls', 'tool-result'];
+  const displayRoles = ['user', 'assistant', 'tool', 'tool-calls', 'tool-result', 'tool-approval'];
   if (assistantMessages.filter(m => displayRoles.includes(m.role)).length === 1 && role === 'user') {
     chat.innerHTML = '';
   }
@@ -1983,6 +2017,9 @@ function addAssistantMessage(role, content) {
     }
   } else if (role === 'assistant') {
     div.innerHTML = formatAssistantContent(content);
+  } else if (role === 'tool-approval') {
+    // content 已经是 HTML 字符串
+    div.innerHTML = content;
   } else {
     div.textContent = content;
   }
@@ -2048,9 +2085,37 @@ function formatAssistantContent(text) {
   return html;
 }
 
+async function approveTool(id, approved, btn) {
+  btn.disabled = true;
+  const card = btn.closest('.tool-approval-actions');
+  if (card) card.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch('/api/assistant/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, approved })
+    });
+    const statusEl = card?.querySelector('.approval-status');
+    if (res.ok) {
+      if (statusEl) statusEl.textContent = approved ? '✅ 已批准' : '❌ 已拒绝';
+    } else {
+      const err = await res.json().catch(() => ({}));
+      if (statusEl) statusEl.textContent = `⚠️ ${err.error || '操作失败'}`;
+      btn.disabled = false;
+      if (card) card.querySelectorAll('button').forEach(b => b.disabled = false);
+    }
+  } catch (e) {
+    btn.disabled = false;
+    if (card) card.querySelectorAll('button').forEach(b => b.disabled = false);
+    const statusEl = card?.querySelector('.approval-status');
+    if (statusEl) statusEl.textContent = '⚠️ 网络错误';
+  }
+}
+
 function clearAssistantChat() {
   assistantMessages = [];
   assistantConversationId = '';
+  saveAssistantSelection();
   const trigger = document.getElementById('conversation-dropdown-trigger');
   if (trigger) trigger.textContent = '新会话';
   const savedModel = document.getElementById('assistant-model-select')?.value || '';
@@ -2210,6 +2275,7 @@ async function switchConversation(convId) {
     return;
   }
   assistantConversationId = convId;
+  saveAssistantSelection();
   assistantMessages = [];
   const chat = document.getElementById('assistant-chat');
   if (chat) chat.innerHTML = '';
@@ -2227,11 +2293,13 @@ async function switchConversation(convId) {
       // 自动选中对应的代理
       const select = document.getElementById('assistant-proxy-select');
       if (select && select.querySelector(`option[value="${data.proxyId}"]`)) {
-        select.value = data.proxyId;
-        assistantProxyId = data.proxyId;
-        document.getElementById('assistant-send-btn').disabled = false;
+        if (select.value !== data.proxyId) {
+          select.value = data.proxyId;
+          assistantProxyId = data.proxyId;
+          document.getElementById('assistant-send-btn').disabled = false;
+          loadProxyProviders(data.proxyId);
+        }
       }
-      loadProxyProviders(data.proxyId);
     }
     // 渲染压缩摘要（如果有）
     if (data.compressionSummary) {
@@ -2545,10 +2613,11 @@ function onAssistantProviderChange(value) {
 
 function saveAssistantSelection() {
   const modelVal = document.getElementById('assistant-model-select')?.value || '';
+  const permVal = document.getElementById('assistant-permission-select')?.value || '3';
   fetch('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel: modelVal }),
+    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel: modelVal, assistantPermissionLevel: permVal, assistantConversationId }),
   }).catch(() => {});
 }
 
@@ -3261,6 +3330,7 @@ function showMcpModal(name) {
   document.getElementById('mcp-env-editor').innerHTML = '';
   document.getElementById('mcp-headers-editor').innerHTML = '';
   document.getElementById('mcp-timeout').value = '';
+  document.getElementById('mcp-dangerous').checked = false;
   document.querySelector('input[name="mcp-transport"][value="stdio"]').checked = true;
   toggleMcpTransport();
 
@@ -3268,6 +3338,7 @@ function showMcpModal(name) {
     const s = mcpServersData.find(x => x.name === name);
     if (s) {
       document.getElementById('mcp-enabled').checked = s.enabled !== false;
+      document.getElementById('mcp-dangerous').checked = !!s.dangerous;
       if (s.transport === 'http') {
         document.querySelector('input[name="mcp-transport"][value="http"]').checked = true;
         toggleMcpTransport();
@@ -3324,6 +3395,7 @@ async function saveMcpServer() {
 
   const timeoutVal = document.getElementById('mcp-timeout').value.trim();
   if (timeoutVal) body.toolCallTimeoutMs = parseInt(timeoutVal, 10) * 1000;
+  body.dangerous = document.getElementById('mcp-dangerous').checked;
 
   try {
     const url = editingMcpName ? `/api/mcp/servers/${encodeURIComponent(editingMcpName)}` : '/api/mcp/servers';

@@ -2312,6 +2312,90 @@ body {
   color: var(--text-secondary);
 }
 
+/* 工具审批卡片 */
+.assistant-message.tool-approval {
+  align-self: flex-start;
+  max-width: 85%;
+  background: var(--bg-surface);
+  border: 1px solid var(--warning);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+}
+
+.tool-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-approval-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.tool-approval-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tool-approval-args {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tool-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tool-approval-actions .btn-approve {
+  background: var(--success);
+  color: #fff;
+  border: none;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.tool-approval-actions .btn-approve:hover { opacity: 0.85; }
+.tool-approval-actions .btn-approve:disabled { opacity: 0.5; cursor: default; }
+
+.tool-approval-actions .btn-deny {
+  background: var(--error);
+  color: #fff;
+  border: none;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.tool-approval-actions .btn-deny:hover { opacity: 0.85; }
+.tool-approval-actions .btn-deny:disabled { opacity: 0.5; cursor: default; }
+
+.tool-approval-actions .approval-status {
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
 /* ========== 技能管理 ========== */
 .skill-group {
   margin-bottom: 24px;

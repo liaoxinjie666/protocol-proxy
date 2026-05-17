@@ -357,6 +357,15 @@
                 <div class="conversation-dropdown-menu" id="conversation-dropdown-menu"></div>
               </div>
             </div>
+            <div class="assistant-model-select">
+              <label>工具权限</label>
+              <select id="assistant-permission-select" onchange="saveAssistantSelection()">
+                <option value="1">🔒 只读</option>
+                <option value="2">📝 配置写入</option>
+                <option value="3" selected>⚠️ 受限（危险需确认）</option>
+                <option value="4">🔓 完全放开</option>
+              </select>
+            </div>
             <div class="toolbar-actions">
               <button class="btn btn-sm" onclick="clearAssistantChat()">新会话</button>
             </div>
@@ -883,6 +892,11 @@
         <div class="form-group">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
             <input type="checkbox" id="mcp-enabled" checked> 启用
+          </label>
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="mcp-dangerous"> 标记为危险（工具调用需用户确认）
           </label>
         </div>
       </div>
