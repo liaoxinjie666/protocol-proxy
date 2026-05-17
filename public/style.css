@@ -2396,6 +2396,99 @@ body {
   margin-left: 4px;
 }
 
+/* 多 Agent 委派任务卡片 */
+.assistant-message.delegate-card {
+  align-self: flex-start;
+  max-width: 85%;
+  background: var(--bg-surface);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  border-left: 3px solid #A78BFA;
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.delegate-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #A78BFA;
+  margin-bottom: 8px;
+}
+
+.delegate-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.delegate-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+
+.delegate-task-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.delegate-task-dot.status-created {
+  background: var(--text-muted);
+}
+
+.delegate-task-dot.status-running {
+  background: var(--accent);
+  animation: delegate-spin 1s linear infinite;
+}
+
+@keyframes delegate-spin {
+  0% { opacity: 1; }
+  50% { opacity: 0.3; }
+  100% { opacity: 1; }
+}
+
+.delegate-task-dot.status-completed {
+  background: var(--success);
+}
+
+.delegate-task-dot.status-failed {
+  background: var(--error);
+}
+
+.delegate-task-objective {
+  color: var(--text-secondary);
+  flex: 1;
+  min-width: 0;
+}
+
+.delegate-task-summary {
+  display: none;
+  width: 100%;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.delegate-task-summary.visible {
+  display: block;
+}
+
+.delegate-task-summary.error {
+  color: var(--error);
+}
+
+.delegate-task-summary.success {
+  color: var(--text-faint);
+}
+
 /* ========== 技能管理 ========== */
 .skill-group {
   margin-bottom: 24px;

@@ -18,6 +18,7 @@ let providerPoolItems = [];
 let providerModelTags = [];
 let providerKeys = [];
 let assistantMessages = []; // 仅用于 UI 渲染
+const delegateCards = new Map(); // createdId → { msgId, tasks: Map<taskId, {objective, status}> }
 let assistantProxyId = '';
 let assistantProviderId = ''; // 用于级联选择的模型列表
 let proxyProviders = []; // 当前代理的候选供应商列表
@@ -91,6 +92,15 @@ function cycleTheme() {
     if (mcxInput) mcxInput.value = contextMaxTokens;
     const mrInput = document.getElementById('settings-max-rounds');
     if (mrInput) mrInput.value = assistantMaxRounds;
+    // 子智能体设置
+    const agentDefaults = { 'agent.maxConcurrent': 3, 'agent.maxRounds': 5, 'agent.timeout': 300 };
+    const agentNumFields = { 'agent.maxConcurrent': 'settings-agent-max-concurrent', 'agent.maxRounds': 'settings-agent-max-rounds', 'agent.timeout': 'settings-agent-timeout' };
+    for (const [key, elId] of Object.entries(agentNumFields)) {
+      const el = document.getElementById(elId);
+      if (el) el.value = settings[key] !== undefined ? settings[key] : agentDefaults[key];
+    }
+    // 加载工具列表用于权限配置
+    loadAgentToolsConfig(settings);
     // 恢复助手选择
     if (settings.assistantProxyId) savedAssistantProxyId = settings.assistantProxyId;
     if (settings.assistantProviderId) savedAssistantProviderId = settings.assistantProviderId;
@@ -1163,6 +1173,14 @@ function connectRequestLogWS() {
           updateMcpServerStatus(msg.server, msg);
           return;
         }
+        // 多 Agent 任务状态更新
+        if (msg.type === 'task' && msg.task) {
+          const t = msg.task;
+          if (t.status === 'completed') updateDelegateTask(t.id, 'completed', t.summary);
+          else if (t.status === 'failed') updateDelegateTask(t.id, 'failed', t.error);
+          else if (t.status === 'running') updateDelegateTask(t.id, 'running');
+          return;
+        }
         const entry = msg.id ? msg : (msg.data || msg);
         if (entry && entry.id) {
           requestLogs.unshift(entry);
@@ -1942,6 +1960,11 @@ async function sendAssistantMessage() {
             break;
           }
 
+          case 'delegate': {
+            handleDelegateEvent(data);
+            break;
+          }
+
           case 'conversation': {
             assistantConversationId = data.id;
             saveAssistantSelection();
@@ -2020,6 +2043,9 @@ function addAssistantMessage(role, content) {
   } else if (role === 'tool-approval') {
     // content 已经是 HTML 字符串
     div.innerHTML = content;
+  } else if (role === 'delegate-card') {
+    // content = { createdId, tasks: [{id, objective}] }
+    div.innerHTML = renderDelegateCard(content);
   } else {
     div.textContent = content;
   }
@@ -2083,6 +2109,52 @@ function formatAssistantContent(text) {
     return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
   }).join('');
   return html;
+}
+
+// ==================== 多 Agent 委派卡片 ====================
+
+function renderDelegateCard({ createdId, tasks }) {
+  const taskItems = tasks.map(t =>
+    `<div class="delegate-task" data-task-id="${escapeHtml(t.id)}">
+      <span class="delegate-task-dot status-created"></span>
+      <span class="delegate-task-objective">${escapeHtml(t.objective)}</span>
+      <span class="delegate-task-summary"></span>
+    </div>`
+  ).join('');
+  return `<div class="delegate-header">委派 ${tasks.length} 个子任务</div>
+    <div class="delegate-task-list">${taskItems}</div>`;
+}
+
+function updateDelegateTask(taskId, status, text) {
+  const el = document.querySelector(`.delegate-task[data-task-id="${taskId}"]`);
+  if (!el) return;
+  const dot = el.querySelector('.delegate-task-dot');
+  if (dot) {
+    dot.className = 'delegate-task-dot status-' + status;
+  }
+  if (text) {
+    const summary = el.querySelector('.delegate-task-summary');
+    if (summary) {
+      summary.textContent = status === 'failed' ? '失败: ' + text : text;
+      summary.className = 'delegate-task-summary visible ' + (status === 'failed' ? 'error' : 'success');
+    }
+  }
+}
+
+function handleDelegateEvent(data) {
+  if (data.type === 'created') {
+    const createdId = 'delegate-' + Date.now();
+    const msgId = addAssistantMessage('delegate-card', { createdId, tasks: data.tasks });
+    const taskMap = new Map();
+    for (const t of data.tasks) taskMap.set(t.id, { objective: t.objective, status: 'created' });
+    delegateCards.set(createdId, { msgId, tasks: taskMap });
+  } else if (data.type === 'started') {
+    updateDelegateTask(data.taskId, 'running');
+  } else if (data.type === 'completed') {
+    updateDelegateTask(data.taskId, 'completed', data.summary);
+  } else if (data.type === 'failed') {
+    updateDelegateTask(data.taskId, 'failed', data.error);
+  }
 }
 
 async function approveTool(id, approved, btn) {
@@ -2182,10 +2254,24 @@ function updateContextBar() {
   }
 }
 
+function showSaveToast() {
+  let toast = document.getElementById('settings-save-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'settings-save-toast';
+    toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--success);color:#fff;padding:8px 16px;border-radius:var(--radius-md);font-size:13px;font-weight:500;z-index:9999;opacity:0;transition:opacity 0.2s;pointer-events:none';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = '已保存';
+  toast.style.opacity = '1';
+  clearTimeout(showSaveToast._timer);
+  showSaveToast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 1500);
+}
+
 function updateMaxContext(value) {
   const v = Math.max(10000, parseInt(value) || 200000);
   contextMaxTokens = v;
-  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxContext: v }) }).catch(() => {});
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxContext: v }) }).then(showSaveToast).catch(() => {});
   if (contextTokens > 0) {
     contextPercent = Math.round(contextTokens / contextMaxTokens * 1000) / 10;
     updateContextBar();
@@ -2195,12 +2281,82 @@ function updateMaxContext(value) {
 function updateMaxRounds(value) {
   const v = Math.max(1, Math.min(100, parseInt(value) || 10));
   assistantMaxRounds = v;
-  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxRounds: v }) }).catch(() => {});
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxRounds: v }) }).then(showSaveToast).catch(() => {});
 }
 
 function updateMaxConversations(value) {
   const v = Math.max(0, parseInt(value) || 0);
-  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxConversations: v }) }).catch(() => {});
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ maxConversations: v }) }).then(showSaveToast).catch(() => {});
+}
+
+function updateAgentSetting(key, value) {
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [key]: value }) }).then(showSaveToast).catch(() => {});
+}
+
+async function loadAgentToolsConfig(settings) {
+  const loadingEl = document.getElementById('agent-tools-loading');
+  const listEl = document.getElementById('agent-tools-list');
+  const itemsEl = document.getElementById('agent-tools-items');
+  if (!itemsEl) return;
+  try {
+    const res = await fetch('/api/assistant/tools');
+    const tools = await res.json();
+    const blockedSet = new Set(parseToolList(settings['agent.blockedTools'] || 'delegate_task'));
+    const denySet = new Set(parseToolList(settings['agent.autoDenyTools'] || 'execute_command,write_file,edit_file'));
+    renderAgentToolsList(tools, blockedSet, denySet);
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (listEl) listEl.style.display = '';
+  } catch {
+    if (loadingEl) loadingEl.textContent = '加载失败';
+  }
+}
+
+function parseToolList(val) {
+  if (Array.isArray(val)) return val;
+  return String(val).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function renderAgentToolsList(tools, blockedSet, denySet) {
+  const itemsEl = document.getElementById('agent-tools-items');
+  if (!itemsEl) return;
+  itemsEl.innerHTML = tools.map(t => {
+    const isBlocked = blockedSet.has(t.name);
+    const isDeny = denySet.has(t.name);
+    const permLabel = t.permission >= 3 ? ' <span style="color:var(--error);font-size:10px">危险</span>' : '';
+    return `<div style="display:grid;grid-template-columns:1fr 56px 56px;padding:5px 12px;align-items:center;border-bottom:1px solid var(--border-subtle);font-size:12px">
+      <div style="min-width:0">
+        <div style="font-family:var(--font-mono);color:var(--text-primary);font-size:12px">${escapeHtml(t.name)}${permLabel}</div>
+        <div style="color:var(--text-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(t.description)}">${escapeHtml(t.description)}</div>
+      </div>
+      <div style="text-align:center"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-type="blocked" ${isBlocked ? 'checked' : ''} onchange="onAgentToolCheck(this)"></div>
+      <div style="text-align:center"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-type="deny" ${isDeny ? 'checked' : ''} ${isBlocked ? 'disabled' : ''} onchange="onAgentToolCheck(this)"></div>
+    </div>`;
+  }).join('');
+}
+
+function onAgentToolCheck(checkbox) {
+  const container = document.getElementById('agent-tools-items');
+  if (!container) return;
+  const blocked = [], deny = [];
+  container.querySelectorAll('input[data-type="blocked"]').forEach(cb => {
+    if (cb.checked) blocked.push(cb.dataset.tool);
+  });
+  container.querySelectorAll('input[data-type="deny"]').forEach(cb => {
+    if (cb.checked && !cb.disabled) deny.push(cb.dataset.tool);
+  });
+  // 被阻止的工具自动禁用拒绝复选框
+  container.querySelectorAll('input[data-type="blocked"]').forEach(cb => {
+    const denyCb = container.querySelector(`input[data-type="deny"][data-tool="${cb.dataset.tool}"]`);
+    if (denyCb) {
+      denyCb.disabled = cb.checked;
+      if (cb.checked) denyCb.checked = false;
+    }
+  });
+  fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 'agent.blockedTools': blocked.join(','), 'agent.autoDenyTools': deny.join(',') }),
+  }).then(showSaveToast).catch(() => {});
 }
 
 function toggleConversationDropdown() {

@@ -535,6 +535,52 @@
               </div>
             </div>
           </div>
+          <div class="panel">
+            <div class="panel-header">
+              <h3>子智能体</h3>
+            </div>
+            <div class="settings-body">
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">最大并发数</div>
+                  <div class="setting-desc">同时运行的子智能体数量上限</div>
+                </div>
+                <input type="number" id="settings-agent-max-concurrent" value="3" min="1" max="10"
+                       style="width:120px" onchange="updateAgentSetting('agent.maxConcurrent', this.value)">
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">最大工具调用轮次</div>
+                  <div class="setting-desc">子智能体单次任务中可连续调用工具的最大轮数</div>
+                </div>
+                <input type="number" id="settings-agent-max-rounds" value="5" min="1" max="100"
+                       style="width:120px" onchange="updateAgentSetting('agent.maxRounds', this.value)">
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">单轮超时（秒）</div>
+                  <div class="setting-desc">子智能体每次 LLM 请求的超时时间</div>
+                </div>
+                <input type="number" id="settings-agent-timeout" value="300" min="10" max="600"
+                       style="width:120px" onchange="updateAgentSetting('agent.timeout', this.value)">
+              </div>
+              <div class="setting-item" style="flex-direction:column;align-items:stretch">
+                <div class="setting-info" style="margin-bottom:8px">
+                  <div class="setting-name">工具权限配置</div>
+                  <div class="setting-desc">勾选"隐藏"让子智能体完全看不到该工具，勾选"拒绝"让子智能体可见但执行时被自动拒绝</div>
+                </div>
+                <div id="agent-tools-loading" style="color:var(--text-muted);font-size:12px">加载工具列表...</div>
+                <div id="agent-tools-list" style="display:none;max-height:320px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-md)">
+                  <div style="display:grid;grid-template-columns:1fr 56px 56px;padding:6px 12px;font-size:11px;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border-subtle);position:sticky;top:0;background:var(--bg-surface);z-index:1">
+                    <span>工具</span>
+                    <span style="text-align:center">隐藏</span>
+                    <span style="text-align:center">拒绝</span>
+                  </div>
+                  <div id="agent-tools-items"></div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </main>

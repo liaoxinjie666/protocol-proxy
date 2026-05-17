@@ -1100,6 +1100,32 @@ async function init() {
         parameters: { type: 'object', properties: {}, required: [] },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'delegate_task',
+        description: '将任务委派给子代理并行执行。子代理拥有独立的对话上下文和受限的工具集，完成后返回结果摘要。适合将大任务拆分为多个独立子任务并行处理。',
+        parameters: {
+          type: 'object',
+          properties: {
+            goals: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '子任务目标列表，每个元素是一个独立子任务的目标描述',
+            },
+            model: {
+              type: 'string',
+              description: '子代理使用的模型（可选，默认与父代理相同）',
+            },
+            maxRounds: {
+              type: 'number',
+              description: '每个子代理的最大工具调用轮次（可选，默认5）',
+            },
+          },
+          required: ['goals'],
+        },
+      },
+    },
   ];
 
   // ==================== 工具权限分级 ====================
@@ -1120,6 +1146,8 @@ async function init() {
     connect_mcp_server: 2, disconnect_mcp_server: 2,
     create_skill: 2, update_skill: 2, delete_skill: 2,
     import_config: 2, rollback_config: 2, update_settings: 2, trigger_key_health_check: 2,
+    // 2: 委派任务
+    delegate_task: 2,
     // 3: 危险操作（需确认）
     execute_command: 3, write_file: 3, edit_file: 3,
   };
@@ -1138,6 +1166,9 @@ async function init() {
       }, 60000);
     });
   }
+
+  // 多 Agent 委派共享的代理上下文（chat handler 中更新，delegate_task handler 中读取）
+  const _chatProxy = { url: null, headers: null, defaultModel: null, safeSSE: null };
 
   const TOOL_HANDLERS = {
     get_system_status: async () => {
@@ -1862,6 +1893,33 @@ async function init() {
           running: proxyManager.getRunningPorts().length,
         },
       };
+    },
+
+    // ==================== 多 Agent 委派 ====================
+    delegate_task: async (args) => {
+      if (!_chatProxy.url) {
+        return { error: '无可用代理，请先发送一条消息激活代理上下文' };
+      }
+      try {
+        const { delegateTask, registry, getAgentConfig } = require('./lib/multi-agent');
+        return await delegateTask({
+          goals: args.goals,
+          registry,
+          proxyUrl: _chatProxy.url,
+          proxyHeaders: _chatProxy.headers,
+          defaultModel: args.model || _chatProxy.defaultModel,
+          toolDefinitions: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
+          toolHandlers: TOOL_HANDLERS,
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient }),
+          parentTaskId: null,
+          maxRounds: args.maxRounds,
+          sendSSE: _chatProxy.safeSSE,
+          config: getAgentConfig(configStore.getSettings()),
+        });
+      } catch (err) {
+        logger.error('[delegate_task] 子代理委派失败:', err.message);
+        return { error: `子代理委派失败: ${err.message}` };
+      }
     },
   };
 
@@ -2625,6 +2683,28 @@ async function init() {
     }
   });
 
+  // ==================== 多 Agent 任务 API ====================
+
+  app.get('/api/tasks', (req, res) => {
+    const { registry } = require('./lib/multi-agent');
+    const status = req.query.status;
+    res.json({ tasks: registry.list(status) });
+  });
+
+  app.get('/api/tasks/:id', (req, res) => {
+    const { registry } = require('./lib/multi-agent');
+    const task = registry.get(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json(task);
+  });
+
+  app.post('/api/tasks/:id/stop', (req, res) => {
+    const { registry } = require('./lib/multi-agent');
+    const task = registry.stop(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found or not running' });
+    res.json(task);
+  });
+
   // ==================== 智控助手上下文 API ====================
 
   app.get('/api/assistant/context', async (req, res) => {
@@ -2949,6 +3029,18 @@ async function init() {
     res.json(mcpToolStats.getStats());
   });
 
+  // 所有可用工具列表（内置 + MCP），供前端子智能体配置使用
+  app.get('/api/assistant/tools', (req, res) => {
+    const allDefs = [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()];
+    const tools = allDefs.map(d => {
+      const name = d.function?.name || d.name;
+      const desc = d.function?.description || d.description || '';
+      const perm = TOOL_PERMISSION[name] || 2;
+      return { name, description: desc, permission: perm };
+    });
+    res.json(tools);
+  });
+
   // 工具审批端点
   app.post('/api/assistant/approve', (req, res) => {
     const { id, approved } = req.body;
@@ -3020,6 +3112,10 @@ async function init() {
     if (proxy.requireAuth && proxy.authToken) {
       proxyHeaders['Authorization'] = `Bearer ${proxy.authToken}`;
     }
+    // 更新多 Agent 委派的共享代理上下文
+    _chatProxy.url = proxyUrl;
+    _chatProxy.headers = { ...proxyHeaders };
+    _chatProxy.defaultModel = proxy.defaultModel;
     if (providerId) proxyHeaders['x-pp-provider-id'] = providerId;
     if (model) proxyHeaders['x-pp-model'] = model;
     // 若供应商不在代理候选池中，传递完整供应商配置供代理动态构建临时候选
@@ -3045,6 +3141,7 @@ async function init() {
     function safeSSE(event, data) {
       try { sendSSE(res, event, data); } catch {}
     }
+    _chatProxy.safeSSE = safeSSE;
     const MAX_CONTEXT = Math.max(10000, parseInt(settings.maxContext) || 200000);
     const MAX_TOOL_ROUNDS = Math.max(1, Math.min(100, parseInt(settings.maxRounds) || 10));
 
@@ -3562,6 +3659,14 @@ async function init() {
     wsServer.init(server);
     requestLog.onEntry((entry) => wsServer.broadcast(entry));
     logger.log(`[Admin] WebSocket 已附加 (ws://localhost:${PORT})`);
+
+    // 注册多 Agent 任务事件广播
+    const { registry: taskRegistry } = require('./lib/multi-agent');
+    taskRegistry.on('task:created', (task) => wsServer.broadcast({ type: 'task', event: 'created', task }));
+    taskRegistry.on('task:started', (task) => wsServer.broadcast({ type: 'task', event: 'started', task }));
+    taskRegistry.on('task:completed', (task) => wsServer.broadcast({ type: 'task', event: 'completed', task }));
+    taskRegistry.on('task:failed', (task) => wsServer.broadcast({ type: 'task', event: 'failed', task }));
+    taskRegistry.on('task:stopped', (task) => wsServer.broadcast({ type: 'task', event: 'stopped', task }));
 
     // 初始化 MCP 客户端
     mcpClient.init({
