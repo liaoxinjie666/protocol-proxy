@@ -3696,6 +3696,7 @@ async function init() {
             if (m.tool_calls) clean.tool_calls = m.tool_calls;
             if (m.tool_call_id) clean.tool_call_id = m.tool_call_id;
             if (m.name) clean.name = m.name;
+            if (m.reasoning_content !== undefined) clean.reasoning_content = m.reasoning_content;
             return clean;
           });
           // 诊断日志：请求消息结构
