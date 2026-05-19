@@ -171,12 +171,14 @@ AI 在执行过程中按需读取的文档。
 
 ## 可用工具参考
 
-在技能中可以指示 AI 调用以下工具：
+在技能中可以指示 AI 调用以下工具。MCP 工具也可以在技能中引用，AI 会自动调用。
+
+### 系统查询（只读）
 
 | 工具 | 用途 |
 |------|------|
+| `get_system_status` | 获取系统状态概览 |
 | `check_health` | 系统健康检查 |
-| `get_system_status` | 获取系统状态 |
 | `get_providers` | 获取所有供应商 |
 | `get_provider` | 获取单个供应商详情 |
 | `get_proxies` | 获取所有代理 |
@@ -186,9 +188,91 @@ AI 在执行过程中按需读取的文档。
 | `get_recent_requests` | 获取最近请求日志 |
 | `get_system_logs` | 获取系统日志 |
 | `get_settings` | 获取系统设置 |
-| `trigger_key_health_check` | 触发密钥健康检查 |
+| `get_config_history` | 获取配置版本历史 |
+| `test_provider_keys` | 测试供应商密钥连通性 |
+| `get_provider_models` | 获取供应商可用模型列表 |
 
-MCP 工具也可以在技能中引用，AI 会自动调用。
+### 文件操作
+
+| 工具 | 用途 | 权限 |
+|------|------|------|
+| `read_file` | 读取文件内容 | 只读 |
+| `list_directory` | 列出目录内容 | 只读 |
+| `search_files` | 按 glob 模式搜索文件 | 只读 |
+| `grep_search` | 按正则搜索文件内容 | 只读 |
+| `write_file` | 写入文件 | 需审批 |
+| `edit_file` | 精确替换文件内容 | 需审批 |
+| `execute_command` | 执行系统命令 | 需审批 |
+
+### 供应商管理
+
+| 工具 | 用途 |
+|------|------|
+| `create_provider` | 创建供应商 |
+| `update_provider` | 更新供应商配置 |
+| `delete_provider` | 删除供应商 |
+
+### 代理管理
+
+| 工具 | 用途 |
+|------|------|
+| `create_proxy` | 创建并启动代理 |
+| `update_proxy` | 更新代理配置 |
+| `delete_proxy` | 删除代理 |
+| `start_proxy` | 启动代理 |
+| `stop_proxy` | 停止代理 |
+| `start_all_proxies` | 启动所有代理 |
+| `stop_all_proxies` | 停止所有代理 |
+
+### MCP 服务管理
+
+| 工具 | 用途 |
+|------|------|
+| `get_mcp_servers` | 列出 MCP 服务及状态 |
+| `add_mcp_server` | 添加 MCP 服务 |
+| `update_mcp_server` | 更新 MCP 服务 |
+| `delete_mcp_server` | 删除 MCP 服务 |
+| `connect_mcp_server` | 连接 MCP 服务 |
+| `disconnect_mcp_server` | 断开 MCP 服务 |
+| `get_mcp_tools` | 列出已连接 MCP 服务的工具 |
+
+### 技能管理
+
+| 工具 | 用途 |
+|------|------|
+| `get_skills` | 列出所有技能 |
+| `create_skill` | 创建新技能 |
+| `update_skill` | 更新技能 |
+| `delete_skill` | 删除技能 |
+| `invoke_skill` | 调用技能获取指令 |
+
+### 记忆系统
+
+| 工具 | 用途 |
+|------|------|
+| `get_memory` | 查看所有记忆（含人设） |
+| `save_memory` | 保存记忆条目 |
+| `edit_memory` | 编辑或删除记忆条目 |
+| `update_soul` | 更新智能体人设（SOUL.md） |
+
+### 配置管理
+
+| 工具 | 用途 |
+|------|------|
+| `export_config` | 导出系统配置 |
+| `import_config` | 导入配置（合并/覆盖） |
+| `rollback_config` | 回滚到历史配置版本 |
+| `update_settings` | 更新系统设置 |
+| `trigger_key_health_check` | 手动触发密钥健康检查 |
+
+### 多智能体委派
+
+| 工具 | 用途 |
+|------|------|
+| `delegate_task` | 委派子任务给子代理并行执行 |
+| `list_tasks` | 列出子任务（可按状态筛选） |
+| `get_task` | 获取子任务详情 |
+| `stop_task` | 终止运行中的子任务 |
 
 ### 第五步：验证技能
 

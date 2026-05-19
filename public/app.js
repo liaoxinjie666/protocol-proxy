@@ -94,13 +94,35 @@ function cycleTheme() {
     if (mrInput) mrInput.value = assistantMaxRounds;
     // 子智能体设置
     const agentDefaults = { 'agent.maxConcurrent': 3, 'agent.maxRounds': 5, 'agent.timeout': 300 };
-    const agentNumFields = { 'agent.maxConcurrent': 'settings-agent-max-concurrent', 'agent.maxRounds': 'settings-agent-max-rounds', 'agent.timeout': 'settings-agent-timeout' };
+    const agentNumFields = { 'agent.maxConcurrent': 'settings-agent-max-concurrent', 'agent.maxRounds': 'settings-agent-max-rounds', 'agent.timeout': 'settings-agent-timeout', 'agent.maxRetries': 'settings-agent-maxRetries' };
     for (const [key, elId] of Object.entries(agentNumFields)) {
       const el = document.getElementById(elId);
       if (el) el.value = settings[key] !== undefined ? settings[key] : agentDefaults[key];
     }
     // 加载工具列表用于权限配置
     loadAgentToolsConfig(settings);
+    // 记忆系统设置
+    const memFields = {
+      'memory.enabled': { id: 'settings-memory-enabled', type: 'bool', def: true },
+      'memory.soul.enabled': { id: 'settings-soul-enabled', type: 'bool', def: true },
+      'memory.soul.maxChars': { id: 'settings-soul-max-chars', type: 'num', def: 2000 },
+      'memory.tier1.enabled': { id: 'settings-tier1-enabled', type: 'bool', def: true },
+      'memory.tier1.memoryMaxChars': { id: 'settings-tier1-memory-max-chars', type: 'num', def: 1500 },
+      'memory.tier1.userMaxChars': { id: 'settings-tier1-user-max-chars', type: 'num', def: 1000 },
+      'memory.tier2.memoryEnabled': { id: 'settings-tier2-memory-enabled', type: 'bool', def: true },
+      'memory.tier2.memoryMaxEntries': { id: 'settings-tier2-memory-max-entries', type: 'num', def: 20 },
+      'memory.tier2.memoryMaxChars': { id: 'settings-tier2-memory-max-chars', type: 'num', def: 3000 },
+      'memory.tier2.userEnabled': { id: 'settings-tier2-user-enabled', type: 'bool', def: false },
+      'memory.tier2.userMaxEntries': { id: 'settings-tier2-user-max-entries', type: 'num', def: 10 },
+      'memory.tier2.userMaxChars': { id: 'settings-tier2-user-max-chars', type: 'num', def: 2000 },
+    };
+    for (const [key, spec] of Object.entries(memFields)) {
+      const el = document.getElementById(spec.id);
+      if (!el) continue;
+      const val = settings[key] !== undefined ? settings[key] : spec.def;
+      if (spec.type === 'bool') el.checked = !!val;
+      else el.value = val;
+    }
     // 恢复助手选择
     if (settings.assistantProxyId) savedAssistantProxyId = settings.assistantProxyId;
     if (settings.assistantProviderId) savedAssistantProviderId = settings.assistantProviderId;
@@ -137,6 +159,8 @@ function navigateTo(page) {
     assistant: '\u667a\u63a7\u52a9\u624b',
     skills: '\u6280\u80fd\u7ba1\u7406',
     'mcp-servers': 'MCP \u670d\u52a1',
+    memory: '\u8bb0\u5fc6\u7ba1\u7406',
+    tasks: '\u4efb\u52a1\u7ba1\u7406',
     settings: '\u8bbe\u7f6e',
   };
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -159,6 +183,9 @@ function navigateTo(page) {
   }
   if (page === 'skills') loadSkills();
   if (page === 'mcp-servers') loadMcpServers();
+  if (page === 'memory') loadMemoryPage();
+  if (page === 'tasks') loadTasks();
+  if (page === 'settings') loadExecPolicy();
 }
 
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
@@ -1179,6 +1206,18 @@ function connectRequestLogWS() {
           if (t.status === 'completed') updateDelegateTask(t.id, 'completed', t.summary);
           else if (t.status === 'failed') updateDelegateTask(t.id, 'failed', t.error);
           else if (t.status === 'running') updateDelegateTask(t.id, 'running');
+          else if (t.status === 'stopped') updateDelegateTask(t.id, 'stopped', '已终止');
+          if (typeof onTaskEvent === 'function') onTaskEvent(t);
+          return;
+        }
+        if (msg.type === 'task' && msg.event === 'progress' && msg.taskId) {
+          updateDelegateProgress(msg.taskId, msg.progress);
+          if (typeof onTaskProgressEvent === 'function') onTaskProgressEvent(msg.taskId, msg.progress);
+          return;
+        }
+        // 子任务批次创建（替代 SSE delegate created 事件）
+        if (msg.type === 'batch' && msg.event === 'created' && msg.tasks) {
+          handleDelegateEvent({ type: 'created', tasks: msg.tasks });
           return;
         }
         const entry = msg.id ? msg : (msg.data || msg);
@@ -1900,15 +1939,29 @@ async function sendAssistantMessage() {
           case 'tool_approval': {
             if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
             const argsDisplay = data.arguments ? JSON.stringify(data.arguments, null, 2) : '{}';
-            const approvalHtml = `<div class="tool-approval-card" id="approval-${escapeHtml(data.id)}">
-              <div class="tool-approval-header">⚠️ 需要确认执行</div>
-              <div class="tool-approval-name">${escapeHtml(data.name)}</div>
-              <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
-              <div class="tool-approval-actions">
+            const ep = data.execPolicy;
+            let actionsHtml;
+            if (ep && ep.decision === 'prompt') {
+              // 执行策略三级审批
+              const policyInfo = ep.matchedRule
+                ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">匹配规则: <code>${escapeHtml(ep.matchedRule)}</code> · ${escapeHtml(ep.description || '')}</div>`
+                : `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${escapeHtml(ep.description || '未知命令')}</div>`;
+              actionsHtml = `${policyInfo}
+                <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 本次批准</button>
+                <button class="btn btn-approve" style="background:var(--accent);color:#fff" onclick="approveTool('${escapeHtml(data.id)}', 'session', this)">🔒 本次会话批准</button>
+                <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
+                <span class="approval-status"></span>`;
+            } else {
+              actionsHtml = `
                 <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 批准执行</button>
                 <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
-                <span class="approval-status"></span>
-              </div>
+                <span class="approval-status"></span>`;
+            }
+            const approvalHtml = `<div class="tool-approval-card" id="approval-${escapeHtml(data.id)}">
+              <div class="tool-approval-header">${ep ? '🛡️ 命令需要确认' : '⚠️ 需要确认执行'}</div>
+              <div class="tool-approval-name">${escapeHtml(data.name)}</div>
+              <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
+              <div class="tool-approval-actions">${actionsHtml}</div>
             </div>`;
             addAssistantMessage('tool-approval', approvalHtml);
             break;
@@ -2070,44 +2123,33 @@ function removeAssistantMessage(id) {
   assistantMessages = assistantMessages.filter(m => m.id !== id);
 }
 
+// 配置 marked.js（GFM 支持表格/任务列表，breaks 匹配单换行转 <br）
+if (typeof marked !== 'undefined') {
+  marked.setOptions({ breaks: true, gfm: true });
+}
+
 function formatAssistantContent(text) {
   if (!text) return '';
-  // 将 <think>...</think> 渲染为可折叠的思考块（在 escapeHtml 之前提取）
+  // 提取 <think> 块（marked 不支持此标签，需在渲染前提取、渲染后还原）
   const thinkBlocks = [];
   let processed = text.replace(/<think>([\s\S]*?)<\/think>/g, (_, think) => {
     const idx = thinkBlocks.length;
     thinkBlocks.push(think.trim());
     return `\x00THINK_${idx}\x00`;
   });
-  let html = escapeHtml(processed);
-  // 还原思考块为 HTML
+  // marked.js 渲染完整 Markdown（表格、标题、引用、列表等）
+  let html = typeof marked !== 'undefined'
+    ? marked.parse(processed)
+    : escapeHtml(processed).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>');
+  // 还原思考块为可折叠 details
   html = html.replace(/\x00THINK_(\d+)\x00/g, (_, idx) => {
     const thinkId = 'think-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     return `<details class="think-block"><summary>思考过程</summary><div class="think-content" id="${thinkId}">${escapeHtml(thinkBlocks[parseInt(idx)])}</div></details>`;
   });
-  // 代码块
-  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-  // 行内代码
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // 段落
-  const paragraphs = html.split(/\n{2,}/);
-  html = paragraphs.map(p => {
-    p = p.trim();
-    if (!p) return '';
-    // 如果已经是 pre，不包 p
-    if (p.startsWith('<pre>')) return p;
-    // 列表项
-    if (p.startsWith('- ') || p.startsWith('* ')) {
-      const items = p.split('\n').filter(l => l.trim().startsWith('- ') || l.trim().startsWith('* '));
-      return '<ul>' + items.map(i => `<li>${i.trim().slice(2)}</li>`).join('') + '</ul>';
-    }
-    // 数字列表
-    if (/^\d+\./.test(p)) {
-      const items = p.split('\n').filter(l => /^\d+\./.test(l.trim()));
-      return '<ol>' + items.map(i => `<li>${i.trim().replace(/^\d+\.\s*/, '')}</li>`).join('') + '</ol>';
-    }
-    return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
-  }).join('');
+  // DOMPurify 消毒（防止 marked 输出的 HTML 含 XSS）
+  if (typeof DOMPurify !== 'undefined') {
+    html = DOMPurify.sanitize(html);
+  }
   return html;
 }
 
@@ -2139,6 +2181,24 @@ function updateDelegateTask(taskId, status, text) {
       summary.className = 'delegate-task-summary visible ' + (status === 'failed' ? 'error' : 'success');
     }
   }
+  // 完成/失败/停止时隐藏进度
+  if (['completed', 'failed', 'stopped'].includes(status)) {
+    const progress = el.querySelector('.delegate-task-progress');
+    if (progress) progress.style.display = 'none';
+  }
+}
+
+function updateDelegateProgress(taskId, progress) {
+  const el = document.querySelector(`.delegate-task[data-task-id="${taskId}"]`);
+  if (!el || !progress) return;
+  let progressEl = el.querySelector('.delegate-task-progress');
+  if (!progressEl) {
+    progressEl = document.createElement('div');
+    progressEl.className = 'delegate-task-progress';
+    el.appendChild(progressEl);
+  }
+  progressEl.textContent = `轮次 ${progress.round} · ${progress.lastTool}`;
+  progressEl.style.display = '';
 }
 
 function handleDelegateEvent(data) {
@@ -2169,7 +2229,8 @@ async function approveTool(id, approved, btn) {
     });
     const statusEl = card?.querySelector('.approval-status');
     if (res.ok) {
-      if (statusEl) statusEl.textContent = approved ? '✅ 已批准' : '❌ 已拒绝';
+      const labels = { true: '✅ 已批准', session: '🔒 会话已批准', false: '❌ 已拒绝' };
+      if (statusEl) statusEl.textContent = labels[String(approved)] || '✅ 已批准';
     } else {
       const err = await res.json().catch(() => ({}));
       if (statusEl) statusEl.textContent = `⚠️ ${err.error || '操作失败'}`;
@@ -2290,6 +2351,10 @@ function updateMaxConversations(value) {
 }
 
 function updateAgentSetting(key, value) {
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [key]: value }) }).then(showSaveToast).catch(() => {});
+}
+
+function updateMemorySetting(key, value) {
   fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [key]: value }) }).then(showSaveToast).catch(() => {});
 }
 
@@ -3219,6 +3284,281 @@ function closeSkillViewModal() {
   hideModal('skill-view-modal');
 }
 
+// ==================== 执行策略 ====================
+
+async function loadExecPolicy() {
+  try {
+    const res = await fetch('/api/assistant/tools');
+    // 通过 get_exec_policy 工具获取策略概览
+    const statsEl = document.getElementById('exec-policy-stats');
+    const rulesEl = document.getElementById('exec-policy-user-rules');
+    const listEl = document.getElementById('exec-policy-rules-list');
+    if (!statsEl) return;
+
+    // 直接调用 API 获取策略
+    const policyRes = await fetch('/api/exec-policy');
+    if (!policyRes.ok) { statsEl.textContent = '加载失败'; return; }
+    const data = await policyRes.json();
+    const d = data.default || {};
+    const u = data.user || {};
+
+    statsEl.innerHTML = `<div style="display:flex;gap:16px;flex-wrap:wrap">
+      <span>默认规则: <b>${(d.allow||0) + (d.prompt||0) + (d.forbidden||0)}</b></span>
+      <span style="color:var(--success,#22c55e)">Allow: ${d.allow||0}</span>
+      <span style="color:var(--accent)">Prompt: ${d.prompt||0}</span>
+      <span style="color:var(--error,#ef4444)">Forbidden: ${d.forbidden||0}</span>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px">
+      <span>自定义规则: <b>${(u.allow||0) + (u.prompt||0) + (u.forbidden||0)}</b></span>
+      <span style="color:var(--success,#22c55e)">Allow: ${u.allow||0}</span>
+      <span style="color:var(--accent)">Prompt: ${u.prompt||0}</span>
+      <span style="color:var(--error,#ef4444)">Forbidden: ${u.forbidden||0}</span>
+    </div>`;
+
+    // 显示用户自定义规则
+    const userRules = data.userRules || { allow: [], prompt: [], forbidden: [] };
+    const allUserRules = [
+      ...userRules.allow.map(r => ({ ...r, category: 'allow' })),
+      ...userRules.prompt.map(r => ({ ...r, category: 'prompt' })),
+      ...userRules.forbidden.map(r => ({ ...r, category: 'forbidden' })),
+    ];
+
+    if (rulesEl && listEl) {
+      if (allUserRules.length > 0) {
+        rulesEl.style.display = '';
+        const catColors = { allow: 'var(--success,#22c55e)', prompt: 'var(--accent)', forbidden: 'var(--error,#ef4444)' };
+        listEl.innerHTML = allUserRules.map(r =>
+          `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0">
+              <span style="font-size:10px;padding:1px 5px;border-radius:var(--radius-full);background:${catColors[r.category]}20;color:${catColors[r.category]};flex-shrink:0">${r.category}</span>
+              <code style="font-family:var(--font-mono);font-size:12px">${escapeHtml(r.pattern)}</code>
+              ${r.description ? `<span style="color:var(--text-muted);font-size:11px">${escapeHtml(r.description)}</span>` : ''}
+            </div>
+            <button onclick="removeExecPolicyRule('${r.category}','${escapeHtml(r.pattern)}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:2px 6px" title="删除">×</button>
+          </div>`
+        ).join('');
+      } else {
+        rulesEl.style.display = 'none';
+      }
+    }
+  } catch (err) {
+    console.error('loadExecPolicy error:', err);
+  }
+}
+
+async function testExecPolicy() {
+  const input = document.getElementById('exec-policy-test-input');
+  const resultEl = document.getElementById('exec-policy-test-result');
+  if (!input || !resultEl) return;
+  const cmd = input.value.trim();
+  if (!cmd) return;
+
+  try {
+    const res = await fetch('/api/exec-policy/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const colors = { allow: 'var(--success,#22c55e)', prompt: 'var(--accent)', forbidden: 'var(--error,#ef4444)' };
+    const labels = { allow: 'Allow — 直接执行', prompt: 'Prompt — 需确认', forbidden: 'Forbidden — 禁止' };
+    resultEl.style.display = '';
+    resultEl.style.background = `${colors[data.decision]}15`;
+    resultEl.style.border = `1px solid ${colors[data.decision]}40`;
+    resultEl.innerHTML = `<span style="color:${colors[data.decision]};font-weight:600">${labels[data.decision] || data.decision}</span>
+      ${data.matchedRule ? `<span style="color:var(--text-muted);margin-left:8px">匹配规则: <code>${escapeHtml(data.matchedRule)}</code></span>` : ''}
+      ${data.description ? `<span style="color:var(--text-muted);margin-left:8px">${escapeHtml(data.description)}</span>` : ''}`;
+  } catch (err) {
+    resultEl.style.display = '';
+    resultEl.style.background = 'var(--error,#ef4444)15';
+    resultEl.textContent = '测试失败: ' + err.message;
+  }
+}
+
+async function removeExecPolicyRule(category, pattern) {
+  try {
+    const res = await fetch('/api/exec-policy/rule', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, pattern }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast('规则已删除');
+    loadExecPolicy();
+  } catch (err) {
+    showToast('删除失败: ' + err.message, true);
+  }
+}
+
+// ==================== 任务管理 ====================
+
+let tasksData = [];
+let taskProgressMap = new Map(); // taskId → { round, lastTool, snippet }
+
+async function loadTasks() {
+  try {
+    const res = await fetch('/api/tasks');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    tasksData = data.tasks || [];
+    filterTasks();
+  } catch (err) {
+    showToast('加载任务失败: ' + err.message, true);
+  }
+}
+
+function filterTasks() {
+  renderTasks();
+}
+
+function getFilteredTasks() {
+  const search = (document.getElementById('task-search')?.value || '').toLowerCase();
+  const status = document.getElementById('task-status-filter')?.value || '';
+  return tasksData.filter(t => {
+    if (status && t.status !== status) return false;
+    if (search && !t.objective.toLowerCase().includes(search) && !(t.summary || '').toLowerCase().includes(search)) return false;
+    return true;
+  });
+}
+
+function renderTasks() {
+  const list = document.getElementById('tasks-list');
+  const empty = document.getElementById('tasks-empty');
+  const statsEl = document.getElementById('tasks-stats');
+  if (!list) return;
+
+  // 统计
+  const counts = { running: 0, completed: 0, failed: 0, stopped: 0 };
+  tasksData.forEach(t => { if (counts[t.status] !== undefined) counts[t.status]++; });
+  const totalDuration = tasksData.filter(t => t.startedAt && t.endedAt)
+    .reduce((sum, t) => sum + (t.endedAt - t.startedAt), 0);
+  const avgDuration = tasksData.filter(t => t.startedAt && t.endedAt).length > 0
+    ? (totalDuration / tasksData.filter(t => t.startedAt && t.endedAt).length / 1000).toFixed(1) + 's'
+    : '-';
+
+  if (statsEl) {
+    statsEl.innerHTML = [
+      { label: '运行中', value: counts.running, color: 'var(--accent)' },
+      { label: '已完成', value: counts.completed, color: 'var(--success, #22c55e)' },
+      { label: '失败', value: counts.failed, color: 'var(--error, #ef4444)' },
+      { label: '平均耗时', value: avgDuration, color: 'var(--text-secondary)' },
+    ].map(s => `<div style="background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-md);padding:12px 16px;text-align:center">
+      <div style="font-size:22px;font-weight:600;color:${s.color}">${s.value}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${s.label}</div>
+    </div>`).join('');
+  }
+
+  // 更新导航徽标
+  const badge = document.getElementById('nav-task-count');
+  if (badge) {
+    badge.textContent = counts.running;
+    badge.style.display = counts.running > 0 ? '' : 'none';
+  }
+
+  const filtered = getFilteredTasks();
+  if (filtered.length === 0) {
+    list.style.display = 'none';
+    if (empty) { empty.style.display = ''; empty.textContent = tasksData.length > 0 ? '无匹配任务' : '暂无任务记录'; }
+    return;
+  }
+  list.style.display = '';
+  if (empty) empty.style.display = 'none';
+
+  const statusColors = { created: 'var(--text-muted)', running: 'var(--accent)', completed: 'var(--success, #22c55e)', failed: 'var(--error, #ef4444)', stopped: 'var(--text-muted)' };
+  const statusLabels = { created: '已创建', running: '运行中', completed: '已完成', failed: '已失败', stopped: '已停止' };
+
+  list.innerHTML = filtered.map(t => {
+    const color = statusColors[t.status] || 'var(--text-muted)';
+    const label = statusLabels[t.status] || t.status;
+    const duration = t.startedAt && t.endedAt ? ((t.endedAt - t.startedAt) / 1000).toFixed(1) + 's' : t.startedAt ? '进行中...' : '-';
+    const role = t.role && t.role !== 'general' ? `<span class="task-role-badge">${t.role}</span>` : '';
+    const progress = taskProgressMap.get(t.id);
+    const progressLine = progress && t.status === 'running'
+      ? `<div style="font-size:11px;color:var(--accent);padding-left:16px;font-family:var(--font-mono)">轮次 ${progress.round} · ${progress.lastTool}</div>` : '';
+    const timeStr = t.startedAt ? new Date(t.startedAt).toLocaleString('zh-CN', { hour12: false }) : '-';
+
+    return `<div class="task-card" data-task-id="${t.id}" onclick="toggleTaskDetail('${t.id}')">
+      <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">
+        <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0${t.status === 'running' ? ';animation:pulse 1.5s infinite' : ''}"></span>
+        <span style="font-size:13px;font-weight:500;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(t.objective)}</span>
+        ${role}
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;margin-left:8px">
+        <span style="font-size:11px;color:${color};white-space:nowrap">${label}</span>
+        <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${duration}</span>
+        ${t.status === 'running' ? `<button class="btn btn-secondary" style="font-size:11px;padding:2px 8px" onclick="event.stopPropagation();stopTaskFromList('${t.id}')">停止</button>` : ''}
+      </div>
+    </div>
+    <div class="task-detail task-detail-md" id="task-detail-${t.id}" style="display:none">
+      ${t.summary ? `<div style="margin-bottom:8px">${formatAssistantContent(t.summary)}</div>` : ''}
+      ${t.error ? `<div style="margin-bottom:8px;padding:8px 10px;background:rgba(239,68,68,0.08);border-radius:var(--radius-sm);border-left:3px solid var(--error, #ef4444)"><div style="font-size:11px;color:var(--error, #ef4444);margin-bottom:4px">错误</div><div style="font-size:12px;color:var(--text-secondary)">${formatAssistantContent(t.error)}</div></div>` : ''}
+      ${t.result && t.result !== t.summary ? `<div style="margin-bottom:8px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">详细结果</div><div style="max-height:300px;overflow-y:auto">${formatAssistantContent(t.result.slice(0, 5000))}</div></div>` : ''}
+      ${progressLine}
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;padding-top:6px;border-top:1px solid var(--border-subtle)">
+        <span style="font-size:11px;color:var(--text-muted)">ID: ${t.id}</span>
+        <span style="font-size:11px;color:var(--text-muted)">角色: ${t.role || 'general'}</span>
+        <span style="font-size:11px;color:var(--text-muted)">创建: ${timeStr}</span>
+        <span style="font-size:11px;color:var(--text-muted)">耗时: ${duration}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleTaskDetail(taskId) {
+  const el = document.getElementById('task-detail-' + taskId);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+async function stopTaskFromList(taskId) {
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/stop`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast('任务已停止');
+    loadTasks();
+  } catch (err) {
+    showToast('停止失败: ' + err.message, true);
+  }
+}
+
+async function clearCompletedTasks() {
+  const completed = tasksData.filter(t => ['completed', 'failed', 'stopped'].includes(t.status));
+  if (completed.length === 0) { showToast('没有可清理的任务'); return; }
+  if (!confirm(`确认清理 ${completed.length} 个已完成/失败/停止的任务？`)) return;
+  try {
+    await Promise.all(completed.map(t => fetch(`/api/tasks/${t.id}`, { method: 'DELETE' }).catch(() => {})));
+    showToast(`已清理 ${completed.length} 个任务`);
+    loadTasks();
+  } catch (err) {
+    showToast('清理失败: ' + err.message, true);
+  }
+}
+
+// 实时更新任务列表（WebSocket）
+function onTaskEvent(task) {
+  const idx = tasksData.findIndex(t => t.id === task.id);
+  if (idx >= 0) {
+    tasksData[idx] = { ...tasksData[idx], ...task };
+    if (currentPage === 'tasks') renderTasks();
+  } else {
+    // 新任务加入列表
+    tasksData.unshift(task);
+    if (currentPage === 'tasks') renderTasks();
+  }
+  // 更新导航徽标
+  const running = tasksData.filter(t => t.status === 'running').length;
+  const badge = document.getElementById('nav-task-count');
+  if (badge) {
+    badge.textContent = running;
+    badge.style.display = running > 0 ? '' : 'none';
+  }
+}
+
+function onTaskProgressEvent(taskId, progress) {
+  taskProgressMap.set(taskId, progress);
+  if (currentPage === 'tasks') renderTasks();
+}
+
 // ==================== MCP 服务管理 ====================
 
 let mcpServersData = [];
@@ -3645,5 +3985,217 @@ function updateMcpServerStatus(serverName, statusData) {
 function escapeAttr(str) {
   return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// ==================== Memory Management ====================
+
+let _memoryData = {};
+let _memoryEntryMode = null; // 'add' | 'edit'
+let _memoryEntryType = null; // 'memory' | 'user'
+let _memoryEntryIdx = -1;
+
+function loadMemoryPage() {
+  fetch('/api/memory').then(r => r.json()).then(data => {
+    _memoryData = data;
+    renderSoul(data.soul);
+    renderTier1('memory', data.tier1.memory);
+    renderTier1('user', data.tier1.user);
+    renderEntryList('memory', data.tier2.memory);
+    renderEntryList('user', data.tier2.user);
+  }).catch(() => showToast('加载记忆失败', true));
+}
+
+function renderSoul(content) {
+  document.getElementById('soul-editor').value = content || '';
+}
+
+function renderTier1(target, content) {
+  const viewEl = document.getElementById(target + '-t1-view');
+  const editorEl = document.getElementById(target + '-t1-editor');
+  const hintEl = document.getElementById(target + '-t1-hint');
+  const limits = _memoryData.limits || {};
+  const maxChars = target === 'memory' ? (limits.tier1MemoryMaxChars || 1500) : (limits.tier1UserMaxChars || 1000);
+
+  if (viewEl) {
+    if (content) {
+      viewEl.innerHTML = typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined'
+        ? DOMPurify.sanitize(marked.parse(content))
+        : '<pre style="white-space:pre-wrap">' + escapeHtml(content) + '</pre>';
+    } else {
+      viewEl.innerHTML = '<div class="empty-state-sm"><p>暂无一级' + (target === 'memory' ? '经验记忆' : '用户画像') + '</p></div>';
+    }
+  }
+  if (editorEl) editorEl.value = content || '';
+  if (hintEl) hintEl.textContent = '已用 ' + (content || '').length + '/' + maxChars + ' 字符';
+}
+
+function toggleTier1Edit(target) {
+  const viewEl = document.getElementById(target + '-t1-view');
+  const editorEl = document.getElementById(target + '-t1-editor');
+  const editBtn = document.getElementById(target + '-t1-edit-btn');
+  const saveBtn = document.getElementById(target + '-t1-save-btn');
+  const isEditing = editorEl.style.display !== 'none';
+
+  if (isEditing) {
+    // Switch to view
+    viewEl.style.display = '';
+    editorEl.style.display = 'none';
+    editBtn.textContent = '编辑';
+    saveBtn.style.display = 'none';
+    // Re-render view
+    renderTier1(target, editorEl.value);
+  } else {
+    // Switch to edit
+    viewEl.style.display = 'none';
+    editorEl.style.display = '';
+    editBtn.textContent = '取消';
+    saveBtn.style.display = '';
+    editorEl.focus();
+  }
+}
+
+function saveTier1(target) {
+  const content = document.getElementById(target + '-t1-editor').value;
+  fetch('/api/memory/tier1/' + target, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content })
+  }).then(r => r.json()).then(data => {
+    if (data.success) {
+      showToast('已保存');
+      toggleTier1Edit(target);
+    } else {
+      showToast(data.error || '保存失败', true);
+    }
+  }).catch(() => showToast('保存失败', true));
+}
+
+function renderEntryList(type, entries) {
+  const list = document.getElementById(type + '-list');
+  const count = document.getElementById(type + '-count');
+  count.textContent = entries.length;
+  if (entries.length === 0) {
+    list.innerHTML = '<div class="empty-state-sm"><p>暂无二级记忆</p><button class="btn btn-primary btn-sm" onclick="openAddEntryModal(\'' + type + '\')">添加第一条</button></div>';
+    return;
+  }
+  list.innerHTML = entries.map(e => {
+    const safeSummary = escapeHtml(e.summary || e.content.split('\n')[0].slice(0, 50));
+    return '<div class="entry-card">' +
+      '<div class="entry-content">' + safeSummary + '</div>' +
+      '<div class="entry-actions">' +
+        '<button class="btn btn-sm" onclick="openEditEntryModal(\'' + type + '\', ' + e.idx + ')">编辑</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="deleteEntry(\'' + type + '\', ' + e.idx + ')">删除</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function saveSoul() {
+  const content = document.getElementById('soul-editor').value;
+  fetch('/api/memory/soul', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content })
+  }).then(r => r.json()).then(data => {
+    if (data.error) showToast(data.error, true);
+    else showToast('已保存');
+  }).catch(() => showToast('保存失败', true));
+}
+
+function openAddEntryModal(type) {
+  _memoryEntryMode = 'add';
+  _memoryEntryType = type;
+  _memoryEntryIdx = -1;
+  document.getElementById('memory-entry-title').textContent = '添加二级' + (type === 'memory' ? '经验记忆' : '用户画像');
+  document.getElementById('memory-entry-summary').value = '';
+  document.getElementById('memory-entry-content').value = '';
+  updateEntryUsage(type);
+  showModal('memory-entry-modal');
+  document.getElementById('memory-entry-summary').focus();
+}
+
+function openEditEntryModal(type, idx) {
+  const entries = _memoryData.tier2 ? _memoryData.tier2[type] || [] : [];
+  const entry = entries.find(e => e.idx === idx);
+  if (!entry) return;
+  _memoryEntryMode = 'edit';
+  _memoryEntryType = type;
+  _memoryEntryIdx = idx;
+  document.getElementById('memory-entry-title').textContent = '编辑二级' + (type === 'memory' ? '经验记忆' : '用户画像');
+  document.getElementById('memory-entry-summary').value = entry.summary || '';
+  document.getElementById('memory-entry-content').value = entry.content;
+  updateEntryUsage(type);
+  showModal('memory-entry-modal');
+  document.getElementById('memory-entry-summary').focus();
+}
+
+function updateEntryUsage(type) {
+  const entries = _memoryData.tier2 ? _memoryData.tier2[type] || [] : [];
+  const limits = _memoryData.limits || {};
+  const maxEntries = type === 'memory' ? (limits.tier2MemoryMaxEntries || 20) : (limits.tier2UserMaxEntries || 10);
+  document.getElementById('memory-entry-usage').textContent = '二级记忆: ' + entries.length + '/' + maxEntries + ' 条';
+}
+
+function closeMemoryEntryModal() {
+  hideModal('memory-entry-modal');
+}
+
+function saveMemoryEntry() {
+  const summary = document.getElementById('memory-entry-summary').value.trim();
+  const content = document.getElementById('memory-entry-content').value.trim();
+  if (!content) { showToast('内容不能为空', true); return; }
+  if (!summary) { showToast('摘要不能为空', true); return; }
+  const type = _memoryEntryType;
+
+  if (_memoryEntryMode === 'add') {
+    fetch('/api/memory/tier2/' + type, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, summary })
+    }).then(r => r.json()).then(data => {
+      if (data.success) { showToast('已添加'); closeMemoryEntryModal(); loadMemoryPage(); }
+      else showToast(data.error || '添加失败', true);
+    }).catch(() => showToast('添加失败', true));
+  } else {
+    const entries = _memoryData.tier2 ? _memoryData.tier2[type] || [] : [];
+    const entry = entries.find(e => e.idx === _memoryEntryIdx);
+    if (!entry) return;
+    fetch('/api/memory/tier2/' + type, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_text: entry.content, content, summary })
+    }).then(r => r.json()).then(data => {
+      if (data.success) { showToast('已更新'); closeMemoryEntryModal(); loadMemoryPage(); }
+      else showToast(data.error || '更新失败', true);
+    }).catch(() => showToast('更新失败', true));
+  }
+}
+
+function deleteEntry(type, idx) {
+  const entries = _memoryData.tier2 ? _memoryData.tier2[type] || [] : [];
+  const entry = entries.find(e => e.idx === idx);
+  if (!entry) return;
+  if (!confirm('确定删除这条记忆？')) return;
+  fetch('/api/memory/tier2/' + type, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_text: entry.content })
+  }).then(r => r.json()).then(data => {
+    if (data.success) { showToast('已删除'); loadMemoryPage(); }
+    else showToast(data.error || '删除失败', true);
+  }).catch(() => showToast('删除失败', true));
+}
+
+// Tab switching for memory page
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tabBar = btn.closest('.tab-bar');
+    tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const page = tabBar.closest('.page');
+    page.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    const target = page.querySelector('#tab-' + btn.dataset.tab);
+    if (target) target.classList.add('active');
+  });
+});
 
 init();

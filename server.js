@@ -1103,8 +1103,100 @@ async function init() {
     {
       type: 'function',
       function: {
+        name: 'save_memory',
+        description: '保存一条持久记忆。记忆会跨会话保留并注入到未来的对话中。tier=1 始终注入上下文（适合关键信息），tier=2 按需加载（适合细节信息，通过 read_memory 读取）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            target: {
+              type: 'string',
+              enum: ['memory', 'user'],
+              description: "记忆类型：'user' 存用户画像（姓名、角色、偏好等），'memory' 存经验笔记（环境事实、工具惯例等）",
+            },
+            content: {
+              type: 'string',
+              description: '记忆内容，应为简短的事实性陈述，例如"用户偏好简洁回答"',
+            },
+            summary: {
+              type: 'string',
+              description: '摘要，不超过50个字符，概括这条记忆的核心要点。二级记忆必填。',
+            },
+            tier: {
+              type: 'number',
+              enum: [1, 2],
+              description: '记忆级别：1=始终注入上下文(默认)，2=按需加载（标题索引注入，详情需 read_memory 读取）',
+            },
+          },
+          required: ['target', 'content', 'summary'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_memory',
+        description: '查看当前已保存的所有记忆，包括经验笔记、用户画像和 Agent 人设。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'edit_memory',
+        description: '编辑或删除已有的记忆条目。通过 old_text 子串匹配要修改的条目。',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['replace', 'remove'],
+              description: "'replace' 更新条目内容，'remove' 删除条目",
+            },
+            target: {
+              type: 'string',
+              enum: ['memory', 'user'],
+              description: '记忆类型',
+            },
+            old_text: {
+              type: 'string',
+              description: '要匹配的条目子串（用于定位目标条目）',
+            },
+            content: {
+              type: 'string',
+              description: "replace 时的新内容（remove 时不需要）",
+            },
+          },
+          required: ['action', 'target', 'old_text'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_memory',
+        description: '读取二级记忆条目的详情。当二级记忆索引中某条与当前话题相关时，使用此工具读取完整内容。',
+        parameters: {
+          type: 'object',
+          properties: {
+            target: {
+              type: 'string',
+              enum: ['memory', 'user'],
+              description: "记忆类型：'memory' 或 'user'",
+            },
+            index: {
+              type: 'number',
+              description: '条目索引号（从二级记忆索引中获取）',
+            },
+          },
+          required: ['target', 'index'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'delegate_task',
-        description: '将任务委派给子代理并行执行。子代理拥有独立的对话上下文和受限的工具集，完成后返回结果摘要。适合将大任务拆分为多个独立子任务并行处理。',
+        description: '将任务委派给子代理并行执行。子代理拥有独立的对话上下文和受限的工具集，完成后返回结果摘要。适合将大任务拆分为多个独立子任务并行处理。可用角色：general（通用）、explore（只读探索）、implementer（编码实现）、reviewer（代码审查）。',
         parameters: {
           type: 'object',
           properties: {
@@ -1112,6 +1204,16 @@ async function init() {
               type: 'array',
               items: { type: 'string' },
               description: '子任务目标列表，每个元素是一个独立子任务的目标描述',
+            },
+            role: {
+              type: 'string',
+              enum: ['general', 'explore', 'implementer', 'reviewer'],
+              description: '所有子任务的默认角色（可选，默认 general）。单个目标如需不同角色，用 goal_role 数组指定。',
+            },
+            goal_roles: {
+              type: 'array',
+              items: { type: 'string', enum: ['general', 'explore', 'implementer', 'reviewer'] },
+              description: '与 goals 一一对应的角色列表（可选）。长度需与 goals 一致，优先级高于 role 参数。',
             },
             model: {
               type: 'string',
@@ -1123,6 +1225,124 @@ async function init() {
             },
           },
           required: ['goals'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_tasks',
+        description: '列出委派的子任务。可按状态筛选（created/running/completed/failed/stopped）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            status: {
+              type: 'string',
+              enum: ['created', 'running', 'completed', 'failed', 'stopped'],
+              description: '按状态筛选（可选，不传则返回全部）',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_task',
+        description: '获取单个子任务的详细信息，包括状态、结果摘要、耗时等。',
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: {
+              type: 'string',
+              description: '任务 ID',
+            },
+          },
+          required: ['taskId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'stop_task',
+        description: '停止一个正在运行的子任务。',
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: {
+              type: 'string',
+              description: '要停止的任务 ID',
+            },
+          },
+          required: ['taskId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'message_task',
+        description: '向已完成或失败的子任务追加消息，子代理从上次对话上下文继续执行。适合在子任务结果不完整时追加指令细化。',
+        parameters: {
+          type: 'object',
+          properties: {
+            taskId: {
+              type: 'string',
+              description: '目标任务 ID',
+            },
+            message: {
+              type: 'string',
+              description: '追加的消息内容',
+            },
+            maxRounds: {
+              type: 'number',
+              description: '最大工具调用轮次（可选）',
+            },
+          },
+          required: ['taskId', 'message'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_soul',
+        description: '更新智能体人设（SOUL.md），定义智能体的角色、性格和行为准则。',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: {
+              type: 'string',
+              description: '人设内容（Markdown 格式）',
+            },
+          },
+          required: ['content'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_exec_policy',
+        description: '获取当前执行策略概览，包括默认规则和用户自定义规则的数量及详情。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'test_exec_policy',
+        description: '测试某个 shell 命令在当前策略下的决策结果（allow/prompt/forbidden）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: {
+              type: 'string',
+              description: '要测试的 shell 命令',
+            },
+          },
+          required: ['command'],
         },
       },
     },
@@ -1146,8 +1366,13 @@ async function init() {
     connect_mcp_server: 2, disconnect_mcp_server: 2,
     create_skill: 2, update_skill: 2, delete_skill: 2,
     import_config: 2, rollback_config: 2, update_settings: 2, trigger_key_health_check: 2,
+    // 1-2: 记忆系统
+    get_memory: 1, save_memory: 2, edit_memory: 2, read_memory: 1,
     // 2: 委派任务
-    delegate_task: 2,
+    delegate_task: 2, stop_task: 2, message_task: 2, update_soul: 2,
+    get_exec_policy: 1, test_exec_policy: 1,
+    // 1: 任务查询
+    list_tasks: 1, get_task: 1,
     // 3: 危险操作（需确认）
     execute_command: 3, write_file: 3, edit_file: 3,
   };
@@ -1168,7 +1393,7 @@ async function init() {
   }
 
   // 多 Agent 委派共享的代理上下文（chat handler 中更新，delegate_task handler 中读取）
-  const _chatProxy = { url: null, headers: null, defaultModel: null, safeSSE: null };
+  const _chatProxy = { url: null, headers: null, defaultModel: null, safeSSE: null, currentBatchId: null };
 
   const TOOL_HANDLERS = {
     get_system_status: async () => {
@@ -1895,6 +2120,48 @@ async function init() {
       };
     },
 
+    // ==================== 记忆系统 ====================
+    save_memory: async (args) => {
+      const target = args.target || 'memory';
+      const tier = args.tier || 2;
+      if (tier === 1) {
+        // Append to tier 1 markdown file
+        const existing = memoryManager.store.loadTier1(target);
+        const sep = existing && !existing.endsWith('\n') ? '\n' : '';
+        const newContent = existing + sep + args.content.trim();
+        return memoryManager.store.saveTier1(target, newContent);
+      }
+      return memoryManager.store.addTier2(target, args.content, args.summary);
+    },
+
+    get_memory: async () => {
+      return {
+        tier1: {
+          memory: memoryManager.store.loadTier1('memory') || '(未设置)',
+          user: memoryManager.store.loadTier1('user') || '(未设置)',
+        },
+        tier2: {
+          memory: memoryManager.store.getTier2Entries('memory'),
+          user: memoryManager.store.getTier2Entries('user'),
+        },
+        soul: memoryManager.store.loadSoul() || '(未设置)',
+      };
+    },
+
+    read_memory: async (args) => {
+      return memoryManager.readMemory(args.target, args.index);
+    },
+
+    edit_memory: async (args) => {
+      if (args.action === 'replace') {
+        return memoryManager.store.replaceTier2(args.target, args.old_text, args.content);
+      }
+      if (args.action === 'remove') {
+        return memoryManager.store.removeTier2(args.target, args.old_text);
+      }
+      return { error: "action 必须是 'replace' 或 'remove'" };
+    },
+
     // ==================== 多 Agent 委派 ====================
     delegate_task: async (args) => {
       if (!_chatProxy.url) {
@@ -1902,24 +2169,115 @@ async function init() {
       }
       try {
         const { delegateTask, registry, getAgentConfig } = require('./lib/multi-agent');
-        return await delegateTask({
-          goals: args.goals,
+        // 构建带角色信息的 goals
+        const goals = args.goals.map((g, i) => {
+          const role = (args.goal_roles && args.goal_roles[i]) || args.role || undefined;
+          return role ? { objective: g, role } : g;
+        });
+        const agentConfig = getAgentConfig(configStore.getSettings());
+        if (args.role) agentConfig.role = args.role;
+        const result = await delegateTask({
+          goals,
           registry,
           proxyUrl: _chatProxy.url,
           proxyHeaders: _chatProxy.headers,
           defaultModel: args.model || _chatProxy.defaultModel,
           toolDefinitions: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
           toolHandlers: TOOL_HANDLERS,
-          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient }),
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager }),
           parentTaskId: null,
           maxRounds: args.maxRounds,
           sendSSE: _chatProxy.safeSSE,
-          config: getAgentConfig(configStore.getSettings()),
+          config: agentConfig,
         });
+        _chatProxy.currentBatchId = result.batchId || null;
+        return result;
       } catch (err) {
         logger.error('[delegate_task] 子代理委派失败:', err.message);
         return { error: `子代理委派失败: ${err.message}` };
       }
+    },
+
+    list_tasks: async (args) => {
+      const { registry } = require('./lib/multi-agent');
+      const tasks = registry.list(args.status);
+      return {
+        count: tasks.length,
+        tasks: tasks.map(t => ({
+          id: t.id,
+          objective: t.objective,
+          status: t.status,
+          summary: t.summary || null,
+          createdAt: t.createdAt,
+          startedAt: t.startedAt,
+          endedAt: t.endedAt,
+        })),
+      };
+    },
+
+    get_task: async (args) => {
+      const { registry } = require('./lib/multi-agent');
+      const task = registry.get(args.taskId);
+      if (!task) return { error: `任务 ${args.taskId} 不存在` };
+      return task;
+    },
+
+    stop_task: async (args) => {
+      const { registry } = require('./lib/multi-agent');
+      const task = registry.stop(args.taskId);
+      if (!task) return { error: `任务 ${args.taskId} 不存在或未在运行` };
+      return { success: true, task };
+    },
+
+    message_task: async (args) => {
+      if (!_chatProxy.url) {
+        return { error: '无可用代理，请先发送一条消息激活代理上下文' };
+      }
+      try {
+        const { continueTask, registry, getAgentConfig } = require('./lib/multi-agent');
+        return await continueTask({
+          taskId: args.taskId,
+          message: args.message,
+          registry,
+          proxyUrl: _chatProxy.url,
+          proxyHeaders: _chatProxy.headers,
+          defaultModel: _chatProxy.defaultModel,
+          toolDefinitions: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
+          toolHandlers: TOOL_HANDLERS,
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager }),
+          maxRounds: args.maxRounds,
+          config: getAgentConfig(configStore.getSettings()),
+        });
+      } catch (err) {
+        logger.error('[message_task] 续接子任务失败:', err.message);
+        return { error: `续接子任务失败: ${err.message}` };
+      }
+    },
+
+    update_soul: async (args) => {
+      const soulPath = path.join(os.homedir(), '.protocol-proxy', 'SOUL.md');
+      const content = (args.content || '').trim();
+      const maxChars = memoryManager.soulMaxChars || 2000;
+      if (content.length > maxChars) {
+        return { error: `SOUL 内容超出限制 (${content.length}/${maxChars} 字符)` };
+      }
+      try {
+        fs.writeFileSync(soulPath, content, 'utf8');
+        memoryManager.store._soul = content;
+        return { success: true };
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
+
+    get_exec_policy: async () => {
+      const { execPolicy } = require('./lib/exec-policy');
+      return execPolicy.getSummary();
+    },
+
+    test_exec_policy: async (args) => {
+      const { execPolicy } = require('./lib/exec-policy');
+      return execPolicy.check(args.command);
     },
   };
 
@@ -2596,6 +2954,79 @@ async function init() {
     res.json({ success: true });
   });
 
+  // ==================== 记忆管理 API ====================
+  app.get('/api/memory', (req, res) => {
+    const memStore = memoryManager.store;
+    res.json({
+      soul: memStore.loadSoul() || '',
+      tier1: {
+        memory: memStore.loadTier1('memory') || '',
+        user: memStore.loadTier1('user') || '',
+      },
+      tier2: {
+        memory: memStore.getTier2Entries('memory'),
+        user: memStore.getTier2Entries('user'),
+      },
+      limits: {
+        tier1MemoryMaxChars: memoryManager.tier1MemoryMaxChars,
+        tier1UserMaxChars: memoryManager.tier1UserMaxChars,
+        tier2MemoryMaxEntries: memoryManager.tier2MemoryMaxEntries,
+        tier2MemoryMaxChars: memoryManager.tier2MemoryMaxChars,
+        tier2UserMaxEntries: memoryManager.tier2UserMaxEntries,
+        tier2UserMaxChars: memoryManager.tier2UserMaxChars,
+        soulMaxChars: memoryManager.soulMaxChars,
+      },
+      config: {
+        enabled: memoryManager.enabled,
+        soulEnabled: memoryManager.soulEnabled,
+        tier1Enabled: memoryManager.tier1Enabled,
+        tier2MemoryEnabled: memoryManager.tier2MemoryEnabled,
+        tier2UserEnabled: memoryManager.tier2UserEnabled,
+      },
+    });
+  });
+
+  // SOUL
+  app.put('/api/memory/soul', (req, res) => {
+    const content = (req.body.content || '').trim();
+    const maxChars = memoryManager.soulMaxChars || 2000;
+    if (content.length > maxChars) {
+      return res.status(400).json({ error: `SOUL 内容超出限制 (${content.length}/${maxChars} 字符)` });
+    }
+    try {
+      const soulPath = path.join(os.homedir(), '.protocol-proxy', 'SOUL.md');
+      fs.writeFileSync(soulPath, content, 'utf8');
+      memoryManager.store._soul = content;
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Tier 1 保存（整个 markdown）
+  app.put('/api/memory/tier1/:target', (req, res) => {
+    const result = memoryManager.store.saveTier1(req.params.target, req.body.content);
+    res.json(result);
+  });
+
+  // Tier 2 添加条目
+  app.post('/api/memory/tier2/:target', (req, res) => {
+    const result = memoryManager.store.addTier2(req.params.target, req.body.content, req.body.summary);
+    res.json(result);
+  });
+
+  // Tier 2 更新条目
+  app.put('/api/memory/tier2/:target', (req, res) => {
+    const result = memoryManager.store.replaceTier2(req.params.target, req.body.old_text, req.body.content, req.body.summary);
+    res.json(result);
+  });
+
+  // Tier 2 删除条目
+  app.delete('/api/memory/tier2/:target', (req, res) => {
+    const result = memoryManager.store.removeTier2(req.params.target, req.body.old_text);
+    res.json(result);
+  });
+
   // 设置
   app.get('/api/settings', (req, res) => {
     res.json(configStore.getSettings());
@@ -2683,6 +3114,28 @@ async function init() {
     }
   });
 
+  // ==================== 执行策略 API ====================
+
+  app.get('/api/exec-policy', (req, res) => {
+    const { execPolicy } = require('./lib/exec-policy');
+    res.json(execPolicy.getAllRules());
+  });
+
+  app.post('/api/exec-policy/test', (req, res) => {
+    const { execPolicy } = require('./lib/exec-policy');
+    const { command } = req.body;
+    if (!command) return res.status(400).json({ error: 'command is required' });
+    res.json(execPolicy.check(command));
+  });
+
+  app.delete('/api/exec-policy/rule', (req, res) => {
+    const { execPolicy } = require('./lib/exec-policy');
+    const { category, pattern } = req.body;
+    if (!category || !pattern) return res.status(400).json({ error: 'category and pattern required' });
+    const removed = execPolicy.removeRule(category, pattern);
+    res.json({ success: removed });
+  });
+
   // ==================== 多 Agent 任务 API ====================
 
   app.get('/api/tasks', (req, res) => {
@@ -2703,6 +3156,17 @@ async function init() {
     const task = registry.stop(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found or not running' });
     res.json(task);
+  });
+
+  app.delete('/api/tasks/:id', (req, res) => {
+    const { registry } = require('./lib/multi-agent');
+    const task = registry.get(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (task.status === 'running') return res.status(400).json({ error: 'Cannot delete running task, stop it first' });
+    registry.clearMessages(req.params.id);
+    const taskStore = require('./lib/multi-agent/task-store');
+    taskStore.remove(req.params.id);
+    res.json({ success: true });
   });
 
   // ==================== 智控助手上下文 API ====================
@@ -2764,6 +3228,10 @@ async function init() {
 
   const skillStore = require('./lib/skill-store');
   skillStore.init();
+
+  const { MemoryManager } = require('./lib/memory-manager');
+  const memoryManager = new MemoryManager({ settings: configStore.getSettings() });
+  memoryManager.initialize();
 
   const promptBuilder = require('./lib/prompt-builder');
 
@@ -3043,11 +3511,12 @@ async function init() {
 
   // 工具审批端点
   app.post('/api/assistant/approve', (req, res) => {
-    const { id, approved } = req.body;
+    const { id, approved } = req.body; // approved: true | false | 'session'
     const pending = pendingApprovals.get(id);
     if (!pending) return res.status(404).json({ error: '审批请求不存在或已超时' });
-    logger.log(`[assistant] 工具审批: ${pending.name} → ${approved ? '批准' : '拒绝'}`);
-    pending.resolve(!!approved);
+    const label = approved === 'session' ? '会话批准' : approved ? '批准' : '拒绝';
+    logger.log(`[assistant] 工具审批: ${pending.name} → ${label}`);
+    pending.resolve(approved === 'session' ? 'session' : !!approved);
     pendingApprovals.delete(id);
     res.json({ ok: true });
   });
@@ -3084,6 +3553,17 @@ async function init() {
     }
     activeStreams.add(convId);
     conversationStore.touch(conv);
+
+    // 客户端断开时，停止当前批次的所有子任务，并释放并发锁
+    req.on('close', () => {
+      activeStreams.delete(convId);
+      if (_chatProxy.currentBatchId) {
+        const { registry: taskRegistry } = require('./lib/multi-agent');
+        const stopped = taskRegistry.stopBatch(_chatProxy.currentBatchId);
+        if (stopped > 0) logger.log(`[assistant] 客户端断开，停止 ${stopped} 个子任务`);
+        _chatProxy.currentBatchId = null;
+      }
+    });
 
     // 追加用户消息到对话历史（压缩请求不追加空消息）
     // 检测 /skillname 前缀触发技能
@@ -3156,6 +3636,12 @@ async function init() {
         conversationStore.touch(conv);
         safeSSE('compressed', { summary: result.summary, removedCount: result.removedCount, tokens: result.newTokens, maxTokens: MAX_CONTEXT, messages: conv.messages.length });
         logger.log(`[assistant] 压缩完成 — 移除 ${result.removedCount} 条`);
+        // 诊断：压缩后消息结构
+        const structLog = conv.messages.map((m, i) => {
+          const extra = m.tool_calls ? `+tc[${m.tool_calls.length}]` : m.tool_call_id ? '+tcid' : '';
+          return `[${i}]${m.role}${extra}`;
+        }).join(' ');
+        logger.log(`[assistant] 压缩后消息结构: ${structLog}`);
       } else {
         safeSSE('compressed', { summary: null, removedCount: 0, tokens: estimateConversationTokens(conv.messages), maxTokens: MAX_CONTEXT, messages: conv.messages.length });
       }
@@ -3169,7 +3655,7 @@ async function init() {
 
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
-      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient });
+      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager });
       const buildMessages = () => {
         const msgs = [{ role: 'system', content: systemPrompt }];
         if (activeSkill) {
@@ -3204,13 +3690,30 @@ async function init() {
 
         let fetchRes;
         try {
+          // 发送前剥离非标准字段，避免供应商严格校验报错
+          const cleanMessages = messages.map(m => {
+            const clean = { role: m.role, content: m.content };
+            if (m.tool_calls) clean.tool_calls = m.tool_calls;
+            if (m.tool_call_id) clean.tool_call_id = m.tool_call_id;
+            if (m.name) clean.name = m.name;
+            return clean;
+          });
+          // 诊断日志：请求消息结构
+          if (round === 0) {
+            const reqStruct = cleanMessages.map((m, i) => {
+              const cType = m.content === null ? 'null' : typeof m.content === 'string' ? `str(${m.content.length})` : typeof m.content;
+              const extra = m.tool_calls ? `+tc[${m.tool_calls.length}]` : m.tool_call_id ? '+tcid' : '';
+              return `[${i}]${m.role}:${cType}${extra}`;
+            }).join(' ');
+            logger.log(`[assistant] 请求消息结构 (${cleanMessages.length}): ${reqStruct}`);
+          }
           fetchRes = await fetch(proxyUrl, {
             method: 'POST',
             headers: proxyHeaders,
             signal: AbortSignal.timeout(300000),
             body: JSON.stringify({
               model: proxy.defaultModel || 'gpt-4o',
-              messages,
+              messages: cleanMessages,
               stream: true,
               tools: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
               tool_choice: 'auto',
@@ -3340,22 +3843,50 @@ async function init() {
             result = { error: `工具 ${tc.name} 的参数 JSON 解析失败，原始内容: ${(tc.arguments || '').slice(0, 200)}` };
             isError = true;
           } else try {
-            // 权限检查
-            const toolLevel = tc.name.startsWith('mcp__')
-              ? (() => { const parts = tc.name.split('__'); const cfg = mcpClient.getServerConfig(parts[1]); return cfg?.dangerous ? 3 : 1; })()
-              : (TOOL_PERMISSION[tc.name] || 2);
-            const currentLevel = parseInt(req.body.permissionLevel) || 3;
-            if (toolLevel > currentLevel) {
-              result = { error: `权限不足: ${tc.name} 需要级别 ${toolLevel}，当前级别 ${currentLevel}` };
-              isError = true;
-            } else if (currentLevel === 3 && toolLevel === 3) {
-              // 级别 3 + 危险工具 → 请求用户确认
-              logger.log(`[assistant] 工具 ${tc.name} 需要用户确认`);
-              safeSSE('tool_approval', { id: tc.id, name: tc.name, arguments: args });
-              const approved = await requestToolApproval(tc.id, tc.name, args);
-              if (!approved) {
-                result = { error: '用户拒绝执行此工具' };
+            // 执行策略检查（execute_command 专用）
+            if (tc.name === 'execute_command') {
+              const { execPolicy } = require('./lib/exec-policy');
+              const policyResult = execPolicy.check(args.command || '');
+              if (policyResult.decision === 'forbidden') {
+                result = { error: `[FORBIDDEN] 命令被安全策略禁止: ${args.command}（${policyResult.description}）` };
                 isError = true;
+              } else if (policyResult.decision === 'prompt') {
+                // 三级审批：本次批准 / 本次会话批准 / 拒绝
+                logger.log(`[assistant] 命令需确认: ${args.command}（${policyResult.description}）`);
+                safeSSE('tool_approval', {
+                  id: tc.id, name: tc.name, arguments: args,
+                  execPolicy: { decision: 'prompt', matchedRule: policyResult.matchedRule, description: policyResult.description },
+                });
+                const approved = await requestToolApproval(tc.id, tc.name, args);
+                if (approved === 'session') {
+                  execPolicy.approveForSession(policyResult.matchedRule || args.command.split(' ').slice(0, 2).join(' '));
+                  logger.log(`[exec-policy] 会话批准: ${policyResult.matchedRule || args.command}`);
+                } else if (!approved) {
+                  result = { error: '用户拒绝执行此命令' };
+                  isError = true;
+                }
+              }
+              // 'allow' → 直接执行，跳过权限级别检查
+            }
+
+            if (!isError && tc.name !== 'execute_command') {
+              // 权限检查（非 execute_command）
+              const toolLevel = tc.name.startsWith('mcp__')
+                ? (() => { const parts = tc.name.split('__'); const cfg = mcpClient.getServerConfig(parts[1]); return cfg?.dangerous ? 3 : 1; })()
+                : (TOOL_PERMISSION[tc.name] || 2);
+              const currentLevel = parseInt(req.body.permissionLevel) || 3;
+              if (toolLevel > currentLevel) {
+                result = { error: `权限不足: ${tc.name} 需要级别 ${toolLevel}，当前级别 ${currentLevel}` };
+                isError = true;
+              } else if (currentLevel === 3 && toolLevel === 3) {
+                // 级别 3 + 危险工具 → 请求用户确认
+                logger.log(`[assistant] 工具 ${tc.name} 需要用户确认`);
+                safeSSE('tool_approval', { id: tc.id, name: tc.name, arguments: args });
+                const approved = await requestToolApproval(tc.id, tc.name, args);
+                if (!approved) {
+                  result = { error: '用户拒绝执行此工具' };
+                  isError = true;
+                }
               }
             }
             if (!isError) {
@@ -3473,8 +4004,26 @@ async function init() {
       }
     } finally {
       activeStreams.delete(convId);
-      conversationStore.touch(conv); // 保存最终对话状态
-      res.end();
+
+      try {
+        // 记忆审查：每 N 轮触发一次后台审查（fire-and-forget）
+        if (memoryManager.onTurnCompleted()) {
+          const { getAgentConfig: _getAgentCfg } = require('./lib/multi-agent');
+          memoryManager.triggerReview({
+            proxyUrl: _chatProxy.url,
+            proxyHeaders: _chatProxy.headers,
+            defaultModel: _chatProxy.defaultModel,
+            toolHandlers: TOOL_HANDLERS,
+            messages: conv.messages,
+            config: _getAgentCfg(configStore.getSettings()),
+          }).catch(err => logger.warn('[memory] 后台审查调度失败:', err.message));
+        }
+        conversationStore.touch(conv);
+      } catch (err) {
+        logger.warn('[assistant] finally 清理异常:', err.message);
+      }
+
+      try { res.end(); } catch {}
     }
   });
 
@@ -3667,6 +4216,8 @@ async function init() {
     taskRegistry.on('task:completed', (task) => wsServer.broadcast({ type: 'task', event: 'completed', task }));
     taskRegistry.on('task:failed', (task) => wsServer.broadcast({ type: 'task', event: 'failed', task }));
     taskRegistry.on('task:stopped', (task) => wsServer.broadcast({ type: 'task', event: 'stopped', task }));
+    taskRegistry.on('task:progress', (data) => wsServer.broadcast({ type: 'task', event: 'progress', ...data }));
+    taskRegistry.on('batch:created', (data) => wsServer.broadcast({ type: 'batch', event: 'created', ...data }));
 
     // 初始化 MCP 客户端
     mcpClient.init({
