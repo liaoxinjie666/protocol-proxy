@@ -3136,6 +3136,25 @@ async function init() {
     res.json({ success: removed });
   });
 
+  app.post('/api/exec-policy/rule', (req, res) => {
+    const { execPolicy } = require('./lib/exec-policy');
+    const { category, pattern, description } = req.body;
+    if (!category || !pattern) return res.status(400).json({ error: 'category and pattern required' });
+    if (!['allow', 'prompt', 'forbidden'].includes(category)) {
+      return res.status(400).json({ error: 'category must be allow, prompt, or forbidden' });
+    }
+    const methodMap = {
+      allow: 'addAllowRule',
+      prompt: 'addPromptRule',
+      forbidden: 'addForbiddenRule',
+    };
+    const method = methodMap[category];
+    const exists = execPolicy.userRules[category].some(r => r.pattern === pattern);
+    if (exists) return res.status(409).json({ error: '规则已存在' });
+    execPolicy[method](pattern, description);
+    res.json({ success: true });
+  });
+
   // ==================== 多 Agent 任务 API ====================
 
   app.get('/api/tasks', (req, res) => {
@@ -3657,16 +3676,18 @@ async function init() {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
       const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager });
       const buildMessages = () => {
-        const msgs = [{ role: 'system', content: systemPrompt }];
+        // 将所有 system 内容合并为一条消息，避免某些模型（如 MiniMax）不支持多条 system 消息
+        const systemParts = [systemPrompt];
         if (activeSkill) {
           let skillInfo = `[技能指令: ${activeSkill.name}]\n${activeSkill.content}`;
           if (activeSkill.dirPath) skillInfo += `\n\n技能目录: ${activeSkill.dirPath}`;
           if (activeSkill.scripts?.length > 0) skillInfo += `\n可用脚本: ${activeSkill.scripts.map(f => 'scripts/' + f).join(', ')}`;
-          msgs.push({ role: 'system', content: skillInfo });
+          systemParts.push(skillInfo);
         }
         if (conv.compressionSummary) {
-          msgs.push({ role: 'system', content: `[压缩摘要]\n${conv.compressionSummary}\n\n---\n以上是之前对话的压缩摘要。最近的消息保留原文。请继续对话，不要复述摘要内容。` });
+          systemParts.push(`[压缩摘要]\n${conv.compressionSummary}\n\n---\n以上是之前对话的压缩摘要。最近的消息保留原文。请继续对话，不要复述摘要内容。`);
         }
+        const msgs = [{ role: 'system', content: systemParts.join('\n\n---\n\n') }];
         msgs.push(...conv.messages);
         return msgs;
       };

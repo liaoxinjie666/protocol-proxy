@@ -3288,35 +3288,33 @@ function closeSkillViewModal() {
 
 async function loadExecPolicy() {
   try {
-    const res = await fetch('/api/assistant/tools');
-    // 通过 get_exec_policy 工具获取策略概览
     const statsEl = document.getElementById('exec-policy-stats');
     const rulesEl = document.getElementById('exec-policy-user-rules');
     const listEl = document.getElementById('exec-policy-rules-list');
     if (!statsEl) return;
 
-    // 直接调用 API 获取策略
     const policyRes = await fetch('/api/exec-policy');
     if (!policyRes.ok) { statsEl.textContent = '加载失败'; return; }
     const data = await policyRes.json();
     const d = data.default || {};
     const u = data.user || {};
 
+    const len = arr => (Array.isArray(arr) ? arr : []).length;
     statsEl.innerHTML = `<div style="display:flex;gap:16px;flex-wrap:wrap">
-      <span>默认规则: <b>${(d.allow||0) + (d.prompt||0) + (d.forbidden||0)}</b></span>
-      <span style="color:var(--success,#22c55e)">Allow: ${d.allow||0}</span>
-      <span style="color:var(--accent)">Prompt: ${d.prompt||0}</span>
-      <span style="color:var(--error,#ef4444)">Forbidden: ${d.forbidden||0}</span>
+      <span>默认规则: <b>${len(d.allow) + len(d.prompt) + len(d.forbidden)}</b></span>
+      <span style="color:var(--success,#22c55e)">Allow: ${len(d.allow)}</span>
+      <span style="color:var(--accent)">Prompt: ${len(d.prompt)}</span>
+      <span style="color:var(--error,#ef4444)">Forbidden: ${len(d.forbidden)}</span>
     </div>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px">
-      <span>自定义规则: <b>${(u.allow||0) + (u.prompt||0) + (u.forbidden||0)}</b></span>
-      <span style="color:var(--success,#22c55e)">Allow: ${u.allow||0}</span>
-      <span style="color:var(--accent)">Prompt: ${u.prompt||0}</span>
-      <span style="color:var(--error,#ef4444)">Forbidden: ${u.forbidden||0}</span>
+      <span>自定义规则: <b>${len(u.allow) + len(u.prompt) + len(u.forbidden)}</b></span>
+      <span style="color:var(--success,#22c55e)">Allow: ${len(u.allow)}</span>
+      <span style="color:var(--accent)">Prompt: ${len(u.prompt)}</span>
+      <span style="color:var(--error,#ef4444)">Forbidden: ${len(u.forbidden)}</span>
     </div>`;
 
     // 显示用户自定义规则
-    const userRules = data.userRules || { allow: [], prompt: [], forbidden: [] };
+    const userRules = data.user || { allow: [], prompt: [], forbidden: [] };
     const allUserRules = [
       ...userRules.allow.map(r => ({ ...r, category: 'allow' })),
       ...userRules.prompt.map(r => ({ ...r, category: 'prompt' })),
@@ -3334,13 +3332,16 @@ async function loadExecPolicy() {
               <code style="font-family:var(--font-mono);font-size:12px">${escapeHtml(r.pattern)}</code>
               ${r.description ? `<span style="color:var(--text-muted);font-size:11px">${escapeHtml(r.description)}</span>` : ''}
             </div>
-            <button onclick="removeExecPolicyRule('${r.category}','${escapeHtml(r.pattern)}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:2px 6px" title="删除">×</button>
+            <button class="exec-policy-remove-btn" data-category="${encodeURIComponent(r.category)}" data-pattern="${encodeURIComponent(r.pattern)}" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:2px 6px" title="删除">×</button>
           </div>`
         ).join('');
       } else {
         rulesEl.style.display = 'none';
       }
     }
+
+    // 渲染默认规则列表
+    renderDefaultRules(data);
   } catch (err) {
     console.error('loadExecPolicy error:', err);
   }
@@ -3390,6 +3391,92 @@ async function removeExecPolicyRule(category, pattern) {
     showToast('删除失败: ' + err.message, true);
   }
 }
+
+// 事件委托：删除规则按钮
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.exec-policy-remove-btn');
+  if (!btn) return;
+  const category = decodeURIComponent(btn.dataset.category || '');
+  const pattern = decodeURIComponent(btn.dataset.pattern || '');
+  if (category && pattern) removeExecPolicyRule(category, pattern);
+});
+
+async function addExecPolicyRule() {
+  const category = document.getElementById('exec-policy-add-category').value;
+  const pattern = document.getElementById('exec-policy-add-pattern').value.trim();
+  const desc = document.getElementById('exec-policy-add-desc').value.trim();
+  if (!pattern) { showToast('请输入命令模式', true); return; }
+
+  try {
+    const res = await fetch('/api/exec-policy/rule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, pattern, description: desc }),
+    });
+    const data = await res.json();
+    if (!res.ok) { throw new Error(data.error || `HTTP ${res.status}`); }
+    showToast('规则已添加');
+    document.getElementById('exec-policy-add-pattern').value = '';
+    document.getElementById('exec-policy-add-desc').value = '';
+    loadExecPolicy();
+  } catch (err) {
+    showToast('添加失败: ' + err.message, true);
+  }
+}
+
+// 默认规则搜索过滤缓存
+let _defaultRulesData = null;
+
+function renderDefaultRules(data) {
+  const container = document.getElementById('exec-policy-default-rules');
+  if (!container) return;
+
+  const d = (data && data.default) || {};
+  const catColors = { allow: 'var(--success,#22c55e)', prompt: 'var(--accent)', forbidden: 'var(--error,#ef4444)' };
+  const catLabels = { allow: 'Allow', prompt: 'Prompt', forbidden: 'Forbidden' };
+
+  const categories = ['forbidden', 'prompt', 'allow'];
+  const allRules = [];
+  for (const cat of categories) {
+    const rules = Array.isArray(d[cat]) ? d[cat] : [];
+    for (const r of rules) {
+      allRules.push({ ...r, category: cat });
+    }
+  }
+
+  _defaultRulesData = allRules;
+
+  container.innerHTML = allRules.map((r, i) =>
+    `<div class="exec-policy-default-rule" data-idx="${i}" style="display:flex;align-items:center;gap:8px;padding:4px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px">
+      <span style="font-size:10px;padding:1px 5px;border-radius:var(--radius-full);background:${catColors[r.category]}20;color:${catColors[r.category]};flex-shrink:0">${catLabels[r.category]}</span>
+      <code style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">${escapeHtml(r.pattern)}</code>
+      ${r.description ? `<span style="color:var(--text-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.description)}</span>` : ''}
+    </div>`
+  ).join('');
+}
+
+// 默认规则搜索
+document.addEventListener('DOMContentLoaded', () => {
+  const searchInput = document.getElementById('exec-policy-default-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      if (!_defaultRulesData) return;
+      const q = searchInput.value.toLowerCase().trim();
+      const catColors = { allow: 'var(--success,#22c55e)', prompt: 'var(--accent)', forbidden: 'var(--error,#ef4444)' };
+      const catLabels = { allow: 'Allow', prompt: 'Prompt', forbidden: 'Forbidden' };
+      const filtered = q ? _defaultRulesData.filter(r => r.pattern.toLowerCase().includes(q) || (r.description && r.description.toLowerCase().includes(q))) : _defaultRulesData;
+      const container = document.getElementById('exec-policy-default-rules');
+      if (!container) return;
+      container.innerHTML = filtered.map((r, i) =>
+        `<div class="exec-policy-default-rule" style="display:flex;align-items:center;gap:8px;padding:4px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px">
+          <span style="font-size:10px;padding:1px 5px;border-radius:var(--radius-full);background:${catColors[r.category]}20;color:${catColors[r.category]};flex-shrink:0">${catLabels[r.category]}</span>
+          <code style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">${escapeHtml(r.pattern)}</code>
+          ${r.description ? `<span style="color:var(--text-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.description)}</span>` : ''}
+        </div>`
+      ).join('');
+    });
+  }
+});
 
 // ==================== 任务管理 ====================
 

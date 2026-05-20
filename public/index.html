@@ -711,6 +711,20 @@
                   <div class="setting-name">命令安全策略</div>
                   <div class="setting-desc">控制子代理执行 shell 命令的权限。Allow=直接执行，Prompt=需确认（子代理自动批准并记录），Forbidden=禁止</div>
                 </div>
+
+                <!-- 添加规则表单 -->
+                <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+                  <select id="exec-policy-add-category" style="padding:6px 8px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px">
+                    <option value="allow">Allow</option>
+                    <option value="prompt">Prompt</option>
+                    <option value="forbidden">Forbidden</option>
+                  </select>
+                  <input type="text" id="exec-policy-add-pattern" placeholder="命令模式 (如: git push *)" style="flex:1;min-width:150px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;font-family:var(--font-mono)">
+                  <input type="text" id="exec-policy-add-desc" placeholder="说明 (可选)" style="width:120px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px">
+                  <button class="btn btn-primary" onclick="addExecPolicyRule()" style="font-size:13px">添加</button>
+                </div>
+
+                <!-- 测试输入 -->
                 <div style="display:flex;gap:8px;margin-bottom:8px">
                   <input type="text" id="exec-policy-test-input" placeholder="输入命令测试策略..." style="flex:1;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;font-family:var(--font-mono)">
                   <button class="btn btn-secondary" onclick="testExecPolicy()" style="font-size:13px">测试</button>
@@ -721,6 +735,15 @@
                   <div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border-subtle);position:sticky;top:0;background:var(--bg-surface)">自定义规则</div>
                   <div id="exec-policy-rules-list"></div>
                 </div>
+
+                <!-- 默认规则折叠面板 -->
+                <details id="exec-policy-default-details" style="margin-top:8px">
+                  <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);user-select:none">查看内置规则</summary>
+                  <div style="margin-top:6px">
+                    <input type="text" id="exec-policy-default-search" placeholder="搜索规则..." style="width:100%;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;margin-bottom:6px">
+                    <div id="exec-policy-default-rules" style="max-height:300px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-md)"></div>
+                  </div>
+                </details>
               </div>
             </div>
           </div>
