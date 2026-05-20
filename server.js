@@ -1059,13 +1059,43 @@ async function init() {
       type: 'function',
       function: {
         name: 'rollback_config',
-        description: '回滚到指定的配置快照。',
+        description: '回滚到指定的配置快照。支持通过快照文件名或版本ID回滚，包括已清理快照的版本重建。',
         parameters: {
           type: 'object',
           properties: {
             file: { type: 'string', description: '快照文件名（从 get_config_history 获取）' },
+            versionId: { type: 'string', description: '版本ID（从 get_config_history 获取，用于重建已清理的快照）' },
           },
-          required: ['file'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'reconstruct_config',
+        description: '通过回溯差异链重建指定的配置版本（即使快照已被清理）。用于恢复超出快照保留上限的历史版本。',
+        parameters: {
+          type: 'object',
+          properties: {
+            versionId: { type: 'string', description: '版本ID（从 get_config_history 获取）' },
+          },
+          required: ['versionId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_config_diff',
+        description: '比较两个配置版本之间的差异，返回新增、删除和修改的字段。支持通过文件名或版本ID比较。',
+        parameters: {
+          type: 'object',
+          properties: {
+            from: { type: 'string', description: '起始版本文件名（从 get_config_history 获取）' },
+            to: { type: 'string', description: '目标版本文件名（从 get_config_history 获取）' },
+            fromVersionId: { type: 'string', description: '起始版本ID（用于重建已清理的快照）' },
+            toVersionId: { type: 'string', description: '目标版本ID（用于重建已清理的快照）' },
+          },
         },
       },
     },
@@ -1365,7 +1395,7 @@ async function init() {
     add_mcp_server: 2, update_mcp_server: 2, delete_mcp_server: 2,
     connect_mcp_server: 2, disconnect_mcp_server: 2,
     create_skill: 2, update_skill: 2, delete_skill: 2,
-    import_config: 2, rollback_config: 2, update_settings: 2, trigger_key_health_check: 2,
+    import_config: 2, rollback_config: 2, reconstruct_config: 2, get_config_diff: 1, update_settings: 2, trigger_key_health_check: 2,
     // 1-2: 记忆系统
     get_memory: 1, save_memory: 2, edit_memory: 2, read_memory: 1,
     // 2: 委派任务
@@ -2088,10 +2118,38 @@ async function init() {
     },
 
     rollback_config: async (args) => {
-      if (!args.file) return { error: '需要指定快照文件' };
+      // 支持通过 versionId 回滚（支持重建已清理的快照）
+      if (args.versionId) {
+        const result = configStore.reconstructVersion(args.versionId);
+        if (result.error) return { error: result.error };
+        configStore.saveSnapshot('before-rollback');
+        configStore.saveConfig(result.config);
+        return { success: true, reconstructed: true };
+      }
+      if (!args.file) return { error: '需要指定快照文件或版本ID' };
       const result = configStore.restoreSnapshot(args.file);
       if (result.error) return { error: result.error };
       return { success: true };
+    },
+    reconstruct_config: async (args) => {
+      if (!args.versionId) return { error: '需要指定版本ID' };
+      const result = configStore.reconstructVersion(args.versionId);
+      if (result.error) return { error: result.error };
+      return { config: result.config, reconstructed: true };
+    },
+    get_config_diff: async (args) => {
+      // 支持通过 versionId 比较（自动重建缺失的快照）
+      if (args.fromVersionId && args.toVersionId) {
+        const fromResult = configStore.reconstructVersion(args.fromVersionId);
+        if (fromResult.error) return { error: fromResult.error };
+        const toResult = configStore.reconstructVersion(args.toVersionId);
+        if (toResult.error) return { error: toResult.error };
+        return configStore.diffObjects(fromResult.config, toResult.config, '');
+      }
+      if (!args.from || !args.to) return { error: '需要指定 from/to 文件名或 fromVersionId/toVersionId' };
+      const result = configStore.getVersionDiff(args.from, args.to);
+      if (result.error) return { error: result.error };
+      return result;
     },
 
     // --- 系统操作 ---
@@ -4190,12 +4248,41 @@ async function init() {
     res.json({ snapshots });
   });
 
-  app.post('/api/config/rollback', async (req, res) => {
-    const { file } = req.body;
-    if (!file) return res.status(400).json({ error: '需要指定快照文件' });
-    const result = configStore.restoreSnapshot(file);
+  app.get('/api/config/diff', (req, res) => {
+    const { from, to } = req.query;
+    if (!from || !to) return res.status(400).json({ error: '需要指定 from 和 to 参数' });
+    const result = configStore.getVersionDiff(from, to);
     if (result.error) return res.status(400).json({ error: result.error });
-    res.json({ success: true });
+    res.json(result);
+  });
+
+  // 比较两个版本（支持已清理快照的重建比较）
+  app.get('/api/config/diff-version', (req, res) => {
+    const { fromVersionId, toVersionId } = req.query;
+    if (!fromVersionId || !toVersionId) return res.status(400).json({ error: '需要指定 fromVersionId 和 toVersionId 参数' });
+    const fromResult = configStore.reconstructVersion(fromVersionId);
+    if (fromResult.error) return res.status(400).json({ error: fromResult.error });
+    const toResult = configStore.reconstructVersion(toVersionId);
+    if (toResult.error) return res.status(400).json({ error: toResult.error });
+    res.json(configStore.diffObjects(fromResult.config, toResult.config, ''));
+  });
+
+  app.post('/api/config/rollback', async (req, res) => {
+    const { file, versionId } = req.body;
+    if (versionId) {
+      // 通过版本ID回滚（支持重建已清理的快照）
+      const result = configStore.reconstructVersion(versionId);
+      if (result.error) return res.status(400).json({ error: result.error });
+      configStore.saveSnapshot('before-rollback');
+      configStore.saveConfig(result.config);
+      res.json({ success: true, reconstructed: true });
+    } else if (file) {
+      const result = configStore.restoreSnapshot(file);
+      if (result.error) return res.status(400).json({ error: result.error });
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ error: '需要指定快照文件或版本ID' });
+    }
   });
 
   // 前端首页

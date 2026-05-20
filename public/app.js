@@ -1554,29 +1554,35 @@ async function restartAllProxies() {
 }
 
 // ---------- History Modal ----------
+let _historySnapshots = [];
+
 async function openHistoryModal() {
   try {
     const res = await fetch('/api/config/history');
     const data = await res.json();
     const list = document.getElementById('history-list');
     const snapshots = data.snapshots || [];
+    _historySnapshots = snapshots;
     if (snapshots.length === 0) {
       list.innerHTML = '<div class="empty-sm">\u6682\u65e0\u5386\u53f2\u8bb0\u5f55</div>';
     } else {
-      list.innerHTML = snapshots.map(s => `
-        <div class="history-item">
+      list.innerHTML = snapshots.map((s, i) => {
+        const isReconstructed = !s.hasSnapshot && s.reconstructable;
+        const badge = s.hasSnapshot ? '' : '<span class="history-badge reconstructed">\u91cd\u5efa</span>';
+        const rollbackBtn = i === 0 ? '' : `<button class="btn btn-sm" onclick="rollbackConfig('${escapeHtml(s.id)}')">${s.hasSnapshot ? '\u56de\u6eda' : '\u91cd\u5efa\u56de\u6eda'}</button>`;
+        return `
+        <div class="history-item${i === 0 ? ' is-head' : ''}${isReconstructed ? ' is-reconstructed' : ''}">
           <div class="history-meta">
-            <div class="history-name">${escapeHtml(s.file)}</div>
-            <div class="history-reason">${escapeHtml(s.reason)} \u00b7 ${new Date(s.timestamp).toLocaleString('zh-CN')}</div>
+            <div class="history-name">${escapeHtml(s.reason)} ${badge}</div>
+            <div class="history-reason">${new Date(s.timestamp).toLocaleString('zh-CN')}</div>
+            ${s.summary ? '<div class="history-summary">' + escapeHtml(s.summary) + '</div>' : ''}
           </div>
           <div class="history-actions">
-            <button class="btn btn-sm history-rollback-btn" data-file="${escapeHtml(s.file)}">\u56de\u6eda</button>
+            <button class="btn btn-sm" onclick="openDiffModal(${i})">\u5bf9\u6bd4</button>
+            ${rollbackBtn}
           </div>
         </div>
-      `).join('');
-      list.querySelectorAll('.history-rollback-btn').forEach(btn => {
-        btn.addEventListener('click', () => rollbackConfig(btn.dataset.file));
-      });
+      `}).join('');
     }
     showModal('history-modal');
   } catch (err) {
@@ -1588,21 +1594,158 @@ function closeHistoryModal() {
   hideModal('history-modal');
 }
 
-async function rollbackConfig(file) {
-  const ok = await showConfirm(`\u786e\u5b9a\u56de\u6eda\u5230 <strong>${escapeHtml(file)}</strong>\uff1f`);
+async function rollbackConfig(versionId) {
+  const ok = await showConfirm(`\u786e\u5b9a\u56de\u6eda\u5230\u8be5\u7248\u672c\uff1f`);
   if (!ok) return;
   try {
-    await fetch('/api/config/rollback', {
+    const res = await fetch('/api/config/rollback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file }),
+      body: JSON.stringify({ versionId }),
     });
+    const data = await res.json();
+    if (data.error) {
+      showToast('\u56de\u6eda\u5931\u8d25: ' + data.error, true);
+      return;
+    }
     closeHistoryModal();
     await Promise.all([loadProxies(), loadProviders()]);
-    showToast('\u5df2\u56de\u6eda\u5230\u9009\u5b9a\u7248\u672c');
+    showToast(data.reconstructed ? '\u5df2\u91cd\u5efa\u5e76\u56de\u6eda\u5230\u9009\u5b9a\u7248\u672c' : '\u5df2\u56de\u6eda\u5230\u9009\u5b9a\u7248\u672c');
   } catch (err) {
     showToast('\u56de\u6eda\u5931\u8d25: ' + err.message, true);
   }
+}
+
+// ---------- Diff Modal ----------
+function openDiffModal(selectedIndex) {
+  const fromSelect = document.getElementById('diff-from');
+  const toSelect = document.getElementById('diff-to');
+  const snapshots = _historySnapshots;
+  if (!snapshots.length) return;
+
+  const options = snapshots.map((s, i) => {
+    const label = `${s.reason} \u00b7 ${new Date(s.timestamp).toLocaleString('zh-CN')}${s.hasSnapshot ? '' : ' [\u91cd\u5efa]'}`;
+    return '<option value="' + i + '">' + escapeHtml(label) + '</option>';
+  }).join('');
+
+  fromSelect.innerHTML = options;
+  toSelect.innerHTML = options;
+
+  // \u9ed8\u8ba4\u9009\u62e9\uff1afrom = selectedIndex \u6216\u5012\u6570\u7b2c\u4e8c\u4e2a, to = \u7b2c\u4e00\u4e2a\uff08\u6700\u65b0\uff09
+  if (snapshots.length >= 2) {
+    const fromIdx = selectedIndex != null ? selectedIndex : snapshots.length - 2;
+    fromSelect.value = Math.min(fromIdx, snapshots.length - 1);
+    toSelect.value = 0;
+  }
+
+  document.getElementById('diff-result').innerHTML = '';
+  showModal('diff-modal');
+  if (snapshots.length >= 2) loadVersionDiff();
+}
+
+function closeDiffModal() {
+  hideModal('diff-modal');
+}
+
+async function loadVersionDiff() {
+  const fromIdx = parseInt(document.getElementById('diff-from').value, 10);
+  const toIdx = parseInt(document.getElementById('diff-to').value, 10);
+  const resultDiv = document.getElementById('diff-result');
+
+  if (isNaN(fromIdx) || isNaN(toIdx)) {
+    resultDiv.innerHTML = '<div class="diff-empty">\u8bf7\u9009\u62e9\u4e24\u4e2a\u7248\u672c</div>';
+    return;
+  }
+  if (fromIdx === toIdx) {
+    resultDiv.innerHTML = '<div class="diff-empty">\u4e24\u4e2a\u7248\u672c\u76f8\u540c\uff0c\u65e0\u5dee\u5f02</div>';
+    return;
+  }
+
+  const snapshots = _historySnapshots;
+  const fromSnap = snapshots[fromIdx];
+  const toSnap = snapshots[toIdx];
+  if (!fromSnap || !toSnap) {
+    resultDiv.innerHTML = '<div class="diff-empty">\u7248\u672c\u9009\u62e9\u65e0\u6548</div>';
+    return;
+  }
+
+  resultDiv.innerHTML = '<div class="diff-empty">\u52a0\u8f7d\u4e2d...</div>';
+
+  try {
+    let url;
+    // \u5982\u679c\u4e24\u4e2a\u7248\u672c\u90fd\u6709\u5feb\u7167\uff0c\u4f7f\u7528\u65e7\u7aef\u70b9\uff08\u66f4\u5feb\uff09
+    if (fromSnap.hasSnapshot && toSnap.hasSnapshot) {
+      url = `/api/config/diff?from=${encodeURIComponent(fromSnap.file)}&to=${encodeURIComponent(toSnap.file)}`;
+    } else {
+      // \u81f3\u5c11\u4e00\u4e2a\u6ca1\u6709\u5feb\u7167\uff0c\u4f7f\u7528\u91cd\u5efa\u7aef\u70b9
+      url = `/api/config/diff-version?fromVersionId=${encodeURIComponent(fromSnap.id)}&toVersionId=${encodeURIComponent(toSnap.id)}`;
+    }
+    const res = await fetch(url);
+    const diff = await res.json();
+    if (diff.error) {
+      resultDiv.innerHTML = '<div class="diff-empty">' + escapeHtml(diff.error) + '</div>';
+      return;
+    }
+    renderDiff(diff, resultDiv);
+  } catch (err) {
+    resultDiv.innerHTML = '<div class="diff-empty">\u52a0\u8f7d\u5bf9\u6bd4\u5931\u8d25: ' + escapeHtml(err.message) + '</div>';
+  }
+}
+
+function renderDiff(diff, container) {
+  const sections = [];
+  if (diff.added && diff.added.length) {
+    sections.push(`
+      <div class="diff-section">
+        <div class="diff-section-title added">\u65b0\u589e (${diff.added.length})</div>
+        ${diff.added.map(a => `
+          <div class="diff-entry added">
+            <span class="diff-path">${escapeHtml(a.path)}</span>
+            ${formatDiffValue(a.value)}
+          </div>
+        `).join('')}
+      </div>
+    `);
+  }
+  if (diff.removed && diff.removed.length) {
+    sections.push(`
+      <div class="diff-section">
+        <div class="diff-section-title removed">\u5220\u9664 (${diff.removed.length})</div>
+        ${diff.removed.map(r => `
+          <div class="diff-entry removed">
+            <span class="diff-path">${escapeHtml(r.path)}</span>
+            ${formatDiffValue(r.oldValue)}
+          </div>
+        `).join('')}
+      </div>
+    `);
+  }
+  if (diff.changed && diff.changed.length) {
+    sections.push(`
+      <div class="diff-section">
+        <div class="diff-section-title changed">\u4fee\u6539 (${diff.changed.length})</div>
+        ${diff.changed.map(c => `
+          <div class="diff-entry changed">
+            <span class="diff-path">${escapeHtml(c.path)}</span>
+            <span class="diff-old-value">${escapeHtml(JSON.stringify(c.oldValue))}</span>
+            \u2192
+            <span class="diff-new-value">${escapeHtml(JSON.stringify(c.newValue))}</span>
+          </div>
+        `).join('')}
+      </div>
+    `);
+  }
+  if (!sections.length) {
+    container.innerHTML = '<div class="diff-empty">\u4e24\u4e2a\u7248\u672c\u914d\u7f6e\u5b8c\u5168\u76f8\u540c</div>';
+  } else {
+    container.innerHTML = sections.join('');
+  }
+}
+
+function formatDiffValue(val) {
+  if (val === null || val === undefined) return '<em>null</em>';
+  if (typeof val === 'object') return '<code>' + escapeHtml(JSON.stringify(val)) + '</code>';
+  return escapeHtml(String(val));
 }
 
 // ---------- Confirm Modal ----------

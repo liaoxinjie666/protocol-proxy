@@ -1043,13 +1043,38 @@
 
   <!-- History Modal -->
   <div class="modal-overlay" id="history-modal">
-    <div class="modal" style="max-width:560px">
+    <div class="modal" style="max-width:720px">
       <div class="modal-header">
         <h3>配置版本历史</h3>
         <button class="modal-close" onclick="closeHistoryModal()">&times;</button>
       </div>
       <div class="modal-body">
         <div id="history-list">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diff Modal -->
+  <div class="modal-overlay" id="diff-modal">
+    <div class="modal" style="max-width:800px">
+      <div class="modal-header">
+        <h3>版本对比</h3>
+        <button class="modal-close" onclick="closeDiffModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="diff-selector">
+          <div class="diff-field">
+            <label>起始版本</label>
+            <select id="diff-from"></select>
+          </div>
+          <div class="diff-arrow">→</div>
+          <div class="diff-field">
+            <label>目标版本</label>
+            <select id="diff-to"></select>
+          </div>
+          <button class="btn btn-sm" onclick="loadVersionDiff()">对比</button>
+        </div>
+        <div id="diff-result"></div>
       </div>
     </div>
   </div>
