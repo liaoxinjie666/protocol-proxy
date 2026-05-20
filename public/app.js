@@ -158,6 +158,7 @@ function navigateTo(page) {
     'system-logs': '\u7cfb\u7edf\u65e5\u5fd7',
     assistant: '\u667a\u63a7\u52a9\u624b',
     skills: '\u6280\u80fd\u7ba1\u7406',
+    agents: '\u8eab\u4efd\u7ba1\u7406',
     'mcp-servers': 'MCP \u670d\u52a1',
     memory: '\u8bb0\u5fc6\u7ba1\u7406',
     tasks: '\u4efb\u52a1\u7ba1\u7406',
@@ -182,6 +183,7 @@ function navigateTo(page) {
     }
   }
   if (page === 'skills') loadSkills();
+  if (page === 'agents') loadAgents();
   if (page === 'mcp-servers') loadMcpServers();
   if (page === 'memory') loadMemoryPage();
   if (page === 'tasks') loadTasks();
@@ -3427,6 +3429,290 @@ function closeSkillViewModal() {
   hideModal('skill-view-modal');
 }
 
+// ==================== Agent 身份管理 ====================
+
+let allAgents = [];
+let editingAgentSlug = '';
+let agentDomainFilter = '';
+let agentCollapsedGroups = { system: false, preset: false, user: false };
+let agentCollapsedDomains = {};
+
+async function loadAgents() {
+  try {
+    const res = await fetch('/api/agents');
+    const data = await res.json();
+    allAgents = data.agents || [];
+    renderAgents();
+    const badge = document.getElementById('nav-agent-count');
+    if (badge) badge.textContent = allAgents.length;
+  } catch (err) {
+    showToast('加载代理失败: ' + err.message, true);
+  }
+}
+
+function renderAgentCard(a, cat) {
+  const roleColors = { readonly: '#3B82F6', writer: '#22C55E', full: '#A855F7' };
+  const roleLabels = { readonly: '只读', writer: '读写', full: '完全' };
+  const canEdit = cat === 'user';
+  const canDelete = cat !== 'system';
+  const rc = roleColors[a.defaultRole] || '#6B7280';
+  const rl = roleLabels[a.defaultRole] || a.defaultRole;
+  return `<div class="skill-card" style="border-left:3px solid ${a.color || '#6B7280'}">
+    <div class="skill-card-header" style="display:flex;align-items:center;gap:8px">
+      <span style="width:10px;height:10px;border-radius:50%;background:${a.color || '#6B7280'};flex-shrink:0"></span>
+      <strong>${escapeHtml(a.name)}</strong>
+      <span style="background:${rc}20;color:${rc};padding:1px 6px;border-radius:4px;font-size:11px">${rl}</span>
+    </div>
+    <div class="skill-card-desc">${escapeHtml(a.description || '无描述')}</div>
+    <div class="skill-card-actions">
+      <button class="btn btn-sm" onclick="viewAgent('${escapeHtml(a.slug)}')">查看</button>
+      ${canEdit ? `<button class="btn btn-sm" onclick="editAgent('${escapeHtml(a.slug)}')">编辑</button>` : ''}
+      ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="deleteAgent('${escapeHtml(a.slug)}')">删除</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function toggleAgentGroup(group) {
+  agentCollapsedGroups[group] = !agentCollapsedGroups[group];
+  renderAgents();
+}
+
+function toggleAgentDomain(domain) {
+  agentCollapsedDomains[domain] = !agentCollapsedDomains[domain];
+  renderAgents();
+}
+
+function setAgentDomainFilter(domain) {
+  agentDomainFilter = domain;
+  // 切换筛选时重置折叠状态
+  agentCollapsedDomains = {};
+  renderAgents();
+}
+
+function renderAgents() {
+  const container = document.getElementById('agents-container');
+  if (!container) return;
+  const groups = { system: [], preset: [], user: [] };
+  for (const a of allAgents) (groups[a.category] || groups.user).push(a);
+  const labels = { system: '系统级', preset: '预设', user: '用户' };
+  const catColors = { system: 'var(--error)', preset: 'var(--warning)', user: 'var(--success)' };
+  const chevron = collapsed => collapsed ? '▶' : '▼';
+
+  let html = '';
+  for (const [cat, items] of Object.entries(groups)) {
+    if (items.length === 0) continue;
+    const collapsed = agentCollapsedGroups[cat];
+    const arrow = chevron(collapsed);
+
+    // 标题栏
+    html += `<div style="margin-bottom:20px">
+      <div onclick="toggleAgentGroup('${cat}')" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;user-select:none">
+        <span style="font-size:11px;color:var(--text-muted);width:14px">${arrow}</span>
+        <span class="skill-badge" style="background:${catColors[cat]};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">${labels[cat]}</span>
+        <span style="font-weight:600;font-size:14px">${labels[cat]}代理</span>
+        <span style="font-size:12px;color:var(--text-muted)">(${items.length})</span>
+      </div>`;
+
+    if (collapsed) {
+      html += '</div>';
+      continue;
+    }
+
+    // 预设分组：领域筛选 + 子分组
+    if (cat === 'preset') {
+      // 领域 pill 栏
+      const domainCounts = {};
+      for (const a of items) domainCounts[a.domain] = (domainCounts[a.domain] || 0) + 1;
+      const domains = Object.entries(domainCounts).sort((a, b) => b[1] - a[1]);
+
+      html += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;padding-left:22px">
+        <button class="btn btn-sm${agentDomainFilter === '' ? ' btn-primary' : ''}" onclick="setAgentDomainFilter('')" style="font-size:11px;padding:2px 8px">全部 ${items.length}</button>`;
+      for (const [d, c] of domains) {
+        const active = agentDomainFilter === d;
+        html += `<button class="btn btn-sm${active ? ' btn-primary' : ''}" onclick="setAgentDomainFilter('${escapeHtml(d)}')" style="font-size:11px;padding:2px 8px">${escapeHtml(d)} ${c}</button>`;
+      }
+      html += '</div>';
+
+      // 按领域筛选或分组显示
+      if (agentDomainFilter) {
+        // 筛选模式：只显示选中领域
+        const filtered = items.filter(a => a.domain === agentDomainFilter);
+        html += `<div class="skills-grid" style="padding-left:22px">`;
+        for (const a of filtered) html += renderAgentCard(a, cat);
+        html += '</div>';
+      } else {
+        // 分组模式：按领域折叠子分组
+        for (const [domain, count] of domains) {
+          const domainCollapsed = agentCollapsedDomains[domain] !== false; // 默认折叠
+          const dArrow = chevron(domainCollapsed);
+          html += `<div style="margin-bottom:8px">
+            <div onclick="toggleAgentDomain('${escapeHtml(domain)}')" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 0 4px 22px;user-select:none;font-size:13px">
+              <span style="font-size:10px;color:var(--text-muted);width:12px">${dArrow}</span>
+              <span style="font-weight:500">${escapeHtml(domain)}</span>
+              <span style="font-size:11px;color:var(--text-muted)">(${count})</span>
+            </div>`;
+          if (!domainCollapsed) {
+            const domainItems = items.filter(a => a.domain === domain);
+            html += '<div class="skills-grid" style="padding-left:34px">';
+            for (const a of domainItems) html += renderAgentCard(a, cat);
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+      }
+    } else {
+      // 系统级和用户：直接显示卡片网格
+      html += '<div class="skills-grid">';
+      for (const a of items) html += renderAgentCard(a, cat);
+      html += '</div>';
+    }
+
+    html += '</div>';
+  }
+  container.innerHTML = html || '<p style="color:var(--text-muted)">暂无代理</p>';
+}
+
+function showAgentModal(slug) {
+  editingAgentSlug = slug || '';
+  const modal = document.getElementById('agent-modal');
+  const title = document.getElementById('agent-modal-title');
+  const nameInput = document.getElementById('agent-name');
+
+  if (slug) {
+    const agent = allAgents.find(a => a.slug === slug);
+    if (!agent) return;
+    title.textContent = '编辑代理';
+    nameInput.value = agent.slug;
+    nameInput.disabled = true;
+    document.getElementById('agent-display-name').value = agent.name || '';
+    document.getElementById('agent-description').value = agent.description || '';
+    document.getElementById('agent-color').value = agent.color || '#6B7280';
+    document.getElementById('agent-defaultRole').value = agent.defaultRole || 'writer';
+    document.getElementById('agent-body').value = agent.body || '';
+  } else {
+    title.textContent = '创建代理';
+    nameInput.value = '';
+    nameInput.disabled = false;
+    document.getElementById('agent-display-name').value = '';
+    document.getElementById('agent-description').value = '';
+    document.getElementById('agent-color').value = '#6B7280';
+    document.getElementById('agent-defaultRole').value = 'writer';
+    document.getElementById('agent-body').value = '';
+  }
+  showModal('agent-modal');
+}
+
+function closeAgentModal() {
+  hideModal('agent-modal');
+  editingAgentSlug = '';
+}
+
+async function saveAgent() {
+  const slug = document.getElementById('agent-name').value.trim();
+  const displayName = document.getElementById('agent-display-name').value.trim();
+  const description = document.getElementById('agent-description').value.trim();
+  const color = document.getElementById('agent-color').value;
+  const defaultRole = document.getElementById('agent-defaultRole').value;
+  const body = document.getElementById('agent-body').value;
+
+  if (!slug) return showToast('请填写代理名称', true);
+  if (!body) return showToast('请填写系统提示词', true);
+
+  try {
+    const isEdit = !!editingAgentSlug;
+    const url = isEdit ? `/api/agents/${editingAgentSlug}` : '/api/agents';
+    const method = isEdit ? 'PUT' : 'POST';
+    const payload = isEdit
+      ? { description, body, color, defaultRole, name: displayName || undefined }
+      : { name: slug, description, body, color, defaultRole };
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '保存失败');
+    }
+    closeAgentModal();
+    await loadAgents();
+    showToast(isEdit ? '代理已更新' : '代理已创建');
+  } catch (err) {
+    showToast('保存失败: ' + err.message, true);
+  }
+}
+
+async function editAgent(slug) {
+  // 需要获取完整 body
+  try {
+    const res = await fetch(`/api/agents/${slug}`);
+    if (!res.ok) throw new Error('获取代理失败');
+    const agent = await res.json();
+    // 更新 allAgents 中的 body
+    const idx = allAgents.findIndex(a => a.slug === slug);
+    if (idx >= 0) allAgents[idx] = { ...allAgents[idx], ...agent };
+    showAgentModal(slug);
+  } catch (err) {
+    showToast('加载失败: ' + err.message, true);
+  }
+}
+
+async function deleteAgent(slug) {
+  if (!confirm(`确定删除代理 "${slug}"？`)) return;
+  try {
+    const res = await fetch(`/api/agents/${slug}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || '删除失败');
+    }
+    await loadAgents();
+    showToast('代理已删除');
+  } catch (err) {
+    showToast('删除失败: ' + err.message, true);
+  }
+}
+
+async function viewAgent(slug) {
+  try {
+    const res = await fetch(`/api/agents/${slug}`);
+    if (!res.ok) throw new Error('获取代理失败');
+    const agent = await res.json();
+    const catLabels = { system: '系统级', preset: '预设', user: '用户' };
+    const catColors = { system: 'var(--error)', preset: 'var(--warning)', user: 'var(--success)' };
+    const roleLabels = { readonly: '只读', writer: '读写', full: '完全' };
+
+    document.getElementById('agent-view-title').textContent = agent.name;
+    document.getElementById('agent-view-color').style.background = agent.color || '#6B7280';
+    const badge = document.getElementById('agent-view-badge');
+    badge.textContent = catLabels[agent.category] || agent.category;
+    badge.style.background = catColors[agent.category] || '#666';
+    badge.style.color = '#fff';
+    document.getElementById('agent-view-role').textContent = `默认权限: ${roleLabels[agent.defaultRole] || agent.defaultRole} (${agent.defaultRole})`;
+    document.getElementById('agent-view-desc').textContent = agent.description || '';
+
+    const rawHtml = typeof marked !== 'undefined' ? marked.parse(agent.body) : formatAssistantContent(agent.body);
+    const contentHtml = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
+    document.getElementById('agent-view-body').innerHTML = contentHtml;
+    showModal('agent-view-modal');
+  } catch (err) {
+    showToast('加载失败: ' + err.message, true);
+  }
+}
+
+function closeAgentViewModal() {
+  hideModal('agent-view-modal');
+}
+
+async function reloadAgents() {
+  try {
+    await fetch('/api/agents/reload', { method: 'POST' });
+    await loadAgents();
+    showToast('代理已重载');
+  } catch (err) {
+    showToast('重载失败: ' + err.message, true);
+  }
+}
+
 // ==================== 执行策略 ====================
 
 async function loadExecPolicy() {
@@ -3570,14 +3856,24 @@ async function addExecPolicyRule() {
 // 默认规则搜索过滤缓存
 let _defaultRulesData = null;
 
+const _catColors = { allow: 'var(--success,#22c55e)', prompt: 'var(--accent)', forbidden: 'var(--error,#ef4444)' };
+const _catLabels = { allow: 'Allow', prompt: 'Prompt', forbidden: 'Forbidden' };
+
+function _renderRuleItemsHTML(rules) {
+  return rules.map(r =>
+    `<div class="exec-policy-default-rule" style="display:flex;align-items:center;gap:8px;padding:4px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px">
+      <span style="font-size:10px;padding:1px 5px;border-radius:var(--radius-full);background:${_catColors[r.category]}20;color:${_catColors[r.category]};flex-shrink:0">${_catLabels[r.category]}</span>
+      <code style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">${escapeHtml(r.pattern)}</code>
+      ${r.description ? `<span style="color:var(--text-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.description)}</span>` : ''}
+    </div>`
+  ).join('');
+}
+
 function renderDefaultRules(data) {
   const container = document.getElementById('exec-policy-default-rules');
   if (!container) return;
 
   const d = (data && data.default) || {};
-  const catColors = { allow: 'var(--success,#22c55e)', prompt: 'var(--accent)', forbidden: 'var(--error,#ef4444)' };
-  const catLabels = { allow: 'Allow', prompt: 'Prompt', forbidden: 'Forbidden' };
-
   const categories = ['forbidden', 'prompt', 'allow'];
   const allRules = [];
   for (const cat of categories) {
@@ -3588,14 +3884,7 @@ function renderDefaultRules(data) {
   }
 
   _defaultRulesData = allRules;
-
-  container.innerHTML = allRules.map((r, i) =>
-    `<div class="exec-policy-default-rule" data-idx="${i}" style="display:flex;align-items:center;gap:8px;padding:4px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px">
-      <span style="font-size:10px;padding:1px 5px;border-radius:var(--radius-full);background:${catColors[r.category]}20;color:${catColors[r.category]};flex-shrink:0">${catLabels[r.category]}</span>
-      <code style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">${escapeHtml(r.pattern)}</code>
-      ${r.description ? `<span style="color:var(--text-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.description)}</span>` : ''}
-    </div>`
-  ).join('');
+  container.innerHTML = _renderRuleItemsHTML(allRules);
 }
 
 // 默认规则搜索
@@ -3605,18 +3894,10 @@ document.addEventListener('DOMContentLoaded', () => {
     searchInput.addEventListener('input', () => {
       if (!_defaultRulesData) return;
       const q = searchInput.value.toLowerCase().trim();
-      const catColors = { allow: 'var(--success,#22c55e)', prompt: 'var(--accent)', forbidden: 'var(--error,#ef4444)' };
-      const catLabels = { allow: 'Allow', prompt: 'Prompt', forbidden: 'Forbidden' };
       const filtered = q ? _defaultRulesData.filter(r => r.pattern.toLowerCase().includes(q) || (r.description && r.description.toLowerCase().includes(q))) : _defaultRulesData;
       const container = document.getElementById('exec-policy-default-rules');
       if (!container) return;
-      container.innerHTML = filtered.map((r, i) =>
-        `<div class="exec-policy-default-rule" style="display:flex;align-items:center;gap:8px;padding:4px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px">
-          <span style="font-size:10px;padding:1px 5px;border-radius:var(--radius-full);background:${catColors[r.category]}20;color:${catColors[r.category]};flex-shrink:0">${catLabels[r.category]}</span>
-          <code style="font-family:var(--font-mono);font-size:12px;white-space:nowrap">${escapeHtml(r.pattern)}</code>
-          ${r.description ? `<span style="color:var(--text-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.description)}</span>` : ''}
-        </div>`
-      ).join('');
+      container.innerHTML = _renderRuleItemsHTML(filtered);
     });
   }
 });
@@ -3702,7 +3983,8 @@ function renderTasks() {
     const color = statusColors[t.status] || 'var(--text-muted)';
     const label = statusLabels[t.status] || t.status;
     const duration = t.startedAt && t.endedAt ? ((t.endedAt - t.startedAt) / 1000).toFixed(1) + 's' : t.startedAt ? '进行中...' : '-';
-    const role = t.role && t.role !== 'general' ? `<span class="task-role-badge">${t.role}</span>` : '';
+    const role = t.role && t.role !== 'full' ? `<span class="task-role-badge">${t.role}</span>` : '';
+    const agentBadge = t.agent ? `<span class="task-role-badge" style="background:var(--accent-subtle);color:var(--accent)">${t.agent}</span>` : '';
     const progress = taskProgressMap.get(t.id);
     const progressLine = progress && t.status === 'running'
       ? `<div style="font-size:11px;color:var(--accent);padding-left:16px;font-family:var(--font-mono)">轮次 ${progress.round} · ${progress.lastTool}</div>` : '';
@@ -3712,7 +3994,7 @@ function renderTasks() {
       <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">
         <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0${t.status === 'running' ? ';animation:pulse 1.5s infinite' : ''}"></span>
         <span style="font-size:13px;font-weight:500;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${escapeHtml(t.objective)}</span>
-        ${role}
+        ${role}${agentBadge}
       </div>
       <div style="display:flex;align-items:center;gap:12px;flex-shrink:0;margin-left:8px">
         <span style="font-size:11px;color:${color};white-space:nowrap">${label}</span>
@@ -3727,7 +4009,8 @@ function renderTasks() {
       ${progressLine}
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;padding-top:6px;border-top:1px solid var(--border-subtle)">
         <span style="font-size:11px;color:var(--text-muted)">ID: ${t.id}</span>
-        <span style="font-size:11px;color:var(--text-muted)">角色: ${t.role || 'general'}</span>
+        <span style="font-size:11px;color:var(--text-muted)">权限: ${t.role || 'full'}</span>
+        ${t.agent ? `<span style="font-size:11px;color:var(--text-muted)">代理: ${escapeHtml(t.agent)}</span>` : ''}
         <span style="font-size:11px;color:var(--text-muted)">创建: ${timeStr}</span>
         <span style="font-size:11px;color:var(--text-muted)">耗时: ${duration}</span>
       </div>

@@ -1749,7 +1749,7 @@ body {
   content: 'HEAD';
   margin-left: 8px;
   font-size: 10px;
-  background: var(--primary, #4f46e5);
+  background: var(--accent);
   color: #fff;
   padding: 1px 6px;
   border-radius: 3px;
@@ -1774,7 +1774,7 @@ body {
 
 .history-summary {
   font-size: 11px;
-  color: var(--text-secondary, #64748b);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -1786,8 +1786,8 @@ body {
 .history-badge.reconstructed {
   display: inline-block;
   font-size: 10px;
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--warning-bg);
+  color: var(--warning);
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;
@@ -1828,7 +1828,7 @@ body {
   padding: 6px 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--bg-primary, #fff);
+  background: var(--bg-base);
   color: var(--text-primary);
   font-size: 12px;
 }
@@ -1851,9 +1851,9 @@ body {
   border-radius: 4px;
 }
 
-.diff-section-title.added { background: #dcfce7; color: #166534; }
-.diff-section-title.removed { background: #fee2e2; color: #991b1b; }
-.diff-section-title.changed { background: #fef3c7; color: #92400e; }
+.diff-section-title.added { background: var(--success-bg); color: var(--success); }
+.diff-section-title.removed { background: var(--error-bg); color: var(--error); }
+.diff-section-title.changed { background: var(--warning-bg); color: var(--warning); }
 
 .diff-entry {
   font-size: 12px;
@@ -1861,23 +1861,23 @@ body {
   padding: 4px 8px;
   border-left: 3px solid;
   margin: 2px 0;
-  background: var(--bg-secondary, #f8fafc);
+  background: var(--bg-elevated);
   word-break: break-all;
 }
 
 .diff-entry.added {
-  border-left-color: #22c55e;
-  background: #f0fdf4;
+  border-left-color: var(--success);
+  background: var(--success-bg);
 }
 
 .diff-entry.removed {
-  border-left-color: #ef4444;
-  background: #fef2f2;
+  border-left-color: var(--error);
+  background: var(--error-bg);
 }
 
 .diff-entry.changed {
-  border-left-color: #f59e0b;
-  background: #fffbeb;
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
 }
 
 .diff-path {
@@ -1887,12 +1887,12 @@ body {
 
 .diff-old-value {
   text-decoration: line-through;
-  color: #dc2626;
+  color: var(--error);
   margin-right: 4px;
 }
 
 .diff-new-value {
-  color: #16a34a;
+  color: var(--success);
 }
 
 .diff-empty {

@@ -1226,7 +1226,7 @@ async function init() {
       type: 'function',
       function: {
         name: 'delegate_task',
-        description: '将任务委派给子代理并行执行。子代理拥有独立的对话上下文和受限的工具集，完成后返回结果摘要。适合将大任务拆分为多个独立子任务并行处理。可用角色：general（通用）、explore（只读探索）、implementer（编码实现）、reviewer（代码审查）。',
+        description: '将任务委派给子代理并行执行。子代理拥有独立的对话上下文和受限的工具集，完成后返回结果摘要。适合将大任务拆分为多个独立子任务并行处理。可用权限：full（完全访问）、readonly（只读分析）、writer（读写执行）。',
         parameters: {
           type: 'object',
           properties: {
@@ -1237,12 +1237,12 @@ async function init() {
             },
             role: {
               type: 'string',
-              enum: ['general', 'explore', 'implementer', 'reviewer'],
-              description: '所有子任务的默认角色（可选，默认 general）。单个目标如需不同角色，用 goal_role 数组指定。',
+              enum: ['full', 'readonly', 'writer'],
+              description: '所有子任务的默认权限（可选，默认 full）。readonly=只读分析，writer=读写执行，full=完全访问。',
             },
             goal_roles: {
               type: 'array',
-              items: { type: 'string', enum: ['general', 'explore', 'implementer', 'reviewer'] },
+              items: { type: 'string', enum: ['full', 'readonly', 'writer'] },
               description: '与 goals 一一对应的角色列表（可选）。长度需与 goals 一致，优先级高于 role 参数。',
             },
             model: {
@@ -1253,9 +1253,21 @@ async function init() {
               type: 'number',
               description: '每个子代理的最大工具调用轮次（可选，默认5）',
             },
+            agent: {
+              type: 'string',
+              description: '子代理身份名称（可选，slug 格式如 code-reviewer）。指定后子代理将获得该代理身份的系统提示词注入，并使用其默认权限。可通过 list_agents 查看可用代理列表。',
+            },
           },
           required: ['goals'],
         },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_agents',
+        description: '列出所有可用的代理身份。每个代理包含名称（slug）、描述、默认权限等信息。用于在 delegate_task 中选择合适的代理。',
+        parameters: { type: 'object', properties: {} },
       },
     },
     {
@@ -1401,8 +1413,8 @@ async function init() {
     // 2: 委派任务
     delegate_task: 2, stop_task: 2, message_task: 2, update_soul: 2,
     get_exec_policy: 1, test_exec_policy: 1,
-    // 1: 任务查询
-    list_tasks: 1, get_task: 1,
+    // 1: 任务查询 / 代理查询
+    list_tasks: 1, get_task: 1, list_agents: 1,
     // 3: 危险操作（需确认）
     execute_command: 3, write_file: 3, edit_file: 3,
   };
@@ -2118,18 +2130,9 @@ async function init() {
     },
 
     rollback_config: async (args) => {
-      // 支持通过 versionId 回滚（支持重建已清理的快照）
-      if (args.versionId) {
-        const result = configStore.reconstructVersion(args.versionId);
-        if (result.error) return { error: result.error };
-        configStore.saveSnapshot('before-rollback');
-        configStore.saveConfig(result.config);
-        return { success: true, reconstructed: true };
-      }
-      if (!args.file) return { error: '需要指定快照文件或版本ID' };
-      const result = configStore.restoreSnapshot(args.file);
+      const result = configStore.restoreSnapshot(args.file, args.versionId);
       if (result.error) return { error: result.error };
-      return { success: true };
+      return { success: true, reconstructed: !!result.reconstructed };
     },
     reconstruct_config: async (args) => {
       if (!args.versionId) return { error: '需要指定版本ID' };
@@ -2227,13 +2230,15 @@ async function init() {
       }
       try {
         const { delegateTask, registry, getAgentConfig } = require('./lib/multi-agent');
-        // 构建带角色信息的 goals
+        // 构建带角色和代理信息的 goals
         const goals = args.goals.map((g, i) => {
           const role = (args.goal_roles && args.goal_roles[i]) || args.role || undefined;
-          return role ? { objective: g, role } : g;
+          const agent = args.agent || undefined;
+          return (role || agent) ? { objective: g, role, agent } : g;
         });
         const agentConfig = getAgentConfig(configStore.getSettings());
         if (args.role) agentConfig.role = args.role;
+        if (args.agent) agentConfig.agent = args.agent;
         const result = await delegateTask({
           goals,
           registry,
@@ -2242,11 +2247,12 @@ async function init() {
           defaultModel: args.model || _chatProxy.defaultModel,
           toolDefinitions: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
           toolHandlers: TOOL_HANDLERS,
-          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager }),
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore }),
           parentTaskId: null,
           maxRounds: args.maxRounds,
           sendSSE: _chatProxy.safeSSE,
           config: agentConfig,
+          agentStore,
         });
         _chatProxy.currentBatchId = result.batchId || null;
         return result;
@@ -2254,6 +2260,22 @@ async function init() {
         logger.error('[delegate_task] 子代理委派失败:', err.message);
         return { error: `子代理委派失败: ${err.message}` };
       }
+    },
+
+    list_agents: async () => {
+      const agents = agentStore.list();
+      return {
+        count: agents.length,
+        agents: agents.map(a => ({
+          slug: a.slug,
+          name: a.name,
+          description: a.description,
+          color: a.color,
+          defaultRole: a.defaultRole,
+          category: a.category,
+          domain: a.domain,
+        })),
+      };
     },
 
     list_tasks: async (args) => {
@@ -2302,7 +2324,7 @@ async function init() {
           defaultModel: _chatProxy.defaultModel,
           toolDefinitions: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
           toolHandlers: TOOL_HANDLERS,
-          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager }),
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore }),
           maxRounds: args.maxRounds,
           config: getAgentConfig(configStore.getSettings()),
         });
@@ -3201,15 +3223,8 @@ async function init() {
     if (!['allow', 'prompt', 'forbidden'].includes(category)) {
       return res.status(400).json({ error: 'category must be allow, prompt, or forbidden' });
     }
-    const methodMap = {
-      allow: 'addAllowRule',
-      prompt: 'addPromptRule',
-      forbidden: 'addForbiddenRule',
-    };
-    const method = methodMap[category];
-    const exists = execPolicy.userRules[category].some(r => r.pattern === pattern);
-    if (exists) return res.status(409).json({ error: '规则已存在' });
-    execPolicy[method](pattern, description);
+    const added = execPolicy.addRule(category, pattern, description);
+    if (!added) return res.status(409).json({ error: '规则已存在' });
     res.json({ success: true });
   });
 
@@ -3305,6 +3320,9 @@ async function init() {
 
   const skillStore = require('./lib/skill-store');
   skillStore.init();
+
+  const agentStore = require('./lib/agent-store');
+  agentStore.init();
 
   const { MemoryManager } = require('./lib/memory-manager');
   const memoryManager = new MemoryManager({ settings: configStore.getSettings() });
@@ -3441,6 +3459,71 @@ async function init() {
   app.post('/api/skills/reload', (req, res) => {
     skillStore.init();
     res.json({ success: true, count: skillStore.list().length });
+  });
+
+  // ==================== Agent 身份管理 API ====================
+
+  app.get('/api/agents', (req, res) => {
+    res.json({ agents: agentStore.list() });
+  });
+
+  app.get('/api/agents/:slug', (req, res) => {
+    const agent = agentStore.get(req.params.slug);
+    if (!agent) return res.status(404).json({ error: '代理不存在' });
+    res.json(agent);
+  });
+
+  app.post('/api/agents', (req, res) => {
+    const { name, description, body, color, defaultRole } = req.body;
+    if (!name || !body) return res.status(400).json({ error: '需要 name 和 body' });
+    const agent = agentStore.create(name, description || '', body, color || '#6B7280', defaultRole || 'writer');
+    if (!agent) return res.status(409).json({ error: '代理已存在' });
+    res.json(agent);
+  });
+
+  app.put('/api/agents/:slug', (req, res) => {
+    const { description, body, color, defaultRole } = req.body;
+    const agent = agentStore.update(req.params.slug, { description, body, color, defaultRole });
+    if (!agent) return res.status(404).json({ error: '代理不存在或不可编辑' });
+    res.json(agent);
+  });
+
+  app.delete('/api/agents/:slug', (req, res) => {
+    const agent = agentStore.get(req.params.slug);
+    if (!agent) return res.status(404).json({ error: '代理不存在' });
+    if (agent.category === 'system') return res.status(403).json({ error: '系统级代理不可删除' });
+    if (!agentStore.remove(req.params.slug)) return res.status(500).json({ error: '删除失败' });
+    res.json({ success: true });
+  });
+
+  app.post('/api/agents/reload', (req, res) => {
+    agentStore.init();
+    res.json({ success: true, count: agentStore.list().length });
+  });
+
+  // 批量导入代理（从指定目录复制 .md 到 preset）
+  app.post('/api/agents/import', (req, res) => {
+    const { sourceDir } = req.body;
+    if (!sourceDir) return res.status(400).json({ error: '需要 sourceDir' });
+    try {
+      const absSource = path.resolve(sourceDir);
+      if (!fs.existsSync(absSource)) return res.status(400).json({ error: '源目录不存在' });
+      const presetDir = path.join(__dirname, 'agents', 'preset');
+      fs.mkdirSync(presetDir, { recursive: true });
+      const entries = fs.readdirSync(absSource).filter(f => f.endsWith('.md') && !f.startsWith('.'));
+      let imported = 0;
+      for (const entry of entries) {
+        const src = path.join(absSource, entry);
+        const dst = path.join(presetDir, entry);
+        if (fs.existsSync(dst)) continue;
+        fs.copyFileSync(src, dst);
+        imported++;
+      }
+      agentStore.init();
+      res.json({ success: true, imported, total: agentStore.list().length });
+    } catch (err) {
+      res.status(500).json({ error: `导入失败: ${err.message}` });
+    }
   });
 
   // ==================== MCP 服务管理 API ====================
@@ -3732,7 +3815,7 @@ async function init() {
 
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
-      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager });
+      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore });
       const buildMessages = () => {
         // 将所有 system 内容合并为一条消息，避免某些模型（如 MiniMax）不支持多条 system 消息
         const systemParts = [systemPrompt];
@@ -4269,20 +4352,9 @@ async function init() {
 
   app.post('/api/config/rollback', async (req, res) => {
     const { file, versionId } = req.body;
-    if (versionId) {
-      // 通过版本ID回滚（支持重建已清理的快照）
-      const result = configStore.reconstructVersion(versionId);
-      if (result.error) return res.status(400).json({ error: result.error });
-      configStore.saveSnapshot('before-rollback');
-      configStore.saveConfig(result.config);
-      res.json({ success: true, reconstructed: true });
-    } else if (file) {
-      const result = configStore.restoreSnapshot(file);
-      if (result.error) return res.status(400).json({ error: result.error });
-      res.json({ success: true });
-    } else {
-      res.status(400).json({ error: '需要指定快照文件或版本ID' });
-    }
+    const result = configStore.restoreSnapshot(file, versionId);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ success: true, reconstructed: !!result.reconstructed });
   });
 
   // 前端首页
