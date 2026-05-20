@@ -3595,7 +3595,7 @@ async function init() {
     // 更新多 Agent 委派的共享代理上下文
     _chatProxy.url = proxyUrl;
     _chatProxy.headers = { ...proxyHeaders };
-    _chatProxy.defaultModel = proxy.defaultModel;
+    _chatProxy.defaultModel = model || proxy.defaultModel;
     if (providerId) proxyHeaders['x-pp-provider-id'] = providerId;
     if (model) proxyHeaders['x-pp-model'] = model;
     // 若供应商不在代理候选池中，传递完整供应商配置供代理动态构建临时候选
@@ -3690,7 +3690,6 @@ async function init() {
 
         let fetchRes;
         try {
-          // 发送前剥离非标准字段，避免供应商严格校验报错
           const cleanMessages = messages.map(m => {
             const clean = { role: m.role, content: m.content };
             if (m.tool_calls) clean.tool_calls = m.tool_calls;
