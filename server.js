@@ -181,6 +181,7 @@ async function init() {
       models: primaryProvider.models,
       azureDeployment: primaryProvider.azureDeployment || '',
       azureApiVersion: primaryProvider.azureApiVersion || '',
+      adapter: primaryProvider.adapter || '',
       model: '',
       weight: Math.max(1, parseInt(proxy.providerWeight, 10) || 1),
     });
@@ -203,6 +204,7 @@ async function init() {
         models: provider.models,
         azureDeployment: provider.azureDeployment || '',
         azureApiVersion: provider.azureApiVersion || '',
+        adapter: provider.adapter || '',
         model,
         weight: Math.max(1, parseInt(entry.weight, 10) || 1),
       });

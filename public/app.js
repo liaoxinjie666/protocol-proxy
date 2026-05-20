@@ -725,6 +725,7 @@ function renderProviders() {
         <div class="provider-card-header">
           <div class="provider-card-name">${escapeHtml(p.name)}${statusDot}</div>
           <span class="provider-card-protocol">${escapeHtml(p.protocol)}</span>
+          ${p.adapter ? `<span class="provider-card-adapter">${escapeHtml(p.adapter)}</span>` : ''}
         </div>
         <div class="provider-card-url">${escapeHtml(p.url)}</div>
         <div class="provider-card-models">
@@ -752,6 +753,7 @@ function openProviderModal() {
   document.getElementById('provider-edit-id').value = '';
   document.getElementById('provider-name').value = '';
   document.getElementById('provider-protocol').value = 'openai';
+  document.getElementById('provider-adapter').value = '';
   document.getElementById('provider-url').value = '';
   providerModelTags = [];
   renderModelTags();
@@ -771,6 +773,7 @@ function editProvider(id) {
   document.getElementById('provider-edit-id').value = p.id;
   document.getElementById('provider-name').value = p.name;
   document.getElementById('provider-protocol').value = p.protocol || 'openai';
+  document.getElementById('provider-adapter').value = p.adapter || '';
   document.getElementById('provider-url').value = p.url;
   providerModelTags = [...(p.models || [])];
   renderModelTags();
@@ -907,6 +910,7 @@ async function handleProviderSubmit(e) {
   const payload = {
     name: document.getElementById('provider-name').value.trim(),
     protocol: document.getElementById('provider-protocol').value,
+    adapter: document.getElementById('provider-adapter').value,
     url: document.getElementById('provider-url').value.trim(),
     models: providerModelTags,
     apiKeys: collectProviderKeys(),
