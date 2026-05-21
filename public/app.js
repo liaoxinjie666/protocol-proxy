@@ -726,6 +726,7 @@ function renderProviders() {
           <div class="provider-card-name">${escapeHtml(p.name)}${statusDot}</div>
           <span class="provider-card-protocol">${escapeHtml(p.protocol)}</span>
           ${p.adapter ? `<span class="provider-card-adapter">${escapeHtml(p.adapter)}</span>` : ''}
+          ${(p.capabilities || []).map(c => `<span class="provider-card-adapter">${escapeHtml(c)}</span>`).join('')}
         </div>
         <div class="provider-card-url">${escapeHtml(p.url)}</div>
         <div class="provider-card-models">
@@ -754,6 +755,7 @@ function openProviderModal() {
   document.getElementById('provider-name').value = '';
   document.getElementById('provider-protocol').value = 'openai';
   document.getElementById('provider-adapter').value = '';
+  setProviderCapabilities(['chat']);
   document.getElementById('provider-url').value = '';
   providerModelTags = [];
   renderModelTags();
@@ -774,6 +776,7 @@ function editProvider(id) {
   document.getElementById('provider-name').value = p.name;
   document.getElementById('provider-protocol').value = p.protocol || 'openai';
   document.getElementById('provider-adapter').value = p.adapter || '';
+  setProviderCapabilities(p.capabilities || ['chat']);
   document.getElementById('provider-url').value = p.url;
   providerModelTags = [...(p.models || [])];
   renderModelTags();
@@ -905,12 +908,28 @@ function collectProviderKeys() {
   }).filter(Boolean);
 }
 
+function setProviderCapabilities(capabilities) {
+  const caps = Array.isArray(capabilities) ? capabilities : [];
+  document.getElementById('provider-cap-chat').checked = caps.length === 0 || caps.includes('chat');
+  document.getElementById('provider-cap-vision').checked = caps.includes('vision');
+  document.getElementById('provider-cap-image-gen').checked = caps.includes('image_gen');
+}
+
+function collectProviderCapabilities() {
+  const caps = [];
+  if (document.getElementById('provider-cap-chat').checked) caps.push('chat');
+  if (document.getElementById('provider-cap-vision').checked) caps.push('vision');
+  if (document.getElementById('provider-cap-image-gen').checked) caps.push('image_gen');
+  return caps;
+}
+
 async function handleProviderSubmit(e) {
   e.preventDefault();
   const payload = {
     name: document.getElementById('provider-name').value.trim(),
     protocol: document.getElementById('provider-protocol').value,
     adapter: document.getElementById('provider-adapter').value,
+    capabilities: collectProviderCapabilities(),
     url: document.getElementById('provider-url').value.trim(),
     models: providerModelTags,
     apiKeys: collectProviderKeys(),

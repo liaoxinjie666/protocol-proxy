@@ -182,6 +182,7 @@ async function init() {
       azureDeployment: primaryProvider.azureDeployment || '',
       azureApiVersion: primaryProvider.azureApiVersion || '',
       adapter: primaryProvider.adapter || '',
+      capabilities: Array.isArray(primaryProvider.capabilities) ? primaryProvider.capabilities : [],
       model: '',
       weight: Math.max(1, parseInt(proxy.providerWeight, 10) || 1),
     });
@@ -205,6 +206,7 @@ async function init() {
         azureDeployment: provider.azureDeployment || '',
         azureApiVersion: provider.azureApiVersion || '',
         adapter: provider.adapter || '',
+        capabilities: Array.isArray(provider.capabilities) ? provider.capabilities : [],
         model,
         weight: Math.max(1, parseInt(entry.weight, 10) || 1),
       });
@@ -2471,7 +2473,7 @@ async function init() {
   });
 
   app.post('/api/providers', (req, res) => {
-    const { name, url, protocol, apiKey, apiKeys, models, azureDeployment, azureApiVersion } = req.body;
+    const { name, url, protocol, apiKey, apiKeys, models, azureDeployment, azureApiVersion, adapter, capabilities } = req.body;
     if (!name || !url) {
       return res.status(400).json({ error: 'name and url are required' });
     }
@@ -2483,6 +2485,8 @@ async function init() {
       models: models || [],
       azureDeployment: azureDeployment || '',
       azureApiVersion: azureApiVersion || '',
+      adapter: adapter || '',
+      capabilities: Array.isArray(capabilities) ? capabilities : [],
     });
     res.status(201).json(provider);
   });
@@ -2519,6 +2523,8 @@ async function init() {
     if (req.body.models !== undefined) updates.models = req.body.models;
     if (req.body.azureDeployment !== undefined) updates.azureDeployment = req.body.azureDeployment;
     if (req.body.azureApiVersion !== undefined) updates.azureApiVersion = req.body.azureApiVersion;
+    if (req.body.adapter !== undefined) updates.adapter = req.body.adapter || '';
+    if (req.body.capabilities !== undefined) updates.capabilities = Array.isArray(req.body.capabilities) ? req.body.capabilities : [];
 
     const updated = configStore.updateProvider(req.params.id, updates);
 
@@ -3769,6 +3775,8 @@ async function init() {
         if (provider) {
           proxyHeaders['x-pp-provider-url'] = provider.url;
           proxyHeaders['x-pp-provider-protocol'] = provider.protocol;
+          if (provider.adapter) proxyHeaders['x-pp-provider-adapter'] = provider.adapter;
+          if (Array.isArray(provider.capabilities)) proxyHeaders['x-pp-provider-capabilities'] = JSON.stringify(provider.capabilities);
           const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false).map(k => k.key);
           if (enabledKeys.length > 0) proxyHeaders['x-pp-provider-keys'] = JSON.stringify(enabledKeys);
         }
@@ -4248,7 +4256,10 @@ async function init() {
           url: p.url,
           protocol: p.protocol,
           apiKey: p.apiKey || '',
+          apiKeys: Array.isArray(p.apiKeys) ? p.apiKeys : [],
           models: Array.isArray(p.models) ? p.models : [],
+          adapter: p.adapter || '',
+          capabilities: Array.isArray(p.capabilities) ? p.capabilities : [],
         })),
         proxies: config.proxies.map(p => ({
           id: p.id,
@@ -4278,7 +4289,10 @@ async function init() {
         url: p.url,
         protocol: p.protocol,
         apiKey: p.apiKey || '',
+        apiKeys: Array.isArray(p.apiKeys) ? p.apiKeys : [],
         models: Array.isArray(p.models) ? p.models : [],
+        adapter: p.adapter || '',
+        capabilities: Array.isArray(p.capabilities) ? p.capabilities : [],
         routingStrategy: normalizeRoutingStrategyInput(p.routingStrategy),
         providerPool: normalizeProviderPoolInput(p.providerPool),
       });

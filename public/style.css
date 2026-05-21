@@ -948,6 +948,21 @@ body {
   margin-left: 4px;
 }
 
+.capability-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.capability-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 .provider-card-url {
   font-size: 12px;
   color: var(--text-muted);
