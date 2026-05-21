@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
@@ -430,7 +430,8 @@
           <h2 style="margin:0">技能管理</h2>
           <div style="display:flex;gap:8px">
             <button class="btn" onclick="reloadSkills()">重载技能</button>
-            <button class="btn btn-primary" onclick="showSkillModal()">上传技能</button>
+            <button class="btn" onclick="showSkillModal()">上传技能</button>
+            <button class="btn btn-primary" onclick="showCreateSkillModal()">创建技能</button>
           </div>
         </div>
         <div id="skills-container"></div>
@@ -442,6 +443,7 @@
           <h2 style="margin:0">身份管理</h2>
           <div style="display:flex;gap:8px">
             <button class="btn" onclick="reloadAgents()">重载代理</button>
+            <button class="btn" onclick="showAgentUploadModal()">上传代理</button>
             <button class="btn btn-primary" onclick="showAgentModal()">创建代理</button>
           </div>
         </div>
@@ -489,13 +491,13 @@
         </div>
         <!-- SOUL Tab -->
         <div class="tab-content active" id="tab-soul">
-          <div class="panel">
+          <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
             <div class="panel-header">
               <h3>Agent 人设 (SOUL.md)</h3>
               <button class="btn btn-sm btn-primary" onclick="saveSoul()">保存</button>
             </div>
-            <div class="panel-body">
-              <textarea id="soul-editor" class="mono-editor" placeholder="在此编辑 Agent 的人设定义..."></textarea>
+            <div class="panel-body" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <textarea id="soul-editor" class="mono-editor" placeholder="在此编辑 Agent 的人设定义..." style="flex:1;min-height:300px"></textarea>
               <div class="editor-hint">这是 Agent 的身份定义，会在每次对话开始时注入到系统提示词中。</div>
             </div>
           </div>
@@ -1156,7 +1158,7 @@
 
   <!-- Skill Modal -->
   <div class="modal-overlay" id="skill-modal">
-    <div class="modal" style="max-width:600px">
+    <div class="modal" style="max-width:720px">
       <div class="modal-header">
         <h3 id="skill-modal-title">新建技能</h3>
         <button class="modal-close" onclick="closeSkillModal()">&times;</button>
@@ -1186,7 +1188,7 @@
           </div>
           <div class="form-group">
             <label>指令内容 <span style="color:var(--text-muted)">(Markdown)</span></label>
-            <textarea id="skill-content" rows="10" placeholder="# 技能标题&#10;&#10;在此编写技能指令..."></textarea>
+            <textarea id="skill-content" rows="20" placeholder="# 技能标题&#10;&#10;在此编写技能指令..." style="min-height:300px"></textarea>
           </div>
           <div class="form-group" id="skill-files-section">
             <label>附属文件</label>
@@ -1227,14 +1229,42 @@
     </div>
   </div>
 
+  <!-- Agent Upload Modal -->
+  <div class="modal-overlay" id="agent-upload-modal">
+    <div class="modal" style="max-width:500px">
+      <div class="modal-header">
+        <h3>上传代理</h3>
+        <button class="modal-close" onclick="closeAgentUploadModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>选择 .md 文件 <span style="color:var(--text-muted)">(支持多选，每个文件为一个代理)</span></label>
+          <div id="agent-upload-drop" style="border:2px dashed var(--border-default);border-radius:var(--radius-md);padding:32px 16px;text-align:center;cursor:pointer;transition:all 0.2s" onclick="document.getElementById('agent-upload-input').click()">
+            <div style="font-size:28px;margin-bottom:8px">⬆</div>
+            <div style="color:var(--text-secondary);font-size:13px">点击选择文件，或将 .md 文件拖拽到此处</div>
+            <div style="color:var(--text-muted);font-size:12px;margin-top:4px">支持标准 Markdown 格式，需包含 YAML frontmatter</div>
+          </div>
+          <input type="file" id="agent-upload-input" accept=".md" multiple style="display:none" onchange="onAgentUploadSelected(this.files)">
+        </div>
+        <div id="agent-upload-preview" style="display:none;margin-top:12px">
+          <label style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;display:block">待上传文件</label>
+          <div id="agent-upload-filelist" style="max-height:200px;overflow-y:auto"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeAgentUploadModal()">取消</button>
+        <button class="btn btn-primary" id="agent-upload-btn" onclick="uploadAgentFiles()" disabled>上传</button>
+      </div>
+    </div>
+  </div>
   <!-- Agent Edit Modal -->
   <div class="modal-overlay" id="agent-modal">
-    <div class="modal" style="max-width:600px">
+    <div class="modal" style="max-width:720px;max-height:90vh;display:flex;flex-direction:column">
       <div class="modal-header">
         <h3 id="agent-modal-title">创建代理</h3>
         <button class="modal-close" onclick="closeAgentModal()">&times;</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" style="flex:1;overflow-y:auto;display:flex;flex-direction:column">
         <div class="form-group">
           <label>名称 <span style="color:var(--text-muted)">(kebab-case, 如 code-reviewer)</span></label>
           <input type="text" id="agent-name" placeholder="my-agent" pattern="[a-zA-Z0-9_-]+">
@@ -1261,9 +1291,9 @@
             </select>
           </div>
         </div>
-        <div class="form-group">
+        <div class="form-group" style="flex:1;display:flex;flex-direction:column">
           <label>系统提示词 <span style="color:var(--text-muted)">(Markdown, 作为子代理的身份注入)</span></label>
-          <textarea id="agent-body" rows="12" placeholder="# 代理身份&#10;&#10;## Your Identity & Memory&#10;- **Role**: ...&#10;- **Personality**: ...&#10;&#10;## Core Mission&#10;..."></textarea>
+          <textarea id="agent-body" rows="25" placeholder="# 代理身份&#10;&#10;## Your Identity & Memory&#10;- **Role**: ...&#10;- **Personality**: ...&#10;&#10;## Core Mission&#10;..." style="flex:1;min-height:400px"></textarea>
         </div>
       </div>
       <div class="modal-footer">

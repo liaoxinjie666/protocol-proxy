@@ -1,4 +1,4 @@
-// ================================================
+﻿// ================================================
 // Protocol Proxy — App Logic
 // ================================================
 
@@ -3119,6 +3119,7 @@ function selectSkill(name) {
 // ========== 技能管理 ==========
 let allSkills = [];
 let editingSkillName = '';
+let skillModalMode = 'upload'; // 'upload' | 'edit' | 'create'
 let pendingSkillFiles = null; // 待上传的文件夹 [{path, content(base64)}]
 
 function reloadSkills() {
@@ -3183,6 +3184,7 @@ function showSkillModal(name) {
   editingSkillName = name || '';
   pendingSkillFile = null;
   const isEdit = !!name;
+  skillModalMode = isEdit ? 'edit' : 'upload';
   document.getElementById('skill-modal-title').textContent = isEdit ? '编辑技能' : '上传技能';
   document.getElementById('skill-save-btn').textContent = isEdit ? '保存' : '上传';
   document.getElementById('skill-upload-section').style.display = isEdit ? 'none' : 'block';
@@ -3202,6 +3204,22 @@ function showSkillModal(name) {
     document.getElementById('skill-file-input').value = '';
     document.getElementById('skill-file-preview').innerHTML = '';
   }
+  showModal('skill-modal');
+}
+
+function showCreateSkillModal() {
+  editingSkillName = '';
+  skillModalMode = 'create';
+  document.getElementById('skill-modal-title').textContent = '创建技能';
+  document.getElementById('skill-save-btn').textContent = '创建';
+  document.getElementById('skill-upload-section').style.display = 'none';
+  document.getElementById('skill-edit-section').style.display = 'block';
+  document.getElementById('skill-name').value = '';
+  document.getElementById('skill-name').disabled = false;
+  document.getElementById('skill-description').value = '';
+  document.getElementById('skill-trigger').value = '';
+  document.getElementById('skill-content').value = '';
+  document.getElementById('skill-existing-files').innerHTML = '';
   showModal('skill-modal');
 }
 
@@ -3313,6 +3331,7 @@ async function deleteSkillFile(filePath) {
 function closeSkillModal() {
   hideModal('skill-modal');
   editingSkillName = '';
+  skillModalMode = 'upload';
   pendingSkillFiles = null;
 }
 
@@ -3364,6 +3383,28 @@ document.getElementById('skill-file-input')?.addEventListener('change', async (e
 });
 
 async function saveSkill() {
+  if (skillModalMode === 'create') {
+    // 创建模式
+    const name = document.getElementById('skill-name').value.trim();
+    const description = document.getElementById('skill-description').value.trim();
+    const trigger = document.getElementById('skill-trigger').value.trim();
+    const content = document.getElementById('skill-content').value.trim();
+    if (!name || !content) return showToast('名称和内容不能为空', true);
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description, trigger, content }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+      closeSkillModal();
+      await loadSkills();
+      showToast('技能已创建');
+    } catch (err) {
+      showToast('创建失败: ' + err.message, true);
+    }
+    return;
+  }
   if (!editingSkillName) {
     // 上传模式
     if (!pendingSkillFiles) return showToast('请选择技能文件夹', true);
@@ -3595,6 +3636,88 @@ function renderAgents() {
   container.innerHTML = html || '<p style="color:var(--text-muted)">暂无代理</p>';
 }
 
+
+// ==================== 上传代理 ====================
+let agentUploadFiles = [];
+
+function showAgentUploadModal() {
+  agentUploadFiles = [];
+  document.getElementById('agent-upload-input').value = '';
+  document.getElementById('agent-upload-preview').style.display = 'none';
+  document.getElementById('agent-upload-filelist').innerHTML = '';
+  document.getElementById('agent-upload-btn').disabled = true;
+  showModal('agent-upload-modal');
+
+  // 拖拽事件
+  const drop = document.getElementById('agent-upload-drop');
+  drop.ondragover = function(e) { e.preventDefault(); drop.style.borderColor = 'var(--accent)'; drop.style.background = 'var(--accent-subtle)' };
+  drop.ondragleave = function(e) { e.preventDefault(); drop.style.borderColor = 'var(--border-default)'; drop.style.background = '' };
+  drop.ondrop = function(e) {
+    e.preventDefault();
+    drop.style.borderColor = 'var(--border-default)'; drop.style.background = '';
+    onAgentUploadSelected(e.dataTransfer.files);
+  };
+}
+
+function closeAgentUploadModal() {
+  hideModal('agent-upload-modal');
+  agentUploadFiles = [];
+}
+
+function onAgentUploadSelected(files) {
+  agentUploadFiles = [];
+  for (const f of files) {
+    if (f.name.endsWith('.md')) agentUploadFiles.push(f);
+  }
+  const preview = document.getElementById('agent-upload-preview');
+  const list = document.getElementById('agent-upload-filelist');
+  const btn = document.getElementById('agent-upload-btn');
+  if (agentUploadFiles.length === 0) {
+    preview.style.display = 'none';
+    btn.disabled = true;
+    return;
+  }
+  preview.style.display = 'block';
+  btn.disabled = false;
+  list.innerHTML = agentUploadFiles.map(f =>
+    '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);margin-bottom:4px;font-size:13px">' +
+      '<span style="flex:1;color:var(--text-primary)">' + escapeHtml(f.name) + '</span>' +
+      '<span style="color:var(--text-muted);font-size:12px">' + (f.size / 1024).toFixed(1) + ' KB</span>' +
+    '</div>'
+  ).join('');
+}
+
+async function uploadAgentFiles() {
+  if (agentUploadFiles.length === 0) return;
+  const btn = document.getElementById('agent-upload-btn');
+  btn.disabled = true;
+  btn.textContent = '上传中...';
+  try {
+    const files = [];
+    for (const f of agentUploadFiles) {
+      const buf = await f.arrayBuffer();
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      files.push({ name: f.name, content: b64 });
+    }
+    const res = await fetch('/api/agents/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '上传失败');
+    closeAgentUploadModal();
+    await loadAgents();
+    const msg = data.imported > 0 ? '成功导入 ' + data.imported + ' 个代理' : '没有新代理被导入';
+    const skipped = (data.results || []).filter(r => r.status === 'skipped').length;
+    showToast(skipped > 0 ? msg + '，跳过 ' + skipped + ' 个' : msg);
+  } catch (err) {
+    showToast('上传失败: ' + err.message, true);
+  } finally {
+    btn.textContent = '上传';
+    btn.disabled = false;
+  }
+}
 function showAgentModal(slug) {
   editingAgentSlug = slug || '';
   const modal = document.getElementById('agent-modal');

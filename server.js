@@ -3534,6 +3534,41 @@ async function init() {
     }
   });
 
+
+  // 上传 .md 文件导入代理（支持多文件）
+  app.post('/api/agents/upload', (req, res) => {
+    try {
+      const { files } = req.body; // [{ name: "xxx.md", content: "base64..." }]
+      if (!files || !Array.isArray(files) || files.length === 0) {
+        return res.status(400).json({ error: '需要 files 数组，每项包含 name 和 content (base64)' });
+      }
+      const presetDir = path.join(__dirname, 'agents', 'preset');
+      const userDir = path.join(os.homedir(), '.protocol-proxy', 'agents');
+      fs.mkdirSync(presetDir, { recursive: true });
+      fs.mkdirSync(userDir, { recursive: true });
+      let imported = 0;
+      const results = [];
+      for (const file of files) {
+        const safeName = path.basename(file.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+        if (!safeName.endsWith('.md')) {
+          results.push({ name: safeName, status: 'skipped', reason: '非 .md 文件' });
+          continue;
+        }
+        const dest = path.join(userDir, safeName);
+        if (fs.existsSync(dest)) {
+          results.push({ name: safeName, status: 'skipped', reason: '已存在' });
+          continue;
+        }
+        fs.writeFileSync(dest, Buffer.from(file.content, 'base64'));
+        imported++;
+        results.push({ name: safeName, status: 'ok' });
+      }
+      agentStore.init();
+      res.json({ success: true, imported, results, total: agentStore.list().length });
+    } catch (err) {
+      res.status(500).json({ error: '上传失败: ' + err.message });
+    }
+  });
   // ==================== MCP 服务管理 API ====================
 
   app.get('/api/mcp/servers', (req, res) => {

@@ -1,4 +1,4 @@
-/* ================================================
+﻿/* ================================================
    Protocol Proxy — Design System
    ================================================ */
 
@@ -445,6 +445,8 @@ body {
 }
 
 .page.active { display: block; }
+#page-memory.active { display: flex; flex-direction: column; }
+#tab-soul.active { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
 /* ---------- Page Toolbar ---------- */
 .page-toolbar {
@@ -1284,6 +1286,8 @@ body {
 
 .modal-body {
   padding: 20px;
+  overflow-y: auto;
+  max-height: calc(100vh - 160px);
 }
 
 .modal-footer {
@@ -1317,8 +1321,9 @@ body {
 .form-group select,
 .form-group textarea {
   width: 100%;
-  height: 38px;
-  padding: 0 12px;
+  height: auto;
+  padding: 8px 12px;
+  resize: vertical;
   background: var(--bg-base);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -1372,6 +1377,15 @@ body {
   margin-bottom: 12px;
 }
 
+
+/* ---------- Agent Body Textarea ---------- */
+#agent-body {
+  min-height: 480px;
+  font-family: var(--font-mono), 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  tab-size: 2;
+}
 /* ---------- Tag Input ---------- */
 .tag-input {
   display: flex;
