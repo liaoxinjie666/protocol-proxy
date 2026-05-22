@@ -2416,6 +2416,7 @@ body {
 
 .assistant-input-area {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: flex-end;
   flex-shrink: 0;
@@ -3310,6 +3311,9 @@ body {
   gap: 8px;
   padding: 0 0 6px;
   min-height: 0;
+  max-height: 90px;
+  overflow-y: auto;
+  flex-basis: 100%;
 }
 .attachment-item {
   position: relative;

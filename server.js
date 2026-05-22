@@ -254,14 +254,17 @@ async function init() {
   function estimateMessageTokens(msg) {
     const len = (s) => (typeof s === 'string' ? s.length : JSON.stringify(s || '').length);
     let chars = 0;
+    let fixedTokens = 0;
     if (typeof msg.content === 'string') chars += len(msg.content);
     else if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
-        // 多模态格式：只取文本内容，不序列化整个对象
         if (typeof block === 'string') chars += len(block);
         else if (block?.text) chars += len(block.text);
-        else if (block?.content) chars += len(block.content);
-        else chars += len(block); // fallback
+        else if (block?.type === 'image_url' || block?.type === 'image' || block?.type === 'input_image') {
+          fixedTokens += 1000; // 图片：按 ~800-1500 token 估算，取保守值
+        } else if (block?.type === 'input_audio') {
+          fixedTokens += 500; // 音频：粗略估算
+        } else if (block?.content) chars += len(block.content);
       }
     }
     if (msg.reasoning_content) chars += len(msg.reasoning_content);
@@ -271,7 +274,7 @@ async function init() {
       }
     }
     // chars/2 对中文更保守（中文 ~1-2 token/字），宁可高估触发压缩也别低估撑爆上下文
-    return Math.ceil(chars / 2) + 4;
+    return Math.ceil(chars / 2) + 4 + fixedTokens;
   }
 
   function estimateConversationTokens(messages) {

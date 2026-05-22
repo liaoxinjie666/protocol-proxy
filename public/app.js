@@ -1932,6 +1932,22 @@ async function init() {
         }
       }
     });
+    // 粘贴图片/音频支持
+    assistantInput.addEventListener('paste', function(e) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files = [];
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        handleAssistantFileSelect(files);
+      }
+    });
   }
   // 点击外部关闭补全
   document.addEventListener('click', (e) => {
