@@ -1841,6 +1841,156 @@ function formatTokens(n) {
 }
 
 
+// ---------- Onboarding ----------
+
+function openOnboardingModal() {
+  document.getElementById('onboarding-url').value = '';
+  document.getElementById('onboarding-key').value = '';
+  document.getElementById('onboarding-protocol').value = 'openai';
+  document.getElementById('onboarding-model').value = '';
+  const statusEl = document.getElementById('onboarding-status');
+  if (statusEl) { statusEl.style.display = 'none'; statusEl.className = ''; }
+  const saveBtn = document.getElementById('onboarding-save-btn');
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '保存并启动'; }
+  showModal('onboarding-modal');
+}
+
+function closeOnboardingModal() {
+  hideModal('onboarding-modal');
+  localStorage.setItem('onboardingDismissed', 'true');
+}
+
+function onboardingDetectProtocol() {
+  const url = document.getElementById('onboarding-url').value.trim().toLowerCase();
+  if (!url) return;
+  const select = document.getElementById('onboarding-protocol');
+  if (url.includes('anthropic')) select.value = 'anthropic';
+  else if (url.includes('google') || url.includes('gemini')) select.value = 'gemini';
+  else select.value = 'openai';
+  onboardingAutoFetchModels();
+}
+
+let _onboardingFetchTimer = null;
+function onboardingAutoFetchModels() {
+  const url = document.getElementById('onboarding-url').value.trim();
+  const key = document.getElementById('onboarding-key').value.trim();
+  if (!url || !key) return;
+  const model = document.getElementById('onboarding-model').value.trim();
+  if (model) return;
+  const btn = document.getElementById('onboarding-fetch-models-btn');
+  if (btn.disabled) return;
+  clearTimeout(_onboardingFetchTimer);
+  _onboardingFetchTimer = setTimeout(() => onboardingFetchModels(), 300);
+}
+
+function onboardingProtocolChanged() {
+  document.getElementById('onboarding-model').value = '';
+}
+
+async function onboardingFetchModels() {
+  const url = document.getElementById('onboarding-url').value.trim();
+  const key = document.getElementById('onboarding-key').value.trim();
+  const protocol = document.getElementById('onboarding-protocol').value;
+  if (!url || !key) {
+    showOnboardingStatus('请先填写 API 地址和 API Key', true);
+    return;
+  }
+  const btn = document.getElementById('onboarding-fetch-models-btn');
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    const res = await fetch('/api/providers/available-models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, protocol, apiKey: key }),
+    });
+    const data = await res.json();
+    if (data.models && data.models.length > 0) {
+      document.getElementById('onboarding-model').value = data.models[0];
+      showOnboardingStatus(`已获取 ${data.models.length} 个模型`, false);
+    } else {
+      showOnboardingStatus(data.message || '未获取到模型列表，请手动输入', true);
+    }
+  } catch (err) {
+    showOnboardingStatus('获取模型列表失败: ' + err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡';
+  }
+}
+
+function showOnboardingStatus(message, isError) {
+  const el = document.getElementById('onboarding-status');
+  if (!el) return;
+  el.textContent = message;
+  el.style.display = 'block';
+  el.className = isError ? 'error' : 'success';
+}
+
+async function handleOnboardingSave() {
+  const url = document.getElementById('onboarding-url').value.trim();
+  const key = document.getElementById('onboarding-key').value.trim();
+  const protocol = document.getElementById('onboarding-protocol').value;
+  const model = document.getElementById('onboarding-model').value.trim();
+
+  if (!url) { showOnboardingStatus('请填写 API 地址', true); return; }
+  if (!key) { showOnboardingStatus('请填写 API Key', true); return; }
+  if (!model) { showOnboardingStatus('请填写或选择模型', true); return; }
+
+  const saveBtn = document.getElementById('onboarding-save-btn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = '测试中...';
+
+  // 第一步：真实对话测试
+  try {
+    const testRes = await fetch('/api/onboarding/test-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, protocol, apiKey: key, model }),
+    });
+    const testData = await testRes.json();
+    if (!testData.ok) {
+      showOnboardingStatus('模型测试失败: ' + testData.message, true);
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存并启动';
+      return;
+    }
+  } catch (err) {
+    showOnboardingStatus('测试请求失败: ' + err.message, true);
+    saveBtn.disabled = false;
+    saveBtn.textContent = '保存并启动';
+    return;
+  }
+
+  // 第二步：创建供应商和代理
+  saveBtn.textContent = '创建中...';
+  try {
+    const setupRes = await fetch('/api/onboarding/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, protocol, apiKey: key, model }),
+    });
+    const setupData = await setupRes.json();
+    if (!setupData.ok) {
+      showOnboardingStatus('创建失败: ' + setupData.message, true);
+      saveBtn.disabled = false;
+      saveBtn.textContent = '保存并启动';
+      return;
+    }
+
+    showOnboardingStatus('代理创建成功！正在启动...', false);
+    await loadProxies();
+    await loadProviders();
+    hideModal('onboarding-modal');
+    showToast(`代理已创建并启动，端口 :${setupData.proxy.port}`);
+    navigateTo('proxies');
+  } catch (err) {
+    showOnboardingStatus('创建失败: ' + err.message, true);
+    saveBtn.disabled = false;
+    saveBtn.textContent = '保存并启动';
+  }
+}
+
 // ---------- Initialization ----------
 async function init() {
   // Set default dates for stats
@@ -1894,7 +2044,13 @@ async function init() {
   setInterval(loadStats, 30000);
   setInterval(loadKeyHealth, 5 * 60 * 1000);
 
-  // Assistant textarea auto-resize + skill autocomplete
+  // ==================== Onboarding ====================
+
+  if (proxies.length === 0 && !localStorage.getItem('onboardingDismissed')) {
+    setTimeout(() => openOnboardingModal(), 500);
+  }
+
+  // ==================== Assistant textarea auto-resize + skill autocomplete
   const assistantInput = document.getElementById('assistant-input');
   if (assistantInput) {
     assistantInput.addEventListener('input', function() {

@@ -2702,6 +2702,147 @@ async function init() {
     res.json({ ok: passed === keys.length, passed, failed: keys.length - passed, results });
   });
 
+  // ==================== 首次使用引导 ====================
+
+  app.post('/api/onboarding/test-chat', async (req, res) => {
+    const { url, protocol, apiKey, model } = req.body || {};
+    if (!url || !protocol || !apiKey || !model) {
+      return res.status(400).json({ ok: false, message: '缺少必要参数' });
+    }
+    const base = url.replace(/\/$/, '');
+    const hasV1Suffix = base.endsWith('/v1');
+
+    try {
+      let fetchUrl, fetchOpts, body;
+      if (protocol === 'openai') {
+        fetchUrl = hasV1Suffix ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
+        body = JSON.stringify({ model, messages: [{ role: 'user', content: '你好，请简单回复一个问候。' }], max_tokens: 20 });
+        fetchOpts = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body,
+          signal: AbortSignal.timeout(20000),
+        };
+      } else if (protocol === 'anthropic') {
+        fetchUrl = hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`;
+        body = JSON.stringify({ model, max_tokens: 20, messages: [{ role: 'user', content: '你好，请简单回复一个问候。' }] });
+        fetchOpts = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body,
+          signal: AbortSignal.timeout(20000),
+        };
+      } else if (protocol === 'gemini') {
+        const geminiBase = /\/v1(alpha|beta)?$/.test(base) ? base.replace(/\/v1(alpha|beta)?$/, '') : base;
+        fetchUrl = `${geminiBase}/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        body = JSON.stringify({ contents: [{ parts: [{ text: '你好，请简单回复一个问候。' }] }], generationConfig: { maxOutputTokens: 20 } });
+        fetchOpts = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(20000),
+        };
+      } else {
+        return res.json({ ok: false, message: `不支持的协议: ${protocol}` });
+      }
+
+      const started = Date.now();
+      const fetchRes = await fetch(fetchUrl, fetchOpts);
+      const latency = Date.now() - started;
+
+      if (!fetchRes.ok) {
+        const errText = await fetchRes.text().catch(() => '');
+        const hint = fetchRes.status === 401 || fetchRes.status === 403
+          ? 'API Key 无效或无权限'
+          : `HTTP ${fetchRes.status}: ${errText.slice(0, 300) || '未知错误'}`;
+        return res.json({ ok: false, message: hint });
+      }
+
+      const data = await fetchRes.json().catch(() => null);
+      let responseText = '';
+      if (protocol === 'openai') {
+        responseText = data?.choices?.[0]?.message?.content || '';
+      } else if (protocol === 'anthropic') {
+        responseText = data?.content?.[0]?.text || '';
+      } else if (protocol === 'gemini') {
+        responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      }
+
+      res.json({ ok: true, message: '模型连接正常', latency, response: responseText.trim() });
+    } catch (err) {
+      const msg = err.name === 'TimeoutError' ? '连接超时 (20s)' : `连接失败: ${err.message}`;
+      res.json({ ok: false, message: msg });
+    }
+  });
+
+  app.post('/api/onboarding/setup', async (req, res) => {
+    const { url, protocol, apiKey, model } = req.body || {};
+    if (!url || !protocol || !apiKey || !model) {
+      return res.status(400).json({ ok: false, message: '缺少必要参数' });
+    }
+
+    try {
+      // 从 URL 推断供应商名称
+      let providerName = '默认供应商';
+      try {
+        const u = new URL(url);
+        const host = u.hostname;
+        if (host.includes('openai')) providerName = 'OpenAI';
+        else if (host.includes('anthropic')) providerName = 'Anthropic';
+        else if (host.includes('google') || host.includes('gemini')) providerName = 'Gemini';
+        else if (host.includes('deepseek')) providerName = 'DeepSeek';
+        else if (host.includes('qwen') || host.includes('aliyun') || host.includes('dashscope')) providerName = '通义千问';
+        else if (host.includes('kimi') || host.includes('moonshot')) providerName = 'Kimi';
+        else if (host.includes('doubao') || host.includes('volces')) providerName = '豆包';
+        else if (host.includes('zhipu') || host.includes('bigmodel')) providerName = '智谱';
+        else if (host.includes('minimax')) providerName = 'MiniMax';
+        else if (host.includes('azure')) providerName = 'Azure OpenAI';
+        else providerName = host.split('.').slice(-2, -1)[0] || host;
+      } catch { /* ignore */ }
+
+      // 创建供应商
+      const provider = configStore.addProvider({
+        name: providerName,
+        url,
+        protocol,
+        apiKey,
+        apiKeys: [{ key: apiKey, alias: '默认' }],
+        models: [model],
+      });
+
+      // 找一个可用端口
+      let port = 8080;
+      const existingProxies = configStore.getProxies();
+      const usedPorts = new Set(existingProxies.map(p => p.port));
+      while (usedPorts.has(port)) port++;
+
+      // 创建代理
+      const proxy = configStore.addProxy({
+        name: '默认代理',
+        port,
+        requireAuth: false,
+        authToken: null,
+        providerId: provider.id,
+        defaultModel: model,
+        providerWeight: 1,
+        routingStrategy: 'primary_fallback',
+        providerPool: [],
+      });
+
+      // 启动代理
+      try {
+        await startProxyWithProvider(proxy);
+      } catch (startErr) {
+        // 启动失败不删除配置，让用户可以手动处理
+        return res.status(500).json({ ok: false, message: `代理创建成功但启动失败: ${startErr.message}`, provider, proxy });
+      }
+
+      res.json({ ok: true, provider, proxy: { ...proxy, running: true } });
+    } catch (err) {
+      res.status(500).json({ ok: false, message: err.message });
+    }
+  });
+
   app.post('/api/providers/available-models', async (req, res) => {
     const { url, protocol, apiKey, azureDeployment, azureApiVersion } = req.body || {};
     if (!url || !protocol) return res.json({ models: [], message: '缺少 url 或 protocol 参数' });

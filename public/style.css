@@ -1,4 +1,4 @@
-﻿/* ================================================
+/* ================================================
    Protocol Proxy — Design System
    ================================================ */
 
@@ -1222,9 +1222,9 @@ body {
   background: rgba(0,0,0,0.6);
   backdrop-filter: blur(4px);
   z-index: 1000;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 40px 20px;
+  padding: 20px;
   overflow-y: auto;
 }
 
@@ -1639,7 +1639,7 @@ body {
 /* ---------- Radio ---------- */
 .radio-label {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
@@ -1667,24 +1667,135 @@ body {
 }
 
 /* ---------- Confirm ---------- */
+.confirm-modal-wrap {
+  position: relative;
+  overflow: visible;
+}
+
+.confirm-robot {
+  position: absolute;
+  bottom: -52px;
+  right: -42px;
+  width: 96px;
+  height: 96px;
+  z-index: 10;
+  pointer-events: none;
+}
+
 .confirm-icon {
-  width: 48px;
-  height: 48px;
+  width: 100px;
+  height: 100px;
   border-radius: var(--radius-full);
-  background: var(--warning-bg);
-  color: var(--warning);
+  background: linear-gradient(135deg, var(--accent-subtle), var(--bg-surface));
+  color: var(--accent);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 24px;
   font-weight: 700;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 24px rgba(14, 165, 233, 0.15), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+.robot-icon {
+  animation: robot-float 2.5s ease-in-out infinite;
+  filter: drop-shadow(0 4px 8px rgba(14, 165, 233, 0.25));
+}
+
+@keyframes robot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.robot-wave-arm {
+  animation: robot-wave 2s ease-in-out infinite;
+  transform-origin: 88px 78px;
+}
+
+@keyframes robot-wave {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-12deg); }
+  75% { transform: rotate(6deg); }
+}
+
+.robot-eye {
+  animation: robot-blink 3.5s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes robot-blink {
+  0%, 45%, 55%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.2); }
 }
 
 .confirm-text {
   font-size: 14px;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+/* ---------- Onboarding ---------- */
+.onboarding-modal-wrap {
+  position: relative;
+  overflow: visible;
+  max-width: 460px;
+}
+
+.onboarding-form {
+  text-align: left;
+}
+
+.onboarding-form .form-group label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 5px;
+  display: block;
+}
+
+.onboarding-form .form-group input,
+.onboarding-form .form-group select {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 13px;
+  outline: none;
+  transition: all var(--transition-micro);
+}
+
+.onboarding-form .form-group input:focus,
+.onboarding-form .form-group select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.onboarding-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+#onboarding-status {
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+}
+
+#onboarding-status.success {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+#onboarding-status.error {
+  background: var(--error-bg);
+  border-color: var(--error);
+  color: var(--error);
 }
 
 /* ---------- Import ---------- */
@@ -2311,7 +2422,7 @@ body {
 
 .assistant-welcome {
   text-align: center;
-  padding: 40px 20px;
+  padding: 20px;
   color: var(--text-muted);
   margin: auto;
 }
@@ -2707,7 +2818,7 @@ body {
 
 .delegate-task {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   padding: 4px 0;
   flex-wrap: wrap;
@@ -3169,7 +3280,7 @@ body {
 .entry-card {
   background: var(--bg-base); border: 1px solid var(--border-default);
   border-radius: var(--radius-md, 8px); padding: 12px 16px;
-  display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   transition: border-color 0.15s;
 }
 .entry-card:hover { border-color: var(--accent-border); }

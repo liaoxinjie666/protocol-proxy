@@ -1055,14 +1055,62 @@
 
   <!-- Confirm Modal -->
   <div class="modal-overlay" id="confirm-modal">
-    <div class="modal modal-sm">
-      <div class="modal-body" style="text-align:center;padding:32px">
-        <div class="confirm-icon">!</div>
+    <div class="modal modal-sm confirm-modal-wrap">
+      <div class="modal-body" style="text-align:center;padding:32px 32px 48px 32px">
         <p class="confirm-text" id="confirm-text"></p>
         <div class="modal-footer" style="justify-content:center;border:none;padding:0;margin-top:24px">
           <button class="btn" id="confirm-cancel">取消</button>
           <button class="btn btn-danger" id="confirm-ok">确认</button>
         </div>
+      </div>
+      <!-- 机器人探出提示框 -->
+      <div class="confirm-robot">
+        <svg class="robot-icon" width="90" height="90" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- 阴影 -->
+          <ellipse cx="60" cy="110" rx="22" ry="4" fill="#0EA5E9" opacity="0.12"/>
+
+          <!-- 左耳 -->
+          <rect x="10" y="38" width="12" height="24" rx="6" fill="#0EA5E9"/>
+          <rect x="12" y="40" width="8" height="20" rx="4" fill="#38BDF8"/>
+
+          <!-- 右耳 -->
+          <rect x="98" y="38" width="12" height="24" rx="6" fill="#0EA5E9"/>
+          <rect x="100" y="40" width="8" height="20" rx="4" fill="#38BDF8"/>
+
+          <!-- 身体 -->
+          <ellipse cx="60" cy="85" rx="32" ry="28" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3"/>
+
+          <!-- 胸前蓝色面板 -->
+          <ellipse cx="60" cy="88" rx="16" ry="12" fill="#0EA5E9"/>
+          <ellipse cx="60" cy="86" rx="12" ry="8" fill="#38BDF8"/>
+
+          <!-- 左手 -->
+          <ellipse cx="22" cy="80" rx="10" ry="14" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3" transform="rotate(25 22 80)"/>
+
+          <!-- 右手（挥手） -->
+          <g class="robot-wave-arm">
+            <ellipse cx="98" cy="68" rx="10" ry="14" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3" transform="rotate(-35 98 68)"/>
+          </g>
+
+          <!-- 头部 -->
+          <circle cx="60" cy="42" r="36" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3"/>
+
+          <!-- 头顶小装饰 -->
+          <rect x="50" y="2" width="20" height="8" rx="4" fill="#0EA5E9"/>
+
+          <!-- 面罩 -->
+          <ellipse cx="60" cy="44" rx="28" ry="22" fill="#0F172A"/>
+
+          <!-- 面罩高光 -->
+          <ellipse cx="48" cy="32" rx="10" ry="5" fill="white" opacity="0.12"/>
+
+          <!-- 笑眼 -->
+          <path class="robot-eye" d="M42 44 Q48 38 54 44" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+          <path class="robot-eye" d="M66 44 Q72 38 78 44" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+
+          <!-- 嘴巴 -->
+          <path d="M50 54 Q60 60 70 54" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+        </svg>
       </div>
     </div>
   </div>
@@ -1080,6 +1128,80 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" onclick="closeTestModal()">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Onboarding Modal -->
+  <div class="modal-overlay" id="onboarding-modal">
+    <div class="modal modal-sm onboarding-modal-wrap">
+      <div class="modal-body" style="text-align:center;padding:32px 32px 48px 32px">
+        <h3 style="font-family:var(--font-display);font-size:18px;font-weight:700;color:var(--text-primary);margin-bottom:6px">👋 欢迎使用 Protocol Proxy</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px">还没有配置代理，让我们快速创建一个吧！</p>
+
+        <div class="onboarding-form">
+          <div class="form-group" style="text-align:left;margin-bottom:14px">
+            <label>API 地址 <span style="color:var(--error)">*</span></label>
+            <input type="url" id="onboarding-url" placeholder="https://api.openai.com/v1" onblur="onboardingDetectProtocol()">
+            <div class="onboarding-hint">支持 OpenAI、DeepSeek、Kimi、豆包等兼容接口</div>
+          </div>
+
+          <div class="form-group" style="text-align:left;margin-bottom:14px">
+            <label>API Key <span style="color:var(--error)">*</span></label>
+            <input type="password" id="onboarding-key" placeholder="sk-..." onblur="onboardingAutoFetchModels()">
+          </div>
+
+          <div class="form-row" style="gap:10px;margin-bottom:14px">
+            <div class="form-group" style="flex:1;text-align:left;margin-bottom:0">
+              <label>协议类型</label>
+              <select id="onboarding-protocol" onchange="onboardingProtocolChanged()">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex:2;text-align:left;margin-bottom:0">
+              <label>模型</label>
+              <div style="display:flex;gap:6px">
+                <input type="text" id="onboarding-model" placeholder="选择或输入模型名..." style="flex:1">
+                <button type="button" class="btn btn-sm" id="onboarding-fetch-models-btn" onclick="onboardingFetchModels()" title="自动获取模型列表">⚡</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="onboarding-model-hint" class="onboarding-hint" style="display:none"></div>
+        </div>
+
+        <div id="onboarding-status" style="display:none;margin:12px 0;padding:8px 12px;border-radius:var(--radius-md);font-size:12px"></div>
+
+        <div class="modal-footer" style="justify-content:center;border:none;padding:0;margin-top:20px;gap:10px">
+          <button class="btn" id="onboarding-skip-btn" onclick="closeOnboardingModal()">稍后再说</button>
+          <button class="btn btn-primary" id="onboarding-save-btn" onclick="handleOnboardingSave()">保存并启动</button>
+        </div>
+      </div>
+      <!-- 机器人探出提示框 -->
+      <div class="confirm-robot" style="bottom:-48px;right:-36px">
+        <svg class="robot-icon" width="82" height="82" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="60" cy="110" rx="22" ry="4" fill="#0EA5E9" opacity="0.12"/>
+          <rect x="10" y="38" width="12" height="24" rx="6" fill="#0EA5E9"/>
+          <rect x="12" y="40" width="8" height="20" rx="4" fill="#38BDF8"/>
+          <rect x="98" y="38" width="12" height="24" rx="6" fill="#0EA5E9"/>
+          <rect x="100" y="40" width="8" height="20" rx="4" fill="#38BDF8"/>
+          <ellipse cx="60" cy="85" rx="32" ry="28" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3"/>
+          <ellipse cx="60" cy="88" rx="16" ry="12" fill="#0EA5E9"/>
+          <ellipse cx="60" cy="86" rx="12" ry="8" fill="#38BDF8"/>
+          <ellipse cx="22" cy="80" rx="10" ry="14" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3" transform="rotate(25 22 80)"/>
+          <g class="robot-wave-arm">
+            <ellipse cx="98" cy="68" rx="10" ry="14" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3" transform="rotate(-35 98 68)"/>
+          </g>
+          <circle cx="60" cy="42" r="36" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3"/>
+          <rect x="50" y="2" width="20" height="8" rx="4" fill="#0EA5E9"/>
+          <ellipse cx="60" cy="44" rx="28" ry="22" fill="#0F172A"/>
+          <ellipse cx="48" cy="32" rx="10" ry="5" fill="white" opacity="0.12"/>
+          <path class="robot-eye" d="M42 44 Q48 38 54 44" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+          <path class="robot-eye" d="M66 44 Q72 38 78 44" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+          <path d="M50 54 Q60 60 70 54" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+        </svg>
       </div>
     </div>
   </div>
