@@ -30,19 +30,26 @@ curl http://localhost:8080/v1/chat/completions \
 | **API 地址** | 供应商的 API 端点，必须以 `/v1` 或完整路径结尾 | `https://api.openai.com/v1`<br>`https://api.siliconflow.cn/v1`<br>`https://api.anthropic.com` |
 | **模型列表** | 该供应商支持的模型名称，支持模型路由 | 输入模型名后按回车添加，如 `gpt-4`、`claude-3-opus` |
 | **API Keys** | 访问供应商的密钥，支持多 Key 轮换 | 点击「+ 添加 Key」添加 |
+| **适配器** | 国内模型适配器，自动处理协议差异 | `qwen`、`deepseek`、`kimi`、`doubao`、`zhipu`、`minimax` |
+| **能力标签** | 该供应商支持的能力列表 | `tools`、`vision`、`json` 等 |
+| **Azure 部署** | Azure OpenAI 部署名称 | 仅 Azure OpenAI 需要 |
+| **Azure API 版本** | Azure OpenAI API 版本 | 如 `2024-02-01` |
 
 ## 常用 API 地址参考
 
-| 供应商 | API 地址 |
-|--------|----------|
-| OpenAI 官方 | `https://api.openai.com/v1` |
-| Anthropic 官方 | `https://api.anthropic.com` |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta` |
-| 硅基流动 | `https://api.siliconflow.cn/v1` |
-| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` |
-| DeepSeek | `https://api.deepseek.com/v1` |
-| 本地模型 (Ollama) | `http://localhost:11434/v1` |
+| 供应商 | API 地址 | 建议适配器 |
+|--------|----------|-----------|
+| OpenAI 官方 | `https://api.openai.com/v1` | — |
+| Anthropic 官方 | `https://api.anthropic.com` | — |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta` | — |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | — |
+| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `zhipu` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek` |
+| Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `kimi` |
+| 字节豆包 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao` |
+| MiniMax | `https://api.minimax.chat/v1` | `minimax` |
+| 本地模型 (Ollama) | `http://localhost:11434/v1` | — |
 
 ## API Keys 配置详解
 

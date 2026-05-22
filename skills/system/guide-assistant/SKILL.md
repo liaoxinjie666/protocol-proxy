@@ -166,6 +166,9 @@ AI 会自动在技能执行过程中调用对应的 MCP 工具。
 | **Sequential Thinking** | `@modelcontextprotocol/server-sequential-thinking` | 思维链推理 | 复杂问题分析 |
 | **Open WebSearch** | `open-websearch` | 网页搜索 | 需设置 `PORT=55555` |
 | **Stagehand** | `stagehand-mcp` | 浏览器自动化 | 页面导航、操作、截图 |
+| **A2ASearch** | `a2asearch-mcp` | MCP 生态搜索 | 发现更多 MCP 工具 |
+| **OpenChrome** | `openchrome-mcp` | Chrome CDP 控制 | 浏览器自动化和调试 |
+| **Pretext PDF** | `pretext-pdf-mcp` | PDF 生成 | Markdown 转 PDF |
 
 **配置提示**：
 - 大多数官方 MCP 只支持 stdio 模式，不支持 HTTP 传输

@@ -712,6 +712,10 @@ async function init() {
             apiKey: { type: 'string', description: 'API Key（单个）' },
             apiKeys: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, alias: { type: 'string' } } }, description: '多个 API Key 数组' },
             models: { type: 'array', items: { type: 'string' }, description: '可用模型列表' },
+            adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax'], description: '供应商适配器，用于国内模型特殊处理' },
+            capabilities: { type: 'array', items: { type: 'string' }, description: '供应商能力标签，如 vision、tools、json 等' },
+            azureDeployment: { type: 'string', description: 'Azure OpenAI 部署名称' },
+            azureApiVersion: { type: 'string', description: 'Azure OpenAI API 版本' },
           },
           required: ['name', 'url'],
         },
@@ -731,6 +735,10 @@ async function init() {
             protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini'], description: '新的协议' },
             apiKey: { type: 'string', description: '新的 API Key' },
             models: { type: 'array', items: { type: 'string' }, description: '新的模型列表' },
+            adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax'], description: '新的供应商适配器' },
+            capabilities: { type: 'array', items: { type: 'string' }, description: '新的能力标签' },
+            azureDeployment: { type: 'string', description: '新的 Azure 部署名称' },
+            azureApiVersion: { type: 'string', description: '新的 Azure API 版本' },
           },
           required: ['providerId'],
         },
@@ -792,6 +800,7 @@ async function init() {
             providerId: { type: 'string', description: '关联的供应商 ID' },
             defaultModel: { type: 'string', description: '默认模型名' },
             routingStrategy: { type: 'string', enum: ['primary_fallback', 'round_robin', 'weighted', 'fastest'], description: '路由策略' },
+            providerPool: { type: 'array', description: '多供应商池配置，用于加权/轮询/最快路由', items: { type: 'object', properties: { providerId: { type: 'string', description: '供应商 ID' }, model: { type: 'string', description: '模型名称' }, weight: { type: 'number', description: '权重，默认 1' } } } },
           },
           required: ['name', 'port', 'providerId'],
         },
@@ -811,6 +820,7 @@ async function init() {
             providerId: { type: 'string', description: '新的供应商 ID' },
             defaultModel: { type: 'string', description: '新的默认模型' },
             routingStrategy: { type: 'string', enum: ['primary_fallback', 'round_robin', 'weighted', 'fastest'], description: '新的路由策略' },
+            providerPool: { type: 'array', description: '新的多供应商池配置', items: { type: 'object', properties: { providerId: { type: 'string' }, model: { type: 'string' }, weight: { type: 'number' } } } },
           },
           required: ['proxyId'],
         },
@@ -1720,6 +1730,10 @@ async function init() {
         apiKey: args.apiKey || '',
         apiKeys: Array.isArray(args.apiKeys) ? args.apiKeys.filter(k => k && k.key && k.key.trim()) : [],
         models: args.models || [],
+        adapter: args.adapter || '',
+        capabilities: Array.isArray(args.capabilities) ? args.capabilities : [],
+        azureDeployment: args.azureDeployment || '',
+        azureApiVersion: args.azureApiVersion || '',
       });
       return { success: true, id: provider.id, name: provider.name };
     },
@@ -1736,6 +1750,10 @@ async function init() {
         updates.apiKeys = Array.isArray(args.apiKeys) ? args.apiKeys.filter(k => k && k.key && k.key.trim()) : [];
       }
       if (args.models !== undefined) updates.models = args.models;
+      if (args.adapter !== undefined) updates.adapter = args.adapter;
+      if (args.capabilities !== undefined) updates.capabilities = Array.isArray(args.capabilities) ? args.capabilities : [];
+      if (args.azureDeployment !== undefined) updates.azureDeployment = args.azureDeployment;
+      if (args.azureApiVersion !== undefined) updates.azureApiVersion = args.azureApiVersion;
       const updated = configStore.updateProvider(args.providerId, updates);
       // 同步更新引用此供应商的运行中代理
       const affectedProxies = configStore.getProxies().filter(p => p.providerId === args.providerId);
@@ -1882,6 +1900,7 @@ async function init() {
       }
       if (args.defaultModel !== undefined) updates.defaultModel = args.defaultModel;
       if (args.routingStrategy !== undefined) updates.routingStrategy = normalizeRoutingStrategyInput(args.routingStrategy);
+      if (args.providerPool !== undefined) updates.providerPool = normalizeProviderPoolInput(args.providerPool);
       const needRestart = updates.port !== undefined && updates.port !== existing.port;
       if (needRestart) {
         const conflict = configStore.getProxies().find(p => p.id !== args.proxyId && p.port === updates.port);

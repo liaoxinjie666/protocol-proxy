@@ -51,12 +51,24 @@ Authorization: Bearer your-token-here
 |--------|------|------|
 | **权重** | 该代理的权重，用于加权随机策略 | 数字越大，被选中的概率越高 |
 
-### 备选供应商池
+### 多供应商池（providerPool）
+
+多供应商池是现代路由策略的核心配置，用于实现负载均衡和多供应商调度：
 
 | 配置项 | 含义 | 说明 |
 |--------|------|------|
-| **备选供应商** | 故障转移时的备用供应商 | 可添加多个，形成备选链路 |
-| **权重** | 备选供应商的使用权重 | 影响在加权策略中的选中概率 |
+| **providerPool** | 多供应商池配置数组 | 每个元素包含 `providerId`（供应商ID）、`model`（模型名）、`weight`（权重） |
+| **权重** | 该池成员的使用权重 | 数字越大，在 `weighted` 策略中被选中的概率越高；`fastest` 策略下权重不影响 |
+
+**配置示例**：
+```json
+[
+  { "providerId": "openai", "model": "gpt-4o", "weight": 2 },
+  { "providerId": "deepseek", "model": "deepseek-chat", "weight": 1 }
+]
+```
+
+> **注意**：providerPool 与路由策略配合使用。`primary_fallback` 策略下主供应商为 `providerId`，池中其余为备选；`round_robin`、`weighted`、`fastest` 策略下则按对应逻辑在池中调度。
 
 ## 创建代理
 
@@ -98,8 +110,10 @@ Protocol Proxy 支持不同协议之间的自动转换：
 |----------|----------|
 | OpenAI 格式 → Anthropic 供应商 | 自动转换为 Claude API 格式 |
 | Anthropic 格式 → OpenAI 供应商 | 自动转换为 Chat Completions 格式 |
+| OpenAI 格式 → Gemini 供应商 | 自动转换为 Gemini API 格式 |
+| Gemini 格式 → OpenAI 供应商 | 自动转换为 Chat Completions 格式 |
 
-这样可以用统一的 OpenAI 客户端访问各种 AI 后端。
+这样可以用统一的 OpenAI 客户端访问各种 AI 后端。适配器（adapter）会自动处理国内模型的协议差异。
 
 ## 代理使用示例
 
