@@ -3791,20 +3791,25 @@ async function init() {
     // 检测 /skillname 前缀触发技能
     let activeSkill = null;
     if (!compress && message) {
-      const slashMatch = message.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
-      if (slashMatch) {
-        const skillName = slashMatch[1];
-        const skill = skillStore.get(skillName);
-        if (skill) {
-          activeSkill = skill;
-          // 将用户消息中的参数部分保留，无参数时生成触发消息
-          const args = slashMatch[2]?.trim();
-          conv.messages.push({ role: 'user', content: args || `请执行 ${skillName} 技能` });
+      // 多模态消息（数组格式）直接保存，不支持技能触发前缀检测
+      if (Array.isArray(message)) {
+        conv.messages.push({ role: 'user', content: message });
+      } else {
+        const slashMatch = message.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
+        if (slashMatch) {
+          const skillName = slashMatch[1];
+          const skill = skillStore.get(skillName);
+          if (skill) {
+            activeSkill = skill;
+            // 将用户消息中的参数部分保留，无参数时生成触发消息
+            const args = slashMatch[2]?.trim();
+            conv.messages.push({ role: 'user', content: args || `请执行 ${skillName} 技能` });
+          } else {
+            conv.messages.push({ role: 'user', content: message });
+          }
         } else {
           conv.messages.push({ role: 'user', content: message });
         }
-      } else {
-        conv.messages.push({ role: 'user', content: message });
       }
       conversationStore.touch(conv);
     }
@@ -3831,8 +3836,9 @@ async function init() {
           proxyHeaders['x-pp-provider-protocol'] = provider.protocol;
           if (provider.adapter) proxyHeaders['x-pp-provider-adapter'] = provider.adapter;
           if (Array.isArray(provider.capabilities)) proxyHeaders['x-pp-provider-capabilities'] = JSON.stringify(provider.capabilities);
-          const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false).map(k => k.key);
+          const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false);
           if (enabledKeys.length > 0) proxyHeaders['x-pp-provider-keys'] = JSON.stringify(enabledKeys);
+          proxyHeaders['x-pp-provider-name'] = provider.name;
         }
       }
     }

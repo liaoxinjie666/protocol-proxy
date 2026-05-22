@@ -19,6 +19,7 @@ let providerModelTags = [];
 let providerKeys = [];
 let assistantMessages = []; // 仅用于 UI 渲染
 const delegateCards = new Map(); // createdId → { msgId, tasks: Map<taskId, {objective, status}> }
+let assistantAttachments = []; // 待上传的多模态附件 [{type, data, mimeType, name}]
 let assistantProxyId = '';
 let assistantProviderId = ''; // 用于级联选择的模型列表
 let proxyProviders = []; // 当前代理的候选供应商列表
@@ -1976,6 +1977,66 @@ function populateAssistantProxySelect() {
   }
 }
 
+// ==================== 多模态附件处理 ====================
+
+function handleAssistantFileSelect(files) {
+  if (!files || files.length === 0) return;
+  for (const file of files) {
+    if (!file.type.startsWith('image/') && !file.type.startsWith('audio/')) {
+      showToast(`不支持的文件类型: ${file.name}`, true);
+      continue;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64 = e.target.result.split(',')[1];
+      assistantAttachments.push({
+        type: file.type.startsWith('image/') ? 'image_url' : 'input_audio',
+        mimeType: file.type,
+        name: file.name,
+        data: base64,
+      });
+      renderAttachmentPreview();
+    };
+    reader.readAsDataURL(file);
+  }
+  // 清空 input 以便重复选择同一文件
+  const input = document.getElementById('assistant-file-input');
+  if (input) input.value = '';
+}
+
+function removeAttachment(index) {
+  assistantAttachments.splice(index, 1);
+  renderAttachmentPreview();
+}
+
+function clearAttachments() {
+  assistantAttachments = [];
+  renderAttachmentPreview();
+}
+
+function renderAttachmentPreview() {
+  const container = document.getElementById('attachment-preview');
+  if (!container) return;
+  if (assistantAttachments.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = assistantAttachments.map((att, i) => {
+    if (att.type === 'image_url') {
+      return `<div class="attachment-item">
+        <img src="data:${att.mimeType};base64,${att.data}" alt="${escapeHtml(att.name)}">
+        <span class="attachment-name">${escapeHtml(att.name)}</span>
+        <button class="attachment-remove" onclick="removeAttachment(${i})" title="移除">×</button>
+      </div>`;
+    }
+    return `<div class="attachment-item">
+      <span style="font-size:16px">🔊</span>
+      <span class="attachment-name">${escapeHtml(att.name)}</span>
+      <button class="attachment-remove" onclick="removeAttachment(${i})" title="移除">×</button>
+    </div>`;
+  }).join('');
+}
+
 function setSendBtnState(running) {
   const btn = document.getElementById('assistant-send-btn');
   if (!btn) return;
@@ -1994,7 +2055,8 @@ async function sendAssistantMessage() {
   if (assistantAbortController) return; // 已有请求进行中，防连点
   const input = document.getElementById('assistant-input');
   const text = input.value.trim();
-  if (!text) return;
+  const hasAttachments = assistantAttachments.length > 0;
+  if (!text && !hasAttachments) return;
 
   // 客户端命令拦截（在代理检查之前，/help 等命令不需要代理）
   if (text.startsWith('/')) {
@@ -2012,9 +2074,26 @@ async function sendAssistantMessage() {
 
   if (!assistantProxyId) return;
 
-  addAssistantMessage('user', text);
+  // 构建多模态消息内容
+  let messagePayload = text;
+  if (hasAttachments) {
+    const content = [];
+    if (text) content.push({ type: 'text', text });
+    for (const att of assistantAttachments) {
+      if (att.type === 'image_url') {
+        content.push({ type: 'image_url', image_url: { url: `data:${att.mimeType};base64,${att.data}` } });
+      } else if (att.type === 'input_audio') {
+        const format = att.mimeType.replace(/^audio\//, '').replace(/;.*$/, '') || 'mp3';
+        content.push({ type: 'input_audio', input_audio: { data: att.data, format } });
+      }
+    }
+    messagePayload = content;
+  }
+
+  addAssistantMessage('user', messagePayload);
   input.value = '';
   input.style.height = 'auto';
+  clearAttachments();
 
   const proxy = proxies.find(p => p.id === assistantProxyId);
   if (!proxy) {
@@ -2034,7 +2113,7 @@ async function sendAssistantMessage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        proxyId: proxy.id, conversationId: assistantConversationId, message: text,
+        proxyId: proxy.id, conversationId: assistantConversationId, message: messagePayload,
         ...(providerVal && { providerId: providerVal }),
         ...(modelVal && { model: modelVal }),
         permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
@@ -2267,6 +2346,20 @@ function addAssistantMessage(role, content) {
   } else if (role === 'delegate-card') {
     // content = { createdId, tasks: [{id, objective}] }
     div.innerHTML = renderDelegateCard(content);
+  } else if (role === 'user' && Array.isArray(content)) {
+    // 多模态用户消息
+    let html = '';
+    for (const part of content) {
+      if (part.type === 'text' && part.text) {
+        html += `<div>${escapeHtml(part.text)}</div>`;
+      } else if (part.type === 'image_url' && part.image_url?.url) {
+        html += `<img class="msg-media" src="${escapeHtml(part.image_url.url)}" alt="图片">`;
+      } else if (part.type === 'input_audio' && part.input_audio?.data) {
+        const format = part.input_audio.format || 'mp3';
+        html += `<audio controls src="data:audio/${escapeHtml(format)};base64,${escapeHtml(part.input_audio.data)}"></audio>`;
+      }
+    }
+    div.innerHTML = html;
   } else {
     div.textContent = content;
   }
@@ -2664,7 +2757,6 @@ async function switchConversation(convId) {
     return;
   }
   assistantConversationId = convId;
-  saveAssistantSelection();
   assistantMessages = [];
   const chat = document.getElementById('assistant-chat');
   if (chat) chat.innerHTML = '';
@@ -2938,7 +3030,9 @@ function showModelPicker() {
 }
 
 // 加载代理的候选供应商列表
+let proxyProviderRequestId = 0;
 async function loadProxyProviders(proxyId) {
+  const requestId = ++proxyProviderRequestId;
   // 保存用户当前选择，加载后恢复
   const prevProviderId = assistantProviderId;
   const prevModel = document.getElementById('assistant-model-select')?.value || '';
@@ -2951,6 +3045,8 @@ async function loadProxyProviders(proxyId) {
   try {
     const res = await fetch(`/api/assistant/proxy-providers/${proxyId}`);
     const data = await res.json();
+    // 并发保护：如果期间有更新的请求发起，本次结果作废
+    if (requestId !== proxyProviderRequestId) return;
     proxyProviders = data.providers || [];
     // 优先恢复初始化时保存的选择（页面加载一次性）
     if (savedAssistantProviderId && proxyProviders.find(p => p.id === savedAssistantProviderId)) {
@@ -2971,6 +3067,7 @@ async function loadProxyProviders(proxyId) {
       }
       if (savedAssistantModel) savedAssistantModel = '';
     }
+    saveAssistantSelection();
   } catch (err) {
     console.warn('[assistant] 加载供应商列表失败:', err.message);
   }

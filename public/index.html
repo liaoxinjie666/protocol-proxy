@@ -417,7 +417,10 @@
           </div>
           <div class="assistant-input-area" style="position:relative">
             <div class="skill-autocomplete" id="skill-autocomplete"></div>
+            <div class="attachment-preview" id="attachment-preview"></div>
             <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？ 输入 / 触发技能" rows="1"></textarea>
+            <input type="file" id="assistant-file-input" accept="image/*,audio/*" multiple style="display:none" onchange="handleAssistantFileSelect(this.files)">
+            <button class="btn" onclick="document.getElementById('assistant-file-input').click()" title="上传图片或音频" style="padding:0 10px;font-size:16px">📎</button>
             <button class="btn" onclick="toggleSkillPanel()" title="查看可用技能" style="padding:0 10px;font-size:16px">⚡</button>
             <button class="btn btn-primary" id="assistant-send-btn" onclick="sendAssistantMessage()" disabled>发送</button>
           </div>
