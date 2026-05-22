@@ -1734,6 +1734,22 @@ body {
   line-height: 1.6;
 }
 
+/* ---------- Onboarding Banner ---------- */
+.onboarding-banner {
+  background: var(--accent-subtle);
+  border-bottom: 1px solid var(--accent-border);
+  padding: 10px 24px;
+}
+
+.onboarding-banner-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
 /* ---------- Onboarding ---------- */
 .onboarding-modal-wrap {
   position: relative;

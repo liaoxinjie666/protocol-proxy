@@ -528,11 +528,14 @@ async function init() {
       type: 'function',
       function: {
         name: 'get_recent_requests',
-        description: '获取最近的请求日志，包含状态、延迟、模型、Token 用量等。',
+        description: '获取最近的请求日志，支持按代理、状态、模型过滤。',
         parameters: {
           type: 'object',
           properties: {
             limit: { type: 'number', description: '返回条数，默认 20，最大 100' },
+            proxyId: { type: 'string', description: '按代理 ID 精确筛选' },
+            status: { type: 'string', enum: ['success', 'failure', '429'], description: '按请求状态筛选' },
+            model: { type: 'string', description: '按模型名模糊匹配' },
           },
           required: [],
         },
@@ -1242,6 +1245,28 @@ async function init() {
     {
       type: 'function',
       function: {
+        name: 'search_memory',
+        description: '按关键词搜索记忆条目（一级和二级记忆均搜索），返回匹配的内容片段。',
+        parameters: {
+          type: 'object',
+          properties: {
+            keyword: {
+              type: 'string',
+              description: '搜索关键词',
+            },
+            target: {
+              type: 'string',
+              enum: ['memory', 'user', 'all'],
+              description: "搜索范围：'memory'=经验记忆，'user'=用户画像，'all'=全部（默认）",
+            },
+          },
+          required: ['keyword'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'delegate_task',
         description: '将任务委派给子代理并行执行。子代理拥有独立的对话上下文和受限的工具集，完成后返回结果摘要。适合将大任务拆分为多个独立子任务并行处理。可用权限：full（完全访问）、readonly（只读分析）、writer（读写执行）。',
         parameters: {
@@ -1405,6 +1430,42 @@ async function init() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'list_conversations',
+        description: '列出所有历史会话，包含消息数和最后活动时间。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_conversation',
+        description: '删除指定的会话，此操作不可恢复。',
+        parameters: {
+          type: 'object',
+          properties: {
+            conversationId: { type: 'string', description: '要删除的会话 ID' },
+          },
+          required: ['conversationId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'clear_conversation',
+        description: '清空指定会话的消息历史，保留会话本身。',
+        parameters: {
+          type: 'object',
+          properties: {
+            conversationId: { type: 'string', description: '要清空的会话 ID' },
+          },
+          required: ['conversationId'],
+        },
+      },
+    },
   ];
 
   // ==================== 工具权限分级 ====================
@@ -1426,7 +1487,9 @@ async function init() {
     create_skill: 2, update_skill: 2, delete_skill: 2,
     import_config: 2, rollback_config: 2, reconstruct_config: 2, get_config_diff: 1, update_settings: 2, trigger_key_health_check: 2,
     // 1-2: 记忆系统
-    get_memory: 1, save_memory: 2, edit_memory: 2, read_memory: 1,
+    get_memory: 1, save_memory: 2, edit_memory: 2, read_memory: 1, search_memory: 1,
+    // 1-2: 会话管理
+    list_conversations: 1, delete_conversation: 2, clear_conversation: 2,
     // 2: 委派任务
     delegate_task: 2, stop_task: 2, message_task: 2, update_soul: 2,
     get_exec_policy: 1, test_exec_policy: 1,
@@ -1504,8 +1567,7 @@ async function init() {
     },
 
     get_recent_requests: async (args) => {
-      const limit = Math.min(Math.max(1, parseInt(args.limit) || 20), 100);
-      return { entries: requestLog.getAll(limit) };
+      return { entries: requestLog.getFiltered(args) };
     },
 
     get_system_logs: async (args) => {
@@ -2239,6 +2301,28 @@ async function init() {
       return memoryManager.readMemory(args.target, args.index);
     },
 
+    search_memory: async (args) => {
+      const keyword = (args.keyword || '').trim().toLowerCase();
+      if (!keyword) return { error: '请提供搜索关键词' };
+      const targets = args.target === 'all' || !args.target ? ['memory', 'user'] : [args.target];
+      const results = [];
+      for (const t of targets) {
+        const tier1 = memoryManager.store.loadTier1(t) || '';
+        if (tier1.toLowerCase().includes(keyword)) {
+          results.push({ target: t, tier: 1, content: tier1.slice(0, 500) });
+        }
+        const entries = memoryManager.store.getTier2Entries(t) || [];
+        for (let i = 0; i < entries.length; i++) {
+          const e = entries[i];
+          if ((e.summary && e.summary.toLowerCase().includes(keyword)) ||
+              (e.content && e.content.toLowerCase().includes(keyword))) {
+            results.push({ target: t, tier: 2, index: i, summary: e.summary, content: e.content });
+          }
+        }
+      }
+      return { keyword: args.keyword, matches: results.length, results };
+    },
+
     edit_memory: async (args) => {
       if (args.action === 'replace') {
         return memoryManager.store.replaceTier2(args.target, args.old_text, args.content);
@@ -2384,6 +2468,26 @@ async function init() {
     test_exec_policy: async (args) => {
       const { execPolicy } = require('./lib/exec-policy');
       return execPolicy.check(args.command);
+    },
+
+    list_conversations: async () => {
+      return { conversations: conversationStore.list() };
+    },
+
+    delete_conversation: async (args) => {
+      const conv = conversationStore.get(args.conversationId);
+      if (!conv) return { error: `会话 ${args.conversationId} 不存在` };
+      conversationStore.remove(args.conversationId);
+      return { success: true, message: `会话 ${args.conversationId} 已删除` };
+    },
+
+    clear_conversation: async (args) => {
+      const conv = conversationStore.get(args.conversationId);
+      if (!conv) return { error: `会话 ${args.conversationId} 不存在` };
+      conv.messages = [];
+      conv.compressionSummary = undefined;
+      conversationStore.touch(conv);
+      return { success: true, message: `会话 ${args.conversationId} 已清空` };
     },
   };
 

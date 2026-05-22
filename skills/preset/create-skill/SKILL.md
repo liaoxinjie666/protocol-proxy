@@ -185,7 +185,7 @@ AI 在执行过程中按需读取的文档。
 | `get_proxy` | 获取单个代理详情 |
 | `get_key_health` | 获取密钥健康状态 |
 | `get_usage_stats` | 获取用量统计 |
-| `get_recent_requests` | 获取最近请求日志 |
+| `get_recent_requests` | 获取最近请求日志（支持按代理/状态/模型过滤） |
 | `get_system_logs` | 获取系统日志 |
 | `get_settings` | 获取系统设置 |
 | `get_config_history` | 获取配置版本历史 |
@@ -252,7 +252,9 @@ AI 在执行过程中按需读取的文档。
 |------|------|
 | `get_memory` | 查看所有记忆（含人设） |
 | `save_memory` | 保存记忆条目 |
+| `read_memory` | 读取二级记忆条目详情 |
 | `edit_memory` | 编辑或删除记忆条目 |
+| `search_memory` | 按关键词搜索记忆条目 |
 | `update_soul` | 更新智能体人设（SOUL.md） |
 
 ### 配置管理
@@ -262,6 +264,8 @@ AI 在执行过程中按需读取的文档。
 | `export_config` | 导出系统配置 |
 | `import_config` | 导入配置（合并/覆盖） |
 | `rollback_config` | 回滚到历史配置版本 |
+| `reconstruct_config` | 通过回溯差异链重建指定配置版本 |
+| `get_config_diff` | 比较两个配置版本之间的差异 |
 | `update_settings` | 更新系统设置 |
 | `trigger_key_health_check` | 手动触发密钥健康检查 |
 
@@ -270,9 +274,26 @@ AI 在执行过程中按需读取的文档。
 | 工具 | 用途 |
 |------|------|
 | `delegate_task` | 委派子任务给子代理并行执行 |
+| `list_agents` | 列出所有可用的代理身份 |
 | `list_tasks` | 列出子任务（可按状态筛选） |
 | `get_task` | 获取子任务详情 |
 | `stop_task` | 终止运行中的子任务 |
+| `message_task` | 向已完成或失败的子任务追加消息 |
+
+### 会话管理
+
+| 工具 | 用途 |
+|------|------|
+| `list_conversations` | 列出所有历史会话 |
+| `delete_conversation` | 删除指定会话 |
+| `clear_conversation` | 清空会话消息历史 |
+
+### 执行策略
+
+| 工具 | 用途 |
+|------|------|
+| `get_exec_policy` | 获取当前执行策略概览 |
+| `test_exec_policy` | 测试命令在当前策略下的决策结果 |
 
 ### 第五步：验证技能
 

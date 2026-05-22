@@ -204,6 +204,7 @@ async function loadProxies() {
     const res = await fetch('/api/proxies');
     proxies = await res.json();
     document.getElementById('nav-proxy-count').textContent = proxies.length;
+    toggleOnboardingBanner();
     if (currentPage === 'proxies') renderProxies();
     if (currentPage === 'dashboard') renderDashProxies();
     updateDashStats();
@@ -211,6 +212,11 @@ async function loadProxies() {
   } catch (err) {
     console.error('loadProxies error:', err);
   }
+}
+
+function toggleOnboardingBanner() {
+  const banner = document.getElementById('onboarding-banner');
+  if (banner) banner.style.display = proxies.length === 0 ? '' : 'none';
 }
 
 async function loadProviders() {
