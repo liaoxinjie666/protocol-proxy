@@ -1001,21 +1001,36 @@ async function fetchModelsForProvider(el) {
     showToast('\u8bf7\u5148\u586b\u5199 API \u5730\u5740', true);
     return;
   }
+  if (protocol === 'anthropic') {
+    showToast('Anthropic \u534f\u8bae\u6682\u4e0d\u652f\u6301\u81ea\u52a8\u83b7\u53d6\u6a21\u578b\u5217\u8868\uff0c\u8bf7\u624b\u52a8\u6dfb\u52a0', true);
+    return;
+  }
   const btn = el || document.activeElement;
   if (btn) { btn.disabled = true; btn.textContent = '\u83b7\u53d6\u4e2d...'; }
   try {
-    const key = providerKeys.find(k => k.key.trim())?.key.trim() || '';
-    const payload = { url, protocol, apiKey: key };
+    const payload = { url, protocol };
     const azureDep = document.getElementById('provider-azure-deployment')?.value?.trim();
     if (azureDep) {
       payload.azureDeployment = azureDep;
       payload.azureApiVersion = document.getElementById('provider-azure-version')?.value?.trim() || '2024-02-01';
     }
-    const res = await fetch('/api/providers/available-models', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    let res;
+    if (editingProviderId) {
+      payload.apiKeys = providerKeys.map(k => ({ key: (k.key || '').trim(), alias: k.alias, index: k.index, masked: !!k.masked }));
+      res = await fetch(`/api/providers/${editingProviderId}/available-models`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      const key = providerKeys.find(k => k.key && k.key.trim())?.key.trim() || '';
+      payload.apiKey = key;
+      res = await fetch('/api/providers/available-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const models = data.models || [];
