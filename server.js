@@ -45,6 +45,252 @@ function requireServiceRunning() {
   return pid;
 }
 
+function parseArgs(argv) {
+  const args = { _: [] };
+  for (let i = 3; i < argv.length; i++) {
+    if (argv[i].startsWith('--')) {
+      const key = argv[i].slice(2);
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) {
+        args[key] = next;
+        i++;
+      } else {
+        args[key] = true;
+      }
+    } else {
+      args._.push(argv[i]);
+    }
+  }
+  return args;
+}
+
+function pad(str, len) {
+  const s = String(str);
+  return s.length >= len ? s : s + ' '.repeat(len - s.length);
+}
+
+function formatNum(n) {
+  return Number(n || 0).toLocaleString();
+}
+
+async function testProvider(nameFilter) {
+  const configStore = require('./lib/config-store');
+  let providers = configStore.getProviders();
+  if (providers.length === 0) {
+    console.log('没有已配置的供应商');
+    return;
+  }
+  if (nameFilter) {
+    const q = nameFilter.toLowerCase();
+    providers = providers.filter(p => p.name.toLowerCase().includes(q));
+    if (providers.length === 0) {
+      console.log(`未找到名称包含 "${nameFilter}" 的供应商`);
+      return;
+    }
+  }
+
+  console.log('测试 Provider 连通性...\n');
+  let totalKeys = 0, totalPassed = 0, totalFailed = 0;
+
+  for (const provider of providers) {
+    const keys = (provider.apiKeys || []).filter(k => k.enabled !== false);
+    if (keys.length === 0) {
+      console.log(`[${provider.name}] ${provider.url} (${provider.protocol || 'openai'})`);
+      console.log('  无可用 API Key\n');
+      continue;
+    }
+
+    const protocol = provider.protocol || 'openai';
+    const base = provider.url.replace(/\/$/, '');
+    const hasV1Suffix = base.endsWith('/v1');
+    const isAzure = protocol === 'openai' && !!provider.azureDeployment;
+
+    function buildTestUrl(key) {
+      if (protocol === 'openai') {
+        if (isAzure) {
+          const ver = provider.azureApiVersion || '2024-02-01';
+          return { url: `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`, opts: { headers: { 'api-key': key } } };
+        }
+        return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
+      }
+      if (protocol === 'anthropic') {
+        const testModel = (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
+        return { url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) } };
+      }
+      if (protocol === 'gemini') return { url: `${base}/v1beta/models?key=${key}`, opts: {} };
+      return null;
+    }
+
+    console.log(`[${provider.name}] ${provider.url} (${protocol})`);
+    for (const k of keys) {
+      totalKeys++;
+      const built = buildTestUrl(k.key);
+      if (!built) {
+        console.log(`  - ${k.alias || '***'}  X 不支持的协议: ${protocol}`);
+        totalFailed++;
+        continue;
+      }
+      try {
+        const startedAt = Date.now();
+        const res = await fetch(built.url, { ...built.opts, signal: AbortSignal.timeout(10000) });
+        const latencyMs = Date.now() - startedAt;
+        if (res.ok) {
+          console.log(`  - ${k.alias || '***'}  V ${latencyMs}ms`);
+          totalPassed++;
+        } else {
+          const hint = res.status === 401 || res.status === 403 ? 'Key 无效或无权限' : `HTTP ${res.status}`;
+          console.log(`  - ${k.alias || '***'}  X ${hint} (${latencyMs}ms)`);
+          totalFailed++;
+        }
+      } catch (err) {
+        const msg = err.name === 'TimeoutError' ? '连接超时 (10s)' : `连接失败: ${err.message}`;
+        console.log(`  - ${k.alias || '***'}  X ${msg}`);
+        totalFailed++;
+      }
+    }
+    console.log('');
+  }
+
+  console.log(`测试完成: ${providers.length} 个 provider, ${totalKeys} 个 key, ${totalPassed} 通过, ${totalFailed} 失败`);
+}
+
+async function showLogs(opts) {
+  requireServiceRunning();
+  const port = getAdminPort();
+  const limit = parseInt(opts.limit) || 20;
+
+  if (opts.tail) {
+    console.log(`实时跟踪请求日志 (Ctrl+C 退出)...\n`);
+    try {
+      const res = await fetch(`http://localhost:${port}/api/request-logs?limit=${limit}`);
+      const data = await res.json();
+      if (data.entries && data.entries.length > 0) {
+        printLogEntries(data.entries);
+      }
+    } catch {}
+
+    const WebSocket = require('ws');
+    const ws = new WebSocket(`ws://localhost:${port}`);
+    ws.on('message', (raw) => {
+      try {
+        const entry = JSON.parse(raw);
+        if (entry.id && entry.timestamp) {
+          printLogEntry(entry);
+        }
+      } catch {}
+    });
+    ws.on('error', (err) => {
+      console.error('WebSocket 连接失败:', err.message);
+      process.exit(1);
+    });
+    process.on('SIGINT', () => { ws.close(); process.exit(0); });
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', String(Math.min(limit, 2000)));
+    const res = await fetch(`http://localhost:${port}/api/request-logs?${params}`);
+    const data = await res.json();
+    let entries = data.entries || [];
+
+    if (opts.status) {
+      entries = entries.filter(e => e.status === opts.status);
+    }
+    if (opts.model) {
+      const q = opts.model.toLowerCase();
+      entries = entries.filter(e => (e.model || '').toLowerCase().includes(q));
+    }
+
+    console.log(`请求日志 (最近 ${entries.length} 条, 缓冲区 ${data.total || 0} 条)\n`);
+    if (entries.length === 0) {
+      console.log('暂无请求日志');
+      return;
+    }
+    printLogEntries(entries);
+  } catch (err) {
+    console.error('获取日志失败:', err.message);
+    process.exit(1);
+  }
+}
+
+function formatTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  const MM = String(d.getMonth() + 1).padStart(2, '0');
+  const DD = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${d.getFullYear()}-${MM}-${DD} ${hh}:${mm}:${ss}`;
+}
+
+function printLogEntries(entries) {
+  for (const e of entries) {
+    printLogEntry(e);
+  }
+}
+
+function printLogEntry(e) {
+  const time = formatTime(e.timestamp);
+  const statusIcon = e.status === 'success' ? 'V' : e.status === '429' ? '!' : 'X';
+  const statusText = e.status === 'success' ? '成功' : e.status === '429' ? '限流' : '失败';
+  const model = pad((e.model || '-').slice(0, 20), 20);
+  const latency = e.latencyMs != null ? `${e.latencyMs}ms` : '-';
+  const input = e.promptTokens != null ? String(e.promptTokens) : '-';
+  const output = e.completionTokens != null ? String(e.completionTokens) : '-';
+  const proxy = e.proxyName || '-';
+  console.log(`${time}  ${statusIcon} ${pad(statusText, 4)}  ${model}  ${pad(latency, 8)}  ${pad(input, 7)}  ${pad(output, 7)}  ${proxy}`);
+  if (e.status !== 'success' && e.errorMessage) {
+    console.log(`  错误: ${e.errorMessage}`);
+  }
+}
+
+async function showStats(opts) {
+  requireServiceRunning();
+  const port = getAdminPort();
+  const range = opts.today ? 'hourly' : (opts.range || 'daily');
+
+  try {
+    const params = new URLSearchParams();
+    params.set('range', range);
+    if (opts.proxy) params.set('proxyId', opts.proxy);
+    const res = await fetch(`http://localhost:${port}/api/stats?${params}`);
+    const data = await res.json();
+    const s = data.summary;
+
+    const rangeLabel = { hourly: '小时', daily: '天', monthly: '月', yearly: '年' }[range] || range;
+    console.log(`用量统计 (${rangeLabel})\n`);
+
+    if (!s || s.total === 0) {
+      console.log('暂无统计数据');
+      return;
+    }
+
+    console.log(`总计: ${formatNum(s.total)} tokens (输入 ${formatNum(s.prompt)} / 输出 ${formatNum(s.completion)}) | ${formatNum(s.requests)} 次请求`);
+    if (s.hasEstimated) {
+      console.log(`  (含 ${formatNum(s.estimatedCount)} 次估算用量)`);
+    }
+
+    if (data.byProvider && data.byProvider.length > 0) {
+      console.log(`\n按 Provider:`);
+      for (const p of data.byProvider) {
+        console.log(`  ${pad(p.name, 20)} ${pad(formatNum(p.total) + ' tokens', 18)} ${formatNum(p.requests)} 次请求`);
+      }
+    }
+
+    if (data.byModel && data.byModel.length > 0) {
+      console.log(`\n按模型:`);
+      for (const m of data.byModel) {
+        console.log(`  ${pad(m.provider + '/' + m.model, 30)} ${pad(formatNum(m.total) + ' tokens', 18)} ${formatNum(m.requests)} 次请求`);
+      }
+    }
+  } catch (err) {
+    console.error('获取统计失败:', err.message);
+    process.exit(1);
+  }
+}
+
 function showHelp() {
   console.log(`
 protocol-proxy - OpenAI / Anthropic 协议转换透明代理
@@ -58,6 +304,18 @@ protocol-proxy - OpenAI / Anthropic 协议转换透明代理
   protocol-proxy -v, --version 显示版本号
   protocol-proxy autostart       查看/设置开机自启动 (status|on|off)
   protocol-proxy update       更新到最新版本
+
+诊断命令:
+  protocol-proxy test [name]  测试供应商连通性（可按名称过滤）
+  protocol-proxy logs         查看最近请求日志
+    --tail                    实时跟踪新请求
+    --status <status>         按状态过滤 (success|failure|429)
+    --model <name>            按模型名过滤
+    --limit <n>               显示条数 (默认 20)
+  protocol-proxy stats        查看用量统计
+    --range <range>           统计粒度 (hourly|daily|monthly|yearly)
+    --today                   只显示今天（按小时）
+    --proxy <id>              按代理过滤
 `);
 }
 
@@ -4905,6 +5163,30 @@ switch (cmd) {
     } else {
       console.log('用法: protocol-proxy autostart [status|on|off]');
     }
+    break;
+  }
+  case 'test': {
+    const testArgs = parseArgs(process.argv);
+    testProvider(testArgs._[0]).catch(err => {
+      console.error('测试失败:', err.message);
+      process.exit(1);
+    });
+    break;
+  }
+  case 'logs': {
+    const logArgs = parseArgs(process.argv);
+    showLogs(logArgs).catch(err => {
+      console.error('获取日志失败:', err.message);
+      process.exit(1);
+    });
+    break;
+  }
+  case 'stats': {
+    const statsArgs = parseArgs(process.argv);
+    showStats(statsArgs).catch(err => {
+      console.error('获取统计失败:', err.message);
+      process.exit(1);
+    });
     break;
   }
   case '--daemon':
