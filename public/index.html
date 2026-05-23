@@ -626,7 +626,7 @@
           </div>
           <div class="panel">
             <div class="panel-header">
-              <h3>外观</h3>
+              <h3>外观 & 系统</h3>
             </div>
             <div class="settings-body">
               <div class="setting-item">
@@ -643,6 +643,16 @@
                   <option value="ocean">海洋青</option>
                   <option value="sakura">樱花粉</option>
                 </select>
+              </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">开机自启动</div>
+                  <div class="setting-desc">登录 Windows 时自动启动服务（仅当前用户）</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="settings-autostart" onchange="toggleAutostart(this.checked)">
+                  <span class="toggle-slider"></span>
+                </label>
               </div>
             </div>
           </div>

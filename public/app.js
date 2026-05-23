@@ -135,6 +135,13 @@ function cycleTheme() {
     if (settings.assistantConversationId) {
       assistantConversationId = settings.assistantConversationId;
     }
+    // 加载开机自启状态
+    try {
+      const asRes = await fetch('/api/autostart');
+      const asInfo = await asRes.json();
+      const asCb = document.getElementById('settings-autostart');
+      if (asCb && asInfo.supported !== false) asCb.checked = !!asInfo.enabled;
+    } catch {}
   } catch {
     applyTheme(localStorage.getItem('theme') || 'dark');
   }
@@ -5337,3 +5344,23 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 init();
+// ---------- Autostart Toggle ----------
+function toggleAutostart(enabled) {
+  fetch('/api/autostart', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  }).then(r => r.json()).then(data => {
+    if (!data.success && data.error) {
+      showToast('设置失败: ' + data.error, true);
+      const cb = document.getElementById('settings-autostart');
+      if (cb) cb.checked = !enabled;
+    } else {
+      showSaveToast();
+    }
+  }).catch(() => {
+    showToast('设置失败', true);
+    const cb = document.getElementById('settings-autostart');
+    if (cb) cb.checked = !enabled;
+  });
+}

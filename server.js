@@ -32,6 +32,19 @@ function isProcessAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+function getAdminPort() {
+  return process.env.ADMIN_PORT || 3000;
+}
+
+function requireServiceRunning() {
+  const pid = readPid();
+  if (!pid || !isProcessAlive(pid)) {
+    console.log('服务未运行，请先执行: protocol-proxy start');
+    process.exit(1);
+  }
+  return pid;
+}
+
 function showHelp() {
   console.log(`
 protocol-proxy - OpenAI / Anthropic 协议转换透明代理
@@ -43,6 +56,7 @@ protocol-proxy - OpenAI / Anthropic 协议转换透明代理
   protocol-proxy status       查看运行状态
   protocol-proxy help         显示帮助信息
   protocol-proxy -v, --version 显示版本号
+  protocol-proxy autostart       查看/设置开机自启动 (status|on|off)
   protocol-proxy update       更新到最新版本
 `);
 }
@@ -3387,6 +3401,32 @@ async function init() {
   });
 
   // 设置
+
+  // ==================== 开机自启 API ====================
+
+  const autostart = require('./lib/autostart');
+
+  app.get('/api/autostart', (req, res) => {
+    try {
+      res.json(autostart.isEnabled());
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/autostart', (req, res) => {
+    try {
+      const { enabled } = req.body;
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: '需要 enabled (boolean)' });
+      }
+      const result = enabled ? autostart.enable() : autostart.disable();
+      if (!result.success) return res.status(500).json(result);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
   app.get('/api/settings', (req, res) => {
     res.json(configStore.getSettings());
   });
@@ -4848,6 +4888,25 @@ switch (cmd) {
   case 'start':
     startDaemon();
     break;
+  case 'autostart': {
+    const autostart = require('./lib/autostart');
+    const sub = process.argv[3];
+    if (!sub || sub === 'status') {
+      const info = autostart.isEnabled();
+      if (!info.supported) { console.log(info.message); break; }
+      console.log(info.enabled ? '开机自启: 已开启' : '开机自启: 已关闭');
+      if (info.command) console.log('  注册命令: ' + info.command);
+    } else if (sub === 'on') {
+      const r = autostart.enable();
+      console.log(r.success ? '已设置开机自启' : '设置失败: ' + r.error);
+    } else if (sub === 'off') {
+      const r = autostart.disable();
+      console.log(r.success ? '已取消开机自启' : '取消失败: ' + r.error);
+    } else {
+      console.log('用法: protocol-proxy autostart [status|on|off]');
+    }
+    break;
+  }
   case '--daemon':
     init();
     break;
