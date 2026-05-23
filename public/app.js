@@ -2318,177 +2318,11 @@ async function sendAssistantMessage() {
       const err = await res.text().catch(() => 'Unknown error');
       removeAssistantMessage(thinkingId);
       addAssistantMessage('assistant', `请求失败: HTTP ${res.status}\n\n${err}`);
+      attachRetryButtonToLast();
       return;
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullContent = '';
-    let currentEvent = '';
-    let msgId = null;
-    let thinkingRemoved = false;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        if (trimmed.startsWith('event: ')) {
-          currentEvent = trimmed.slice(7);
-          continue;
-        }
-
-        if (!trimmed.startsWith('data: ')) continue;
-        let data;
-        try { data = JSON.parse(trimmed.slice(6)); } catch { continue; }
-
-        switch (currentEvent) {
-          case 'content': {
-            if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
-            if (!msgId) {
-              msgId = addAssistantMessage('assistant', '');
-
-            }
-            fullContent += data.delta;
-            updateAssistantMessage(msgId, fullContent);
-            break;
-          }
-
-          case 'tool_calls': {
-            if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
-            const calls = data.calls || [];
-            fullContent = '';
-            const callHtml = calls.map(tc => {
-              const argsStr = Object.keys(tc.arguments || {}).length > 0
-                ? `<span class="tool-call-args">${escapeHtml(JSON.stringify(tc.arguments))}</span>`
-                : '';
-              return `<div class="tool-call-item"><span class="tool-call-name">${escapeHtml(tc.name)}</span>${argsStr}</div>`;
-            }).join('');
-            addAssistantMessage('tool-calls', callHtml);
-            break;
-          }
-
-          case 'tool_approval': {
-            if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
-            const argsDisplay = data.arguments ? JSON.stringify(data.arguments, null, 2) : '{}';
-            const ep = data.execPolicy;
-            let actionsHtml;
-            if (ep && ep.decision === 'prompt') {
-              // 执行策略三级审批
-              const policyInfo = ep.matchedRule
-                ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">匹配规则: <code>${escapeHtml(ep.matchedRule)}</code> · ${escapeHtml(ep.description || '')}</div>`
-                : `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${escapeHtml(ep.description || '未知命令')}</div>`;
-              actionsHtml = `${policyInfo}
-                <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 本次批准</button>
-                <button class="btn btn-approve" style="background:var(--accent);color:#fff" onclick="approveTool('${escapeHtml(data.id)}', 'session', this)">🔒 本次会话批准</button>
-                <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
-                <span class="approval-status"></span>`;
-            } else {
-              actionsHtml = `
-                <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 批准执行</button>
-                <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
-                <span class="approval-status"></span>`;
-            }
-            const approvalHtml = `<div class="tool-approval-card" id="approval-${escapeHtml(data.id)}">
-              <div class="tool-approval-header">${ep ? '🛡️ 命令需要确认' : '⚠️ 需要确认执行'}</div>
-              <div class="tool-approval-name">${escapeHtml(data.name)}</div>
-              <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
-              <div class="tool-approval-actions">${actionsHtml}</div>
-            </div>`;
-            addAssistantMessage('tool-approval', approvalHtml);
-            break;
-          }
-
-          case 'tool_result': {
-            const resultStr = JSON.stringify(data.result, null, 2);
-            addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error });
-            break;
-          }
-
-          case 'done': {
-            if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
-            if (msgId) {
-              const msgObj = assistantMessages.find(m => m.id === msgId);
-              if (msgObj) {
-                // 将 reasoning_content 包装为 <think> 标签以便统一渲染
-                if (data.reasoning_content && !fullContent.includes('<think>')) {
-                  fullContent = `<think>${data.reasoning_content}</think>` + fullContent;
-                }
-                msgObj.content = fullContent;
-                updateAssistantMessage(msgId, fullContent);
-                // 绑定 assistant 消息的后端 ID
-                if (data.assistantMessageId) {
-                  msgObj.backendMsgId = data.assistantMessageId;
-                  attachDeleteButton(msgId, data.assistantMessageId);
-                }
-              }
-            }
-            break;
-          }
-
-          case 'error': {
-            if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
-            addAssistantMessage('assistant', `错误: ${data.message}`);
-            break;
-          }
-
-          case 'context': {
-            contextTokens = data.tokens;
-            contextMaxTokens = data.maxTokens || contextMaxTokens;
-            contextPercent = data.percent;
-            contextMessages = data.messages;
-            updateContextBar();
-            break;
-          }
-
-          case 'compressed': {
-            if (data.summary) applyCompression(data);
-            break;
-          }
-
-          case 'compressing': {
-            break;
-          }
-
-          case 'delegate': {
-            handleDelegateEvent(data);
-            break;
-          }
-
-          case 'conversation': {
-            assistantConversationId = data.id;
-            saveAssistantSelection();
-            loadConversations();
-            // 绑定 user 消息的后端 ID
-            if (data.userMessageId) {
-              const lastUserMsg = [...assistantMessages].reverse().find(m => m.role === 'user');
-              if (lastUserMsg) {
-                lastUserMsg.backendMsgId = data.userMessageId;
-                attachDeleteButton(lastUserMsg.id, data.userMessageId);
-              }
-            }
-            break;
-          }
-        }
-      }
-    }
-
-    // 流结束时确保 thinking 点被移除
-    if (!thinkingRemoved) removeAssistantMessage(thinkingId);
-
-    // 流结束但没有收到 done 事件时，确保最终内容被保存
-    if (msgId && fullContent) {
-      const msgObj = assistantMessages.find(m => m.id === msgId);
-      if (msgObj && !msgObj.content) msgObj.content = fullContent;
-    }
+    await processAssistantSSE(res, thinkingId);
 
   } catch (err) {
     removeAssistantMessage(thinkingId);
@@ -2497,10 +2331,175 @@ async function sendAssistantMessage() {
     } else {
       addAssistantMessage('assistant', `请求出错: ${err.message}`);
     }
+    attachRetryButtonToLast();
   } finally {
     if (assistantAbortController === myController) assistantAbortController = null;
     setSendBtnState(false);
   }
+}
+
+async function processAssistantSSE(response, thinkingId) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullContent = '';
+  let currentEvent = '';
+  let msgId = null;
+  let thinkingRemoved = false;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      if (trimmed.startsWith('event: ')) {
+        currentEvent = trimmed.slice(7);
+        continue;
+      }
+
+      if (!trimmed.startsWith('data: ')) continue;
+      let data;
+      try { data = JSON.parse(trimmed.slice(6)); } catch { continue; }
+
+      switch (currentEvent) {
+        case 'content': {
+          if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
+          if (!msgId) {
+            msgId = addAssistantMessage('assistant', '');
+          }
+          fullContent += data.delta;
+          updateAssistantMessage(msgId, fullContent);
+          break;
+        }
+
+        case 'tool_calls': {
+          if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
+          const calls = data.calls || [];
+          fullContent = '';
+          const callHtml = calls.map(tc => {
+            const argsStr = Object.keys(tc.arguments || {}).length > 0
+              ? `<span class="tool-call-args">${escapeHtml(JSON.stringify(tc.arguments))}</span>`
+              : '';
+            return `<div class="tool-call-item"><span class="tool-call-name">${escapeHtml(tc.name)}</span>${argsStr}</div>`;
+          }).join('');
+          addAssistantMessage('tool-calls', callHtml);
+          break;
+        }
+
+        case 'tool_approval': {
+          if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
+          const argsDisplay = data.arguments ? JSON.stringify(data.arguments, null, 2) : '{}';
+          const ep = data.execPolicy;
+          let actionsHtml;
+          if (ep && ep.decision === 'prompt') {
+            const policyInfo = ep.matchedRule
+              ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">匹配规则: <code>${escapeHtml(ep.matchedRule)}</code> · ${escapeHtml(ep.description || '')}</div>`
+              : `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${escapeHtml(ep.description || '未知命令')}</div>`;
+            actionsHtml = `${policyInfo}
+              <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 本次批准</button>
+              <button class="btn btn-approve" style="background:var(--accent);color:#fff" onclick="approveTool('${escapeHtml(data.id)}', 'session', this)">🔒 本次会话批准</button>
+              <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
+              <span class="approval-status"></span>`;
+          } else {
+            actionsHtml = `
+              <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 批准执行</button>
+              <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
+              <span class="approval-status"></span>`;
+          }
+          const approvalHtml = `<div class="tool-approval-card" id="approval-${escapeHtml(data.id)}">
+            <div class="tool-approval-header">${ep ? '🛡️ 命令需要确认' : '⚠️ 需要确认执行'}</div>
+            <div class="tool-approval-name">${escapeHtml(data.name)}</div>
+            <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
+            <div class="tool-approval-actions">${actionsHtml}</div>
+          </div>`;
+          addAssistantMessage('tool-approval', approvalHtml);
+          break;
+        }
+
+        case 'tool_result': {
+          const resultStr = JSON.stringify(data.result, null, 2);
+          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error });
+          break;
+        }
+
+        case 'done': {
+          if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
+          if (msgId) {
+            const msgObj = assistantMessages.find(m => m.id === msgId);
+            if (msgObj) {
+              if (data.reasoning_content && !fullContent.includes('<think>')) {
+                fullContent = `<think>${data.reasoning_content}</think>` + fullContent;
+              }
+              msgObj.content = fullContent;
+              updateAssistantMessage(msgId, fullContent);
+              if (data.assistantMessageId) {
+                msgObj.backendMsgId = data.assistantMessageId;
+                attachDeleteButton(msgId, data.assistantMessageId);
+              }
+            }
+          }
+          break;
+        }
+
+        case 'error': {
+          if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
+          addAssistantMessage('assistant', `错误: ${data.message}`);
+          break;
+        }
+
+        case 'context': {
+          contextTokens = data.tokens;
+          contextMaxTokens = data.maxTokens || contextMaxTokens;
+          contextPercent = data.percent;
+          contextMessages = data.messages;
+          updateContextBar();
+          break;
+        }
+
+        case 'compressed': {
+          if (data.summary) applyCompression(data);
+          break;
+        }
+
+        case 'compressing': {
+          break;
+        }
+
+        case 'delegate': {
+          handleDelegateEvent(data);
+          break;
+        }
+
+        case 'conversation': {
+          assistantConversationId = data.id;
+          saveAssistantSelection();
+          loadConversations();
+          if (data.userMessageId) {
+            const lastUserMsg = [...assistantMessages].reverse().find(m => m.role === 'user');
+            if (lastUserMsg) {
+              lastUserMsg.backendMsgId = data.userMessageId;
+              attachDeleteButton(lastUserMsg.id, data.userMessageId);
+            }
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  if (!thinkingRemoved) removeAssistantMessage(thinkingId);
+  if (msgId && fullContent) {
+    const msgObj = assistantMessages.find(m => m.id === msgId);
+    if (msgObj && !msgObj.content) msgObj.content = fullContent;
+  }
+  attachRetryButtonToLast();
 }
 
 function addAssistantMessage(role, content, backendMsgId = null) {
@@ -2664,6 +2663,105 @@ async function deleteMessagePair(backendMsgId) {
       if (parent) parent.insertBefore(el, ref);
     }
     showToast('删除失败: ' + err.message, true);
+  }
+}
+
+function attachRetryButtonToLast() {
+  document.querySelectorAll('.msg-retry-btn').forEach(b => b.remove());
+  // 只在最后一条 user 消息上添加重试按钮
+  for (let i = assistantMessages.length - 1; i >= 0; i--) {
+    const m = assistantMessages[i];
+    if (m.role === 'user') {
+      const div = document.getElementById(m.id);
+      if (div) {
+        const btn = document.createElement('button');
+        btn.className = 'msg-retry-btn';
+        btn.title = '重试';
+        btn.innerHTML = '&#x21bb;';
+        btn.onclick = retryLastMessage;
+        div.appendChild(btn);
+      }
+      return;
+    }
+  }
+}
+
+async function retryLastMessage() {
+  if (assistantAbortController) return;
+
+  let lastUserIdx = -1;
+  for (let i = assistantMessages.length - 1; i >= 0; i--) {
+    if (assistantMessages[i].role === 'user') { lastUserIdx = i; break; }
+  }
+  if (lastUserIdx === -1) return;
+
+  const userContent = assistantMessages[lastUserIdx].content;
+
+  // 移除 user 消息之后的所有消息（DOM + 数组）
+  const toRemove = assistantMessages.slice(lastUserIdx + 1);
+  for (const m of toRemove) {
+    const div = document.getElementById(m.id);
+    if (div) div.remove();
+  }
+  assistantMessages.splice(lastUserIdx + 1);
+
+  // 清理服务端历史
+  const lastWithBackend = [...toRemove].reverse().find(m => m.backendMsgId);
+  if (assistantConversationId) {
+    const deleteId = lastWithBackend?.backendMsgId || assistantMessages[lastUserIdx]?.backendMsgId;
+    if (deleteId) {
+      try {
+        await fetch(`/api/assistant/conversations/${assistantConversationId}/messages/${deleteId}`, { method: 'DELETE' });
+      } catch {}
+    }
+  }
+
+  document.querySelectorAll('.msg-retry-btn').forEach(b => b.remove());
+
+  // 重新发送请求
+  const proxy = proxies.find(p => p.id === assistantProxyId);
+  if (!proxy) return;
+
+  const thinkingId = addAssistantMessage('thinking', '');
+  const myController = new AbortController();
+  assistantAbortController = myController;
+  setSendBtnState(true);
+
+  try {
+    const providerVal = document.getElementById('assistant-provider-select')?.value || '';
+    const modelVal = document.getElementById('assistant-model-select')?.value || '';
+    const res = await fetch('/api/assistant/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proxyId: proxy.id, conversationId: assistantConversationId, message: userContent,
+        ...(providerVal && { providerId: providerVal }),
+        ...(modelVal && { model: modelVal }),
+        permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
+      }),
+      signal: assistantAbortController.signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => 'Unknown error');
+      removeAssistantMessage(thinkingId);
+      addAssistantMessage('assistant', `请求失败: HTTP ${res.status}\n\n${err}`);
+      attachRetryButtonToLast();
+      return;
+    }
+
+    await processAssistantSSE(res, thinkingId);
+  } catch (err) {
+    removeAssistantMessage(thinkingId);
+    if (err.name === 'AbortError') {
+      addAssistantMessage('assistant', '已取消');
+    } else {
+      addAssistantMessage('assistant', `请求出错: ${err.message}`);
+    }
+    attachRetryButtonToLast();
+  } finally {
+    if (assistantAbortController === myController) assistantAbortController = null;
+    setSendBtnState(false);
   }
 }
 
@@ -3083,6 +3181,7 @@ async function switchConversation(convId) {
         addAssistantMessage('assistant', m.content || '', m.id);
       }
     }
+    attachRetryButtonToLast();
   } catch (err) {
     showToast('加载会话失败: ' + err.message, true);
   }

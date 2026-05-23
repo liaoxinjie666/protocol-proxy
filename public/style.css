@@ -2308,6 +2308,37 @@ body {
   color: var(--text-secondary);
 }
 
+.msg-retry-btn {
+  position: absolute;
+  top: 50%;
+  left: -28px;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.15);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.assistant-message.user:hover .msg-retry-btn {
+  opacity: 1;
+}
+
+.msg-retry-btn:hover {
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-secondary);
+}
+
 .assistant-message.assistant pre {
   background: var(--bg-base);
   padding: 12px;
