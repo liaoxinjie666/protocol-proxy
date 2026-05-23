@@ -2424,6 +2424,11 @@ async function sendAssistantMessage() {
                 }
                 msgObj.content = fullContent;
                 updateAssistantMessage(msgId, fullContent);
+                // 绑定 assistant 消息的后端 ID
+                if (data.assistantMessageId) {
+                  msgObj.backendMsgId = data.assistantMessageId;
+                  attachDeleteButton(msgId, data.assistantMessageId);
+                }
               }
             }
             break;
@@ -2462,6 +2467,14 @@ async function sendAssistantMessage() {
             assistantConversationId = data.id;
             saveAssistantSelection();
             loadConversations();
+            // 绑定 user 消息的后端 ID
+            if (data.userMessageId) {
+              const lastUserMsg = [...assistantMessages].reverse().find(m => m.role === 'user');
+              if (lastUserMsg) {
+                lastUserMsg.backendMsgId = data.userMessageId;
+                attachDeleteButton(lastUserMsg.id, data.userMessageId);
+              }
+            }
             break;
           }
         }
@@ -2490,9 +2503,9 @@ async function sendAssistantMessage() {
   }
 }
 
-function addAssistantMessage(role, content) {
+function addAssistantMessage(role, content, backendMsgId = null) {
   const id = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-  assistantMessages.push({ id, role, content });
+  assistantMessages.push({ id, role, content, backendMsgId });
 
   const chat = document.getElementById('assistant-chat');
   if (!chat) return id;
@@ -2557,6 +2570,16 @@ function addAssistantMessage(role, content) {
     div.textContent = content;
   }
 
+  // 为 user / assistant 消息添加删除按钮
+  if ((role === 'user' || role === 'assistant') && backendMsgId) {
+    const delBtn = document.createElement('button');
+    delBtn.className = 'msg-delete-btn';
+    delBtn.title = '删除该问答对';
+    delBtn.innerHTML = '&times;';
+    delBtn.onclick = () => deleteMessagePair(backendMsgId);
+    div.appendChild(delBtn);
+  }
+
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
   return id;
@@ -2575,6 +2598,73 @@ function removeAssistantMessage(id) {
   const div = document.getElementById(id);
   if (div) div.remove();
   assistantMessages = assistantMessages.filter(m => m.id !== id);
+}
+
+function attachDeleteButton(msgId, backendMsgId) {
+  const div = document.getElementById(msgId);
+  if (!div || !backendMsgId) return;
+  if (div.querySelector('.msg-delete-btn')) return;
+  const delBtn = document.createElement('button');
+  delBtn.className = 'msg-delete-btn';
+  delBtn.title = '删除该问答对';
+  delBtn.innerHTML = '&times;';
+  delBtn.onclick = () => deleteMessagePair(backendMsgId);
+  div.appendChild(delBtn);
+}
+
+async function deleteMessagePair(backendMsgId) {
+  if (!backendMsgId) {
+    showToast('消息尚未就绪，请稍后再试', true);
+    return;
+  }
+  if (!assistantConversationId) {
+    showToast('会话尚未就绪，请稍后再试', true);
+    return;
+  }
+  const ok = await showConfirm('确定删除该问答对吗？');
+  if (!ok) return;
+
+  const clickIdx = assistantMessages.findIndex(m => m.backendMsgId === backendMsgId);
+  if (clickIdx === -1) {
+    showToast('消息未找到', true);
+    return;
+  }
+
+  let startIdx = clickIdx;
+  while (startIdx > 0 && assistantMessages[startIdx].role !== 'user') startIdx--;
+  if (assistantMessages[startIdx].role !== 'user') startIdx = clickIdx;
+
+  let endIdx = startIdx;
+  while (endIdx + 1 < assistantMessages.length && assistantMessages[endIdx + 1].role !== 'user') endIdx++;
+
+  // 保存被删除的消息快照，用于失败回滚
+  const removedMessages = assistantMessages.slice(startIdx, endIdx + 1);
+  const removedDivs = [];
+  for (let i = startIdx; i <= endIdx; i++) {
+    const div = document.getElementById(assistantMessages[i].id);
+    if (div) {
+      removedDivs.push({ el: div, ref: div.nextSibling, parent: div.parentNode });
+      div.remove();
+    }
+  }
+
+  assistantMessages.splice(startIdx, endIdx - startIdx + 1);
+
+  try {
+    const res = await fetch(`/api/assistant/conversations/${assistantConversationId}/messages/${backendMsgId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      throw new Error((await res.json().catch(() => ({}))).error || '删除失败');
+    }
+    // 删除成功，刷新侧边栏会话列表
+    loadConversations();
+  } catch (err) {
+    // 回滚：恢复本地消息和 DOM
+    assistantMessages.splice(startIdx, 0, ...removedMessages);
+    for (const { el, ref, parent } of removedDivs) {
+      if (parent) parent.insertBefore(el, ref);
+    }
+    showToast('删除失败: ' + err.message, true);
+  }
 }
 
 // 配置 marked.js（GFM 支持表格/任务列表，breaks 匹配单换行转 <br）
@@ -2988,9 +3078,9 @@ async function switchConversation(convId) {
     // 渲染历史消息
     for (const m of (data.messages || [])) {
       if (m.role === 'user') {
-        addAssistantMessage('user', m.content);
+        addAssistantMessage('user', m.content, m.id);
       } else if (m.role === 'assistant') {
-        addAssistantMessage('assistant', m.content || '');
+        addAssistantMessage('assistant', m.content || '', m.id);
       }
     }
   } catch (err) {

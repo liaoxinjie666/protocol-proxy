@@ -162,6 +162,10 @@ async function init() {
 
   // ==================== 辅助函数 ====================
 
+  function generateMsgId() {
+    return 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
   function resolveTarget(proxy) {
     const primaryProvider = configStore.getProviderById(proxy.providerId);
     if (!primaryProvider) return null;
@@ -3628,10 +3632,42 @@ async function init() {
   app.get('/api/assistant/conversations/:id/messages', (req, res) => {
     const conv = conversationStore.get(req.params.id);
     if (!conv) return res.status(404).json({ error: '会话不存在' });
+    // 兼容旧数据：给没有 id 的消息补上 id
+    let needSave = false;
+    for (const m of (conv.messages || [])) {
+      if (!m.id) {
+        m.id = generateMsgId();
+        needSave = true;
+      }
+    }
+    if (needSave) conversationStore.saveImmediate(conv);
     // 返回消息历史（过滤掉 system 消息，前端不需要显示）
     const messages = (conv.messages || []).filter(m => m.role !== 'system');
     const compressionSummary = conv.compressionSummary || null;
     res.json({ id: conv.id, proxyId: conv.proxyId, messages, compressionSummary });
+  });
+
+  // 删除会话中的某条消息（成对删除：删除 user 时连带删除后续 assistant/tool，删除 assistant 时连带删除前面 user 及后续 tool）
+  app.delete('/api/assistant/conversations/:id/messages/:msgId', (req, res) => {
+    const conv = conversationStore.get(req.params.id);
+    if (!conv) return res.status(404).json({ error: '会话不存在' });
+    const msgId = req.params.msgId;
+    const idx = (conv.messages || []).findIndex(m => m.id === msgId);
+    if (idx === -1) return res.status(404).json({ error: '消息不存在' });
+
+    // 向前扫描找到该问答对的起始 user 消息
+    let startIdx = idx;
+    while (startIdx > 0 && conv.messages[startIdx].role !== 'user') startIdx--;
+    if (conv.messages[startIdx].role !== 'user') startIdx = idx; // 兜底：如果前面没有 user，从当前位置开始
+
+    // 向后扫描找到该问答对的结束位置（下一条 user 之前或数组末尾）
+    let endIdx = startIdx;
+    while (endIdx + 1 < conv.messages.length && conv.messages[endIdx + 1].role !== 'user') endIdx++;
+
+    const removedCount = endIdx - startIdx + 1;
+    conv.messages.splice(startIdx, removedCount);
+    conversationStore.saveImmediate(conv);
+    res.json({ success: true, removedCount });
   });
 
   // 获取代理的候选供应商及其模型列表（供前端级联选择）
@@ -4038,10 +4074,12 @@ async function init() {
     // 追加用户消息到对话历史（压缩请求不追加空消息）
     // 检测 /skillname 前缀触发技能
     let activeSkill = null;
+    let lastUserMsgId = null;
     if (!compress && message) {
       // 多模态消息（数组格式）直接保存，不支持技能触发前缀检测
       if (Array.isArray(message)) {
-        conv.messages.push({ role: 'user', content: message });
+        lastUserMsgId = generateMsgId();
+        conv.messages.push({ id: lastUserMsgId, role: 'user', content: message });
       } else {
         const slashMatch = message.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
         if (slashMatch) {
@@ -4051,12 +4089,15 @@ async function init() {
             activeSkill = skill;
             // 将用户消息中的参数部分保留，无参数时生成触发消息
             const args = slashMatch[2]?.trim();
-            conv.messages.push({ role: 'user', content: args || `请执行 ${skillName} 技能` });
+            lastUserMsgId = generateMsgId();
+            conv.messages.push({ id: lastUserMsgId, role: 'user', content: args || `请执行 ${skillName} 技能` });
           } else {
-            conv.messages.push({ role: 'user', content: message });
+            lastUserMsgId = generateMsgId();
+            conv.messages.push({ id: lastUserMsgId, role: 'user', content: message });
           }
         } else {
-          conv.messages.push({ role: 'user', content: message });
+          lastUserMsgId = generateMsgId();
+          conv.messages.push({ id: lastUserMsgId, role: 'user', content: message });
         }
       }
       conversationStore.touch(conv);
@@ -4129,7 +4170,7 @@ async function init() {
     }
 
     // 发送 conversationId 给前端
-    safeSSE('conversation', { id: convId });
+    safeSSE('conversation', { id: convId, ...(lastUserMsgId && { userMessageId: lastUserMsgId }) });
 
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
@@ -4272,16 +4313,18 @@ async function init() {
         const toolCalls = Object.values(toolCallAccumulator).filter(tc => tc.id && tc.name);
         logger.log(`[assistant] round ${round} done — ${fullContent.length} chars, ${toolCalls.length} tool calls`);
 
+        let lastAssistantMsgId = null;
         if (toolCalls.length === 0) {
           // 最终回复，追加到对话历史（跳过空响应避免 null content 污染历史）
           if (fullContent || reasoningContent) {
-            const assistantMsg = { role: 'assistant', content: fullContent || null };
+            lastAssistantMsgId = generateMsgId();
+            const assistantMsg = { id: lastAssistantMsgId, role: 'assistant', content: fullContent || null };
             if (reasoningContent) assistantMsg.reasoning_content = reasoningContent;
             conv.messages.push(assistantMsg);
           }
           currentTokens = estimateConversationTokens(buildMessages());
           sendContext();
-          safeSSE('done', { reasoning_content: reasoningContent || undefined });
+          safeSSE('done', { reasoning_content: reasoningContent || undefined, assistantMessageId: lastAssistantMsgId });
           loopCompleted = true;
           break;
         }
@@ -4300,7 +4343,9 @@ async function init() {
         });
 
         // 追加 assistant(tool_calls) 到对话历史
+        lastAssistantMsgId = generateMsgId();
         const assistantMsg = {
+          id: lastAssistantMsgId,
           role: 'assistant',
           content: fullContent || null,
           tool_calls: toolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments } })),
@@ -4401,7 +4446,7 @@ async function init() {
           const resultStr = JSON.stringify(result);
           logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}`);
           safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError });
-          conv.messages.push({ role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
+          conv.messages.push({ id: generateMsgId(), role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
         }
 
         // token 检查 + 压缩
@@ -4464,10 +4509,11 @@ async function init() {
                 } catch {}
               }
             }
-            const summaryMsg = { role: 'assistant', content: summaryContent || null };
+            const summaryMsgId = generateMsgId();
+            const summaryMsg = { id: summaryMsgId, role: 'assistant', content: summaryContent || null };
             if (summaryReasoning) summaryMsg.reasoning_content = summaryReasoning;
             conv.messages.push(summaryMsg);
-            safeSSE('done', { reasoning_content: summaryReasoning || undefined });
+            safeSSE('done', { reasoning_content: summaryReasoning || undefined, assistantMessageId: summaryMsgId });
           } else {
             safeSSE('done', {});
           }
