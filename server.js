@@ -32,19 +32,6 @@ function isProcessAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-function getAdminPort() {
-  return process.env.ADMIN_PORT || 3000;
-}
-
-function requireServiceRunning() {
-  const pid = readPid();
-  if (!pid || !isProcessAlive(pid)) {
-    console.log('服务未运行，请先执行: protocol-proxy start');
-    process.exit(1);
-  }
-  return pid;
-}
-
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 3; i < argv.length; i++) {
@@ -62,6 +49,19 @@ function parseArgs(argv) {
     }
   }
   return args;
+}
+
+function getAdminPort() {
+  return process.env.ADMIN_PORT || 3000;
+}
+
+function requireServiceRunning() {
+  const pid = readPid();
+  if (!pid || !isProcessAlive(pid)) {
+    console.log('服务未运行，请先执行: protocol-proxy start');
+    process.exit(1);
+  }
+  return pid;
 }
 
 function pad(str, len) {
@@ -5146,25 +5146,6 @@ switch (cmd) {
   case 'start':
     startDaemon();
     break;
-  case 'autostart': {
-    const autostart = require('./lib/autostart');
-    const sub = process.argv[3];
-    if (!sub || sub === 'status') {
-      const info = autostart.isEnabled();
-      if (!info.supported) { console.log(info.message); break; }
-      console.log(info.enabled ? '开机自启: 已开启' : '开机自启: 已关闭');
-      if (info.command) console.log('  注册命令: ' + info.command);
-    } else if (sub === 'on') {
-      const r = autostart.enable();
-      console.log(r.success ? '已设置开机自启' : '设置失败: ' + r.error);
-    } else if (sub === 'off') {
-      const r = autostart.disable();
-      console.log(r.success ? '已取消开机自启' : '取消失败: ' + r.error);
-    } else {
-      console.log('用法: protocol-proxy autostart [status|on|off]');
-    }
-    break;
-  }
   case 'test': {
     const testArgs = parseArgs(process.argv);
     testProvider(testArgs._[0]).catch(err => {
@@ -5195,6 +5176,25 @@ switch (cmd) {
   case undefined:
     init();
     break;
+  case 'autostart': {
+    const autostart = require('./lib/autostart');
+    const sub = process.argv[3];
+    if (!sub || sub === 'status') {
+      const info = autostart.isEnabled();
+      if (!info.supported) { console.log(info.message); break; }
+      console.log(info.enabled ? '开机自启: 已开启' : '开机自启: 已关闭');
+      if (info.command) console.log('  注册命令: ' + info.command);
+    } else if (sub === 'on') {
+      const r = autostart.enable();
+      console.log(r.success ? '已设置开机自启' : '设置失败: ' + r.error);
+    } else if (sub === 'off') {
+      const r = autostart.disable();
+      console.log(r.success ? '已取消开机自启' : '取消失败: ' + r.error);
+    } else {
+      console.log('用法: protocol-proxy autostart [status|on|off]');
+    }
+    break;
+  }
   default:
     console.error(`未知命令: ${cmd}`);
     showHelp();
