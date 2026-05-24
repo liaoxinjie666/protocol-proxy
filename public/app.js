@@ -2177,6 +2177,236 @@ function populateAssistantProxySelect() {
   }
 }
 
+// ==================== 语音录音 ====================
+
+let voiceMediaRecorder = null;
+let voiceAudioChunks = [];
+let isVoiceRecording = false;
+let voiceAnalyser = null;
+let voiceAnimFrameId = null;
+let voicePendingSend = false; // 停止录音后自动发送
+
+const MIC_SVG_IDLE = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" style="pointer-events:none">
+  <path d="M10 1a3.5 3.5 0 0 0-3.5 3.5v4a3.5 3.5 0 0 0 7 0v-4A3.5 3.5 0 0 0 10 1z" fill="#888"/>
+  <path d="M10 1a3.5 3.5 0 0 0-3.5 3.5v4a3.5 3.5 0 0 0 7 0v-4A3.5 3.5 0 0 0 10 1z" stroke="#888" stroke-width="1.2" fill="none"/>
+  <path d="M5 9.5a5 5 0 0 0 10 0" stroke="#888" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <line x1="10" y1="14.5" x2="10" y2="17" stroke="#888" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="7.5" y1="17" x2="12.5" y2="17" stroke="#888" stroke-width="1.2" stroke-linecap="round"/>
+</svg>`;
+
+function buildMicSvg(fillRatio) {
+  const y = 20 - fillRatio * 20;
+  return `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" style="pointer-events:none">
+    <defs><clipPath id="mic-fill-clip"><rect x="0" y="${y}" width="20" height="20"/></clipPath></defs>
+    <path d="M10 1a3.5 3.5 0 0 0-3.5 3.5v4a3.5 3.5 0 0 0 7 0v-4A3.5 3.5 0 0 0 10 1z" fill="#ef4444" clip-path="url(#mic-fill-clip)"/>
+    <path d="M10 1a3.5 3.5 0 0 0-3.5 3.5v4a3.5 3.5 0 0 0 7 0v-4A3.5 3.5 0 0 0 10 1z" stroke="#ef4444" stroke-width="1.2" fill="none"/>
+    <path d="M5 9.5a5 5 0 0 0 10 0" stroke="#ef4444" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    <line x1="10" y1="14.5" x2="10" y2="17" stroke="#ef4444" stroke-width="1.2" stroke-linecap="round"/>
+    <line x1="7.5" y1="17" x2="12.5" y2="17" stroke="#ef4444" stroke-width="1.2" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function toggleVoiceRecording() {
+  if (isVoiceRecording) {
+    stopVoiceRecording();
+  } else {
+    startVoiceRecording();
+  }
+}
+
+async function startVoiceRecording() {
+  // 检查当前供应商是否支持音频输入
+  const proxy = proxies.find(p => p.id === assistantProxyId);
+  const selectedProvider = assistantProviderId
+    ? proxyProviders.find(p => p.id === assistantProviderId)
+    : proxy?.providerId
+      ? proxyProviders.find(p => p.id === proxy.providerId)
+      : null;
+  const protocol = selectedProvider?.protocol || '';
+  if (protocol === 'anthropic') {
+    const cancelBtn = document.getElementById('confirm-cancel');
+    cancelBtn.style.display = 'none';
+    showConfirm(`${selectedProvider?.name || '当前供应商'} 使用 Anthropic 协议，不支持语音输入。<br>请切换到 OpenAI 协议的供应商，或改用文字输入。`, '知道了').then(() => { cancelBtn.style.display = ''; });
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : '';
+
+    // 创建音量分析器
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    voiceAnalyser = audioCtx.createAnalyser();
+    voiceAnalyser.fftSize = 256;
+    source.connect(voiceAnalyser);
+
+    voiceMediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    voiceAudioChunks = [];
+
+    voiceMediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) voiceAudioChunks.push(e.data);
+    };
+
+    voiceMediaRecorder.onstop = async () => {
+      const blob = new Blob(voiceAudioChunks, { type: mimeType || 'audio/webm' });
+      await convertBlobToWavAttachment(blob);
+      stream.getTracks().forEach(t => t.stop());
+      audioCtx.close();
+      if (voicePendingSend) { voicePendingSend = false; sendAssistantMessage(); }
+    };
+
+    voiceMediaRecorder.start();
+    isVoiceRecording = true;
+    updateMicButtonState();
+    startVolumeAnimation();
+  } catch (err) {
+    showToast('无法访问麦克风: ' + err.message, true);
+  }
+}
+
+function stopVoiceRecording(autoSend) {
+  if (!isVoiceRecording) return;
+  voicePendingSend = !!autoSend;
+  isVoiceRecording = false;
+  stopVolumeAnimation();
+  updateMicButtonState();
+  try {
+    if (voiceMediaRecorder && voiceMediaRecorder.state !== 'inactive') {
+      voiceMediaRecorder.stop();
+    } else {
+      // MediaRecorder 已停止，直接检查是否需要自动发送
+      if (voicePendingSend) { voicePendingSend = false; sendAssistantMessage(); }
+    }
+  } catch (err) {
+    console.error('停止录音失败:', err);
+    showToast('停止录音失败: ' + err.message, true);
+  }
+}
+
+function startVolumeAnimation() {
+  const btn = document.getElementById('mic-btn');
+  if (!btn || !voiceAnalyser) return;
+  const dataArray = new Uint8Array(voiceAnalyser.frequencyBinCount);
+  let smoothVol = 0;
+
+  function animate() {
+    if (!isVoiceRecording) return;
+    voiceAnalyser.getByteFrequencyData(dataArray);
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+    const avg = sum / dataArray.length;
+    smoothVol += (avg - smoothVol) * 0.3;
+    const ratio = Math.min(smoothVol / 100, 1);
+    btn.innerHTML = buildMicSvg(ratio);
+    voiceAnimFrameId = requestAnimationFrame(animate);
+  }
+  voiceAnimFrameId = requestAnimationFrame(animate);
+}
+
+function stopVolumeAnimation() {
+  if (voiceAnimFrameId) {
+    cancelAnimationFrame(voiceAnimFrameId);
+    voiceAnimFrameId = null;
+  }
+  voiceAnalyser = null;
+  const btn = document.getElementById('mic-btn');
+  if (btn) btn.innerHTML = MIC_SVG_IDLE;
+}
+
+function updateMicButtonState() {
+  const btn = document.getElementById('mic-btn');
+  if (!btn) return;
+  if (isVoiceRecording) {
+    btn.innerHTML = buildMicSvg(0);
+    btn.title = '点击停止录音';
+  } else {
+    btn.innerHTML = MIC_SVG_IDLE;
+    btn.title = '语音输入';
+  }
+}
+updateMicButtonState();
+
+async function convertBlobToWavAttachment(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  const wavBuffer = audioBufferToWav(audioBuffer);
+  const base64 = arrayBufferToBase64(wavBuffer);
+
+  const timeStr = new Date().toLocaleTimeString('zh-CN', { hour12: false }).replace(/:/g, '-');
+  assistantAttachments.push({
+    type: 'input_audio',
+    mimeType: 'audio/wav',
+    name: `录音_${timeStr}.wav`,
+    data: base64,
+  });
+  renderAttachmentPreview();
+  await audioContext.close();
+}
+
+function audioBufferToWav(buffer) {
+  const numOfChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1;
+  const bitDepth = 16;
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numOfChannels * bytesPerSample;
+  const dataLength = buffer.length * numOfChannels * bytesPerSample;
+  const arrayBuffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(arrayBuffer);
+
+  function writeString(offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  const channels = [];
+  for (let i = 0; i < numOfChannels; i++) {
+    channels.push(buffer.getChannelData(i));
+  }
+
+  let index = 0;
+  const offset = 44;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let c = 0; c < numOfChannels; c++) {
+      const sample = Math.max(-1, Math.min(1, channels[c][i]));
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset + index, intSample, true);
+      index += 2;
+    }
+  }
+
+  return arrayBuffer;
+}
+
+function arrayBufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 // ==================== 多模态附件处理 ====================
 
 function handleAssistantFileSelect(files) {
@@ -2253,6 +2483,7 @@ function setSendBtnState(running) {
 
 async function sendAssistantMessage() {
   if (assistantAbortController) return; // 已有请求进行中，防连点
+  if (isVoiceRecording) { stopVoiceRecording(true); return; } // 录音中：停止后自动发送
   const input = document.getElementById('assistant-input');
   const text = input.value.trim();
   const hasAttachments = assistantAttachments.length > 0;

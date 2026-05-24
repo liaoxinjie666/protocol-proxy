@@ -4511,21 +4511,17 @@ async function init() {
     _chatProxy.defaultModel = model || proxy.defaultModel;
     if (providerId) proxyHeaders['x-pp-provider-id'] = providerId;
     if (model) proxyHeaders['x-pp-model'] = model;
-    // 若供应商不在代理候选池中，传递完整供应商配置供代理动态构建临时候选
+    // 手动指定了供应商时，传递完整配置供代理直接路由（不依赖池子）
     if (providerId) {
-      const target = resolveTarget(proxy);
-      const inPool = target?.providerPool?.some(c => c.providerId === providerId);
-      if (!inPool) {
-        const provider = configStore.getProviderById(providerId);
-        if (provider) {
-          proxyHeaders['x-pp-provider-url'] = provider.url;
-          proxyHeaders['x-pp-provider-protocol'] = provider.protocol;
-          if (provider.adapter) proxyHeaders['x-pp-provider-adapter'] = provider.adapter;
-          if (Array.isArray(provider.capabilities)) proxyHeaders['x-pp-provider-capabilities'] = JSON.stringify(provider.capabilities);
-          const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false);
-          if (enabledKeys.length > 0) proxyHeaders['x-pp-provider-keys'] = JSON.stringify(enabledKeys);
-          proxyHeaders['x-pp-provider-name'] = provider.name;
-        }
+      const provider = configStore.getProviderById(providerId);
+      if (provider) {
+        proxyHeaders['x-pp-provider-url'] = provider.url;
+        proxyHeaders['x-pp-provider-protocol'] = provider.protocol;
+        if (provider.adapter) proxyHeaders['x-pp-provider-adapter'] = provider.adapter;
+        if (Array.isArray(provider.capabilities)) proxyHeaders['x-pp-provider-capabilities'] = JSON.stringify(provider.capabilities);
+        const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false);
+        if (enabledKeys.length > 0) proxyHeaders['x-pp-provider-keys'] = JSON.stringify(enabledKeys);
+        proxyHeaders['x-pp-provider-name'] = encodeURIComponent(provider.name);
       }
     }
 
@@ -4540,6 +4536,19 @@ async function init() {
     _chatProxy.safeSSE = safeSSE;
     const MAX_CONTEXT = Math.max(10000, parseInt(settings.maxContext) || 200000);
     const MAX_TOOL_ROUNDS = Math.max(1, Math.min(100, parseInt(settings.maxRounds) || 10));
+
+    // 音频输入协议兼容性检查
+    if (Array.isArray(message) && message.some(b => b.type === 'input_audio')) {
+      const targetProvider = providerId
+        ? configStore.getProviderById(providerId)
+        : configStore.getProviderById(proxy.providerId);
+      if (targetProvider?.protocol === 'anthropic') {
+        safeSSE('error', { message: `当前供应商「${targetProvider.name}」使用 Anthropic 协议，不支持音频输入。请切换到 OpenAI 协议的供应商，或改用文字输入。` });
+        safeSSE('done', {});
+        res.end();
+        return;
+      }
+    }
 
     // 手动压缩请求
     if (compress) {
