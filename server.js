@@ -114,7 +114,7 @@ async function testProvider(nameFilter) {
         return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
       }
       if (protocol === 'anthropic') {
-        const testModel = (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
+        const _fm = provider.models?.[0]; const testModel = (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
         return { url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) } };
       }
       if (protocol === 'gemini') return { url: `${base}/v1beta/models?key=${key}`, opts: {} };
@@ -496,6 +496,33 @@ async function init() {
       providerPool: pool,
       defaultModel: proxy.defaultModel,
     };
+  }
+
+  function resolveModelContext(effectiveModel, proxy, settings, overrideProviderId) {
+    if (effectiveModel) {
+      // 优先查找用户在助手面板手动指定的供应商
+      if (overrideProviderId) {
+        const p = configStore.getProviderById(overrideProviderId);
+        if (p) {
+          const m = (p.models || []).find(m => m.name === effectiveModel);
+          if (m && m.contextLength > 0) return m.contextLength;
+        }
+      }
+      if (proxy) {
+        const provider = configStore.getProviderById(proxy.providerId);
+        if (provider) {
+          const m = (provider.models || []).find(m => m.name === effectiveModel);
+          if (m && m.contextLength > 0) return m.contextLength;
+        }
+        for (const entry of (proxy.providerPool || [])) {
+          const p = configStore.getProviderById(entry.providerId);
+          if (!p) continue;
+          const m = (p.models || []).find(m => m.name === effectiveModel);
+          if (m && m.contextLength > 0) return m.contextLength;
+        }
+      }
+    }
+    return Math.max(10000, parseInt(settings.maxContext) || 200000);
   }
 
   function normalizeProviderPoolInput(pool) {
@@ -2197,7 +2224,7 @@ async function init() {
           return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
         }
         if (protocol === 'anthropic') {
-          const testModel = (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
+          const _fm = provider.models?.[0]; const testModel = (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
           return { url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) } };
         }
         if (protocol === 'gemini') return { url: `${base}/v1beta/models?key=${key}`, opts: {} };
@@ -2918,7 +2945,7 @@ async function init() {
             fetchOpts = { headers: { 'Authorization': `Bearer ${k.key}` } };
           }
         } else if (protocol === 'anthropic') {
-          const testModel = (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
+          const _fm = provider.models?.[0]; const testModel = (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
           testUrl = hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`;
           fetchOpts = {
             method: 'POST',
@@ -3084,7 +3111,7 @@ async function init() {
         };
       }
       if (protocol === 'anthropic') {
-        const testModel = req.body.model || (provider.models && provider.models[0]) || 'claude-3-haiku-20240307';
+        const _fm = provider.models?.[0]; const testModel = req.body.model || (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
         return {
           url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`,
           opts: {
@@ -3150,7 +3177,7 @@ async function init() {
         return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
       }
       if (protocol === 'anthropic') {
-        const testModel = (Array.isArray(models) && models[0]) || 'claude-3-haiku-20240307';
+        const _fm = Array.isArray(models) ? models[0] : null; const testModel = (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
         return {
           url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`,
           opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) },
@@ -3357,9 +3384,15 @@ async function init() {
       const data = await fetchRes.json().catch(() => null);
       let models = [];
       if (Array.isArray(data?.data)) {
-        models = data.data.map(m => m.id || m.name).filter(Boolean).sort();
+        models = data.data.map(m => ({
+          name: m.id || m.name || '',
+          contextLength: m.context_length || 0,
+        })).filter(m => m.name).sort((a, b) => a.name.localeCompare(b.name));
       } else if (Array.isArray(data?.models)) {
-        models = data.models.map(m => (m.name || m.id)?.replace('models/', '')).filter(Boolean).sort();
+        models = data.models.map(m => ({
+          name: (m.name || m.id || '').replace('models/', ''),
+          contextLength: m.inputTokenLimit || 0,
+        })).filter(m => m.name).sort((a, b) => a.name.localeCompare(b.name));
       }
       res.json({ models });
     } catch (err) {
@@ -3429,10 +3462,16 @@ async function init() {
       let models = [];
       if (Array.isArray(data?.data)) {
         // OpenAI 格式（含第三方 Anthropic 兼容供应商）
-        models = data.data.map(m => m.id || m.name).filter(Boolean).sort();
+        models = data.data.map(m => ({
+          name: m.id || m.name || '',
+          contextLength: m.context_length || 0,
+        })).filter(m => m.name).sort((a, b) => a.name.localeCompare(b.name));
       } else if (Array.isArray(data?.models)) {
         // Gemini 格式
-        models = data.models.map(m => (m.name || m.id)?.replace('models/', '')).filter(Boolean).sort();
+        models = data.models.map(m => ({
+          name: (m.name || m.id || '').replace('models/', ''),
+          contextLength: m.inputTokenLimit || 0,
+        })).filter(m => m.name).sort((a, b) => a.name.localeCompare(b.name));
       }
 
       res.json({ models });
@@ -4534,7 +4573,8 @@ async function init() {
       try { sendSSE(res, event, data); } catch {}
     }
     _chatProxy.safeSSE = safeSSE;
-    const MAX_CONTEXT = Math.max(10000, parseInt(settings.maxContext) || 200000);
+    const effectiveModel = model || proxy.defaultModel;
+    const MAX_CONTEXT = resolveModelContext(effectiveModel, proxy, settings, providerId);
     const MAX_TOOL_ROUNDS = Math.max(1, Math.min(100, parseInt(settings.maxRounds) || 10));
 
     // 音频输入协议兼容性检查

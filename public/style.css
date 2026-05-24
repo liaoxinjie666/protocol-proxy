@@ -1055,6 +1055,37 @@ body {
   color: var(--text-secondary);
 }
 
+.model-context-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.model-context-table th {
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border-default);
+}
+.model-context-table td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-default);
+}
+.model-context-table input {
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+.model-context-table input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
 .empty-cell {
   text-align: center;
   color: var(--text-faint);

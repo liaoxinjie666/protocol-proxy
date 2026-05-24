@@ -595,7 +595,7 @@ function updateProxyModelSelect(providerId, selectedModel) {
   const provider = providers.find(p => p.id === providerId);
   const models = provider?.models || [];
   select.innerHTML = '<option value="">\u4f7f\u7528\u8bf7\u6c42\u6a21\u578b</option>' +
-    models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+    models.map(m => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)}</option>`).join('');
   if (selectedModel) select.value = selectedModel;
 }
 
@@ -616,7 +616,7 @@ function renderPoolEditor() {
         </select>
         <select class="pool-item-select" onchange="updatePoolModel(${i}, this.value)">
           <option value="">\u9ed8\u8ba4\u6a21\u578b</option>
-          ${models.map(m => `<option value="${escapeHtml(m)}" ${m === item.model ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('')}
+          ${models.map(m => `<option value="${escapeHtml(m.name)}" ${m.name === item.model ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
         </select>
         <input type="number" min="1" value="${item.weight || 1}" onchange="updatePoolWeight(${i}, this.value)" style="width:50px" title="\u6743\u91cd">
         <button type="button" class="pool-item-remove" onclick="removePoolItem(${i})">&times;</button>
@@ -744,7 +744,7 @@ function renderProviders() {
         </div>
         <div class="provider-card-url">${escapeHtml(p.url)}</div>
         <div class="provider-card-models">
-          ${(p.models || []).slice(0, 6).map(m => `<span class="provider-card-model">${escapeHtml(m)}</span>`).join('')}
+          ${(p.models || []).slice(0, 6).map(m => `<span class="provider-card-model">${escapeHtml(m.name)}${m.contextLength ? ` (${formatTokens(m.contextLength)})` : ''}</span>`).join('')}
           ${(p.models || []).length > 6 ? `<span class="provider-card-model">+${p.models.length - 6}</span>` : ''}
         </div>
         <div class="provider-card-keys">${(p.apiKeys || []).length} \u4e2a API Key</div>
@@ -811,19 +811,60 @@ function closeProviderModal() {
 function renderModelTags() {
   const list = document.getElementById('provider-models-list');
   list.innerHTML = providerModelTags.map((tag, i) => `
-    <span class="tag">${escapeHtml(tag)}<button type="button" class="tag-remove" onclick="removeModelTag(${i})">&times;</button></span>
+    <span class="tag">${escapeHtml(tag.name)}<button type="button" class="tag-remove" onclick="removeModelTag(${i})">&times;</button></span>
   `).join('');
+  renderModelContextTable();
 }
 
 function handleModelTagInput(e) {
   if (e.key === 'Enter') {
     e.preventDefault();
     const val = e.target.value.trim();
-    if (val && !providerModelTags.includes(val)) {
-      providerModelTags.push(val);
+    if (val && !providerModelTags.some(m => m.name === val)) {
+      providerModelTags.push({ name: val, contextLength: 0 });
       renderModelTags();
       e.target.value = '';
     }
+  }
+}
+
+function renderModelContextTable() {
+  const wrapper = document.getElementById('model-context-table');
+  const tbody = document.getElementById('model-context-tbody');
+  if (!wrapper || !tbody) return;
+  if (providerModelTags.length === 0) { wrapper.style.display = 'none'; return; }
+  wrapper.style.display = '';
+  tbody.innerHTML = providerModelTags.map((m, i) => {
+    const unit = m._unit || 'k';
+    const divisor = unit === 'm' ? 1000000 : 1000;
+    return `<tr>
+      <td>${escapeHtml(m.name)}</td>
+      <td style="display:flex;align-items:center;gap:4px"><input type="number" min="0" step="any" value="${m.contextLength ? m.contextLength / divisor : ''}" placeholder="跟随系统设置"
+          onchange="updateModelContext(${i}, this.value)" style="width:90px"><select onchange="updateModelContextUnit(${i}, this.value)" style="font-size:12px;padding:2px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary);width:40px"><option value="k"${unit === 'k' ? ' selected' : ''}>k</option><option value="m"${unit === 'm' ? ' selected' : ''}>m</option></select></td>
+    </tr>`;
+  }).join('');
+}
+
+function updateModelContextUnit(index, unit) {
+  const m = providerModelTags[index];
+  if (!m) return;
+  const oldUnit = m._unit || 'k';
+  if (unit === oldUnit) return;
+  const oldDivisor = oldUnit === 'm' ? 1000000 : 1000;
+  const newMultiplier = unit === 'm' ? 1000000 : 1000;
+  const row = document.getElementById('model-context-tbody')?.rows[index];
+  const input = row?.querySelector('input');
+  const displayVal = input ? parseFloat(input.value) || 0 : (m.contextLength / oldDivisor);
+  m.contextLength = Math.round(displayVal * newMultiplier);
+  m._unit = unit;
+  renderModelContextTable();
+}
+
+function updateModelContext(index, value) {
+  if (providerModelTags[index]) {
+    const unit = providerModelTags[index]._unit || 'k';
+    const multiplier = unit === 'm' ? 1000000 : 1000;
+    providerModelTags[index].contextLength = Math.max(0, Math.round((parseFloat(value) || 0) * multiplier));
   }
 }
 
@@ -1041,8 +1082,8 @@ async function fetchModelsForProvider(el) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const models = data.models || [];
-    const existing = new Set(providerModelTags);
-    const newModels = models.filter(m => !existing.has(m));
+    const existing = new Set(providerModelTags.map(m => m.name));
+    const newModels = models.filter(m => !existing.has(m.name));
     providerModelTags.push(...newModels);
     renderModelTags();
     showToast(`\u5df2\u5bfc\u5165 ${newModels.length} \u4e2a\u6a21\u578b`);
@@ -1863,8 +1904,8 @@ function escapeHtml(text) {
 
 function formatTokens(n) {
   if (!n || n === 0) return '0';
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'm';
+  if (n >= 1000) return (n / 1000).toFixed(0) + 'k';
   return n.toLocaleString();
 }
 
@@ -1934,7 +1975,8 @@ async function onboardingFetchModels() {
     });
     const data = await res.json();
     if (data.models && data.models.length > 0) {
-      document.getElementById('onboarding-model').value = data.models[0];
+      const first = data.models[0];
+      document.getElementById('onboarding-model').value = typeof first === 'string' ? first : first.name;
       showOnboardingStatus(`已获取 ${data.models.length} 个模型`, false);
     } else {
       showOnboardingStatus(data.message || '未获取到模型列表，请手动输入', true);
@@ -3710,7 +3752,7 @@ function populateModelSelect() {
   const provider = proxyProviders.find(p => p.id === assistantProviderId);
   const models = provider?.models || [];
   select.innerHTML = '<option value="">自动（跟随代理）</option>' +
-    models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+    models.map(m => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)}</option>`).join('');
 }
 
 // eslint-disable-next-line no-unused-vars

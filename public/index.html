@@ -1047,6 +1047,13 @@
             </div>
             <button type="button" class="btn btn-sm" onclick="fetchModelsForProvider(this)" style="margin-top:8px">自动获取模型列表</button>
           </div>
+          <div class="form-group" id="model-context-table" style="display:none">
+            <label>模型上下文长度</label>
+            <table class="model-context-table">
+              <thead><tr><th>模型</th><th>上下文长度</th></tr></thead>
+              <tbody id="model-context-tbody"></tbody>
+            </table>
+          </div>
           <div class="form-group">
             <label>API Keys</label>
             <div id="provider-keys-list"></div>
