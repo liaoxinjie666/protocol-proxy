@@ -1,4 +1,5 @@
 dist/
+.openchrome/
 node_modules/
 *.log
 stderr.log
