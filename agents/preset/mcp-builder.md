@@ -227,6 +227,38 @@ async def get_readme() -> str:
 - 可流式 HTTP 用于可扩展云部署与无状态请求处理
 - 根据部署上下文和延迟要求选择正确传输
 
+#### 第三方 MCP 服务器传输模式切换
+
+部分第三方 MCP 服务器（如 `open-websearch`）支持通过环境变量切换传输模式：
+
+| MODE 值 | 行为 | 适用场景 |
+|---------|------|---------|
+| `stdio` | 仅启动 STDIO 传输 | MCP 客户端集成（Claude Desktop、Protocol Proxy 等） |
+| `http` | 仅启动 HTTP REST 服务 | 脚本、浏览器、不支持 MCP 的系统直接调用 |
+| `both` | 同时启动 STDIO + HTTP | 单实例同时服务 MCP 客户端和 HTTP 客户端 |
+
+配置示例（Protocol Proxy 预设格式）：
+```json
+{
+  "name": "open-websearch",
+  "command": "npx",
+  "args": ["-y", "open-websearch"],
+  "env": { "MODE": "stdio", "PLAYWRIGHT_HEADLESS": "true" }
+}
+```
+
+如需同时使用 HTTP API：
+```json
+{
+  "env": { "MODE": "both", "PORT": "55556", "PLAYWRIGHT_HEADLESS": "true" }
+}
+```
+
+**注意事项**：
+- `MODE=both` 时 HTTP 端口冲突会导致**整个进程崩溃**（包括 STDIO 传输），这是该 MCP 服务器的设计缺陷——HTTP 失败不应拖垮 STDIO
+- 通过 MCP 客户端集成时，建议始终使用 `MODE=stdio`，需要 HTTP API 则另起独立进程
+- 残留的僵尸进程可能占用端口，导致重启后仍连接失败，需手动清理
+
 ### 认证和安全模式
 - 用户作用域访问第三方 API 的 OAuth 2.0 流程
 - API 密钥轮换和每个工具的范围权限

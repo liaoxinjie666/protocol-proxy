@@ -3416,7 +3416,10 @@ async function switchConversation(convId) {
       if (m.role === 'user') {
         addAssistantMessage('user', m.content, m.id);
       } else if (m.role === 'assistant') {
-        addAssistantMessage('assistant', m.content || '', m.id);
+        // 跳过内容为空的 assistant 消息（通常是 tool_calls 占位，避免显示空白聊天框）
+        if (m.content && String(m.content).trim()) {
+          addAssistantMessage('assistant', m.content, m.id);
+        }
       }
     }
     attachRetryButtonToLast();

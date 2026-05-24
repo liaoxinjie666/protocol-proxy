@@ -13,10 +13,10 @@
   },
   {
     "name": "open-websearch",
-    "description": "网页搜索和内容抓取，支持搜索引擎和文章提取",
+    "description": "网页搜索和内容抓取，支持多引擎搜索（Bing/Baidu/DuckDuckGo等）和文章提取，无需API Key。注意：默认MODE=both会同时启动HTTP服务器，端口冲突会导致整个进程崩溃（包括STDIO），建议保持MODE=stdio",
     "command": "npx",
     "args": ["-y", "open-websearch"],
-    "env": { "PORT": "55555" }
+    "env": { "MODE": "stdio", "PLAYWRIGHT_HEADLESS": "true" }
   },
   {
     "name": "filesystem",
