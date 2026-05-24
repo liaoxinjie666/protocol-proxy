@@ -3166,12 +3166,12 @@ async function init() {
       try {
         const started = Date.now();
         const fetchRes = await fetch(built.url, { ...built.opts, signal: AbortSignal.timeout(15000) });
-        const latency = Date.now() - started;
+        const latencyMs = Date.now() - started;
         if (!fetchRes.ok) {
           const hint = fetchRes.status === 401 || fetchRes.status === 403 ? 'API Key 无效或无权限' : `HTTP ${fetchRes.status}`;
-          return { ok: false, alias: k.alias || '', message: hint, latency };
+          return { ok: false, alias: k.alias || '', message: hint, latencyMs };
         }
-        return { ok: true, alias: k.alias || '', latency };
+        return { ok: true, alias: k.alias || '', latencyMs };
       } catch (err) {
         return { ok: false, alias: k.alias || '', message: err.name === 'TimeoutError' ? '连接超时' : err.message };
       }

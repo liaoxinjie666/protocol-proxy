@@ -1138,7 +1138,7 @@ function showTestResult(ok, summary, results) {
     <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-subtle);font-size:13px">
       <span style="color:${r.ok ? 'var(--success)' : 'var(--error)'};font-weight:600">${r.ok ? '\u2713' : '\u2717'}</span>
       <span style="flex:1">${escapeHtml(r.alias || '\u672a\u547d\u540d')}</span>
-      ${r.latency ? `<span style="color:var(--text-muted);font-family:var(--font-mono);font-size:12px">${r.latency}ms</span>` : ''}
+      ${r.latencyMs ? `<span style="color:var(--text-muted);font-family:var(--font-mono);font-size:12px">${r.latencyMs}ms</span>` : ''}
       ${r.message ? `<span style="color:var(--error);font-size:12px">${escapeHtml(r.message)}</span>` : ''}
     </div>
   `).join('');
@@ -1341,7 +1341,7 @@ function renderRequestLogs() {
   // Update summary
   const total = filtered.length;
   const success = filtered.filter(r => r.status === 'success').length;
-  const avgLatency = total > 0 ? Math.round(filtered.reduce((a, r) => a + (r.latency || 0), 0) / total) : 0;
+  const avgLatency = total > 0 ? Math.round(filtered.reduce((a, r) => a + (r.latencyMs || 0), 0) / total) : 0;
   const summary = document.getElementById('rq-summary');
   if (summary) {
     summary.innerHTML = `
@@ -1431,7 +1431,7 @@ function renderRequestLogRow(r, compact) {
       <tr>
         <td>${time}</td>
         <td>${escapeHtml(r.proxyName || r.proxyId || '-')}</td>
-        <td><code>${escapeHtml(r.protocol || '-')}</code></td>
+        <td><code>${escapeHtml(r.inboundProtocol || '-')}</code></td>
         <td><code>${escapeHtml(r.model || '-')}</code></td>
         <td>${status}</td>
         <td class="num">${latency}</td>
@@ -1443,7 +1443,7 @@ function renderRequestLogRow(r, compact) {
     <tr class="clickable" data-entry-id="${escapeHtml(r.id || '')}">
       <td>${time}</td>
       <td>${escapeHtml(r.proxyName || r.proxyId || '-')}</td>
-      <td><code>${escapeHtml(r.protocol || '-')}</code></td>
+      <td><code>${escapeHtml(r.inboundProtocol || '-')}</code></td>
       <td><code>${escapeHtml(r.model || '-')}</code></td>
       <td>${status}</td>
       <td class="num">${tokens}</td>
