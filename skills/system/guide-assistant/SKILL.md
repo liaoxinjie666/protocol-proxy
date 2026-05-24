@@ -163,28 +163,7 @@ trigger: 用户要求分析日志、查找错误、排查问题趋势
 
 AI 会自动在技能执行过程中调用对应的 MCP 工具。
 
-### 免费 MCP 服务器推荐
-
-以下 MCP 服务器无需 API Key，可直接使用：
-
-| MCP 服务 | 包名 | 用途 | 配置要点 |
-|----------|------|------|----------|
-| **Filesystem** | `@modelcontextprotocol/server-filesystem` | 本地文件读写、搜索 | 需指定目录参数，如 `C:/项目` |
-| **Memory** | `@modelcontextprotocol/server-memory` | 知识图谱存储 | 实体关系管理，对话记忆 |
-| **Chrome DevTools** | `chrome-devtools-mcp` | 浏览器自动化 | 29个工具，页面操作、截图 |
-| **Context7** | `@upstash/context7-mcp` | 代码库文档搜索 | 语义搜索项目文档 |
-| **Sequential Thinking** | `@modelcontextprotocol/server-sequential-thinking` | 思维链推理 | 复杂问题分析 |
-| **Open WebSearch** | `open-websearch` | 网页搜索 | 需设置 `PORT=55555` |
-| **Stagehand** | `stagehand-mcp` | 浏览器自动化 | 页面导航、操作、截图 |
-| **A2ASearch** | `a2asearch-mcp` | MCP 生态搜索 | 发现更多 MCP 工具 |
-| **OpenChrome** | `openchrome-mcp` | Chrome CDP 控制 | 浏览器自动化和调试 |
-| **Pretext PDF** | `pretext-pdf-mcp` | PDF 生成 | Markdown 转 PDF |
-
-**配置提示**：
-- 大多数官方 MCP 只支持 stdio 模式，不支持 HTTP 传输
-- 先在命令行测试 `npx -y <package-name>` 确认包可用
-- filesystem 必须指定允许访问的目录
-- 如遇端口冲突，使用环境变量 `PORT=55555` 解决
+MCP 服务器可为 AI 提供额外工具能力。系统预置了 10+ 个常用 MCP 配置（Filesystem、Context7、Chrome DevTools 等），详见 `/guide-mcp` 技能。
 
 ## 子智能体委派
 
@@ -232,7 +211,7 @@ AI 会自动在技能执行过程中调用对应的 MCP 工具。
 | **命令策略** | shell 命令通过执行策略引擎评估（Allow/Prompt/Forbidden），危险命令被禁止 |
 | **自动拒绝** | write_file、edit_file 被自动拒绝，子代理需在沙盒内操作 |
 
-这些限制可在「设置」→「子智能体」和「设置」→「执行策略」中自定义。使用 `get_exec_policy` 查看策略概览，`test_exec_policy` 测试命令安全性。
+这些限制可在「设置」→「子智能体」和「设置」→「执行策略」中自定义。使用 `get_exec_policy` 查看策略概览，`get_exec_policy_rules` 查看完整规则，`test_exec_policy` 测试命令安全性，`add_exec_policy_rule` / `remove_exec_policy_rule` 管理自定义规则。
 
 ### 子任务状态
 
@@ -267,20 +246,6 @@ AI 会自动在技能执行过程中调用对应的 MCP 工具。
 
 工具审批权限可在「设置」中配置，也可通过工具权限分级自动控制。
 
-## 快捷操作
-
-通过智控助手可以用自然语言管理系统：
-
-| 指令示例 | 说明 |
-|----------|------|
-| "帮我看看系统状态" | 获取代理、密钥、供应商运行状态 |
-| "启动所有代理" / "停止代理 xxx" | 管理代理启停（代理配置详见 guide-proxy） |
-| "帮我新建一个 OpenAI 供应商" | 创建供应商（配置详见 guide-provider） |
-| "哪个供应商响应最快？" | 分析供应商性能 |
-| "分析最近的请求日志" | 排查请求问题（日志详见 guide-monitoring） |
-
-在代理管理页面也可直接点击「**全部启动**」/「**全部停止**」进行批量操作。
-
 ## 快捷键
 
 | 快捷键 | 功能 |
@@ -296,10 +261,14 @@ AI 会自动在技能执行过程中调用对应的 MCP 工具。
 
 智控助手支持自然语言交互，以下是典型场景：
 
-- "帮我看看系统状态怎么样？" → 调用健康检查工具
-- "分析最近的请求日志，看看有什么问题" → 获取并分析日志
-- "帮我新建一个 OpenAI 供应商" → 调用创建供应商工具
-- "启动所有代理" → 调用批量启动工具
+| 指令示例 | 说明 |
+|----------|------|
+| "帮我看看系统状态" | 获取代理、密钥、供应商运行状态 |
+| "启动所有代理" / "停止代理 xxx" | 管理代理启停 |
+| "帮我新建一个 OpenAI 供应商" | 创建供应商 |
+| "分析最近的请求日志，看看有什么问题" | 排查请求问题 |
+| "帮我开启开机自启动" | 管理开机自启 |
+| "添加一条允许 npm install 的执行策略" | 管理命令执行策略 |
 
 ## 常见问题
 

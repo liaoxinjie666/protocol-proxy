@@ -1742,6 +1742,67 @@ async function init() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'get_autostart_status',
+        description: '获取开机自启动状态，返回是否支持、是否已启用及注册命令。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'toggle_autostart',
+        description: '设置或取消开机自启动。仅支持 Windows 系统。',
+        parameters: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean', description: 'true 开启，false 关闭' },
+          },
+          required: ['enabled'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_exec_policy_rules',
+        description: '获取所有执行策略规则详情，包括默认规则和用户自定义规则。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'add_exec_policy_rule',
+        description: '添加一条用户自定义执行策略规则。category 可选 allow（允许）、prompt（需确认）、forbidden（禁止）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            category: { type: 'string', description: '规则类别: allow、prompt 或 forbidden' },
+            pattern: { type: 'string', description: '命令匹配模式（支持通配符 *）' },
+            description: { type: 'string', description: '规则说明（可选）' },
+          },
+          required: ['category', 'pattern'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'remove_exec_policy_rule',
+        description: '删除一条用户自定义执行策略规则。',
+        parameters: {
+          type: 'object',
+          properties: {
+            category: { type: 'string', description: '规则类别: allow、prompt 或 forbidden' },
+            pattern: { type: 'string', description: '要删除的规则匹配模式' },
+          },
+          required: ['category', 'pattern'],
+        },
+      },
+    },
   ];
 
   // ==================== 工具权限分级 ====================
@@ -1769,6 +1830,8 @@ async function init() {
     // 2: 委派任务
     delegate_task: 2, stop_task: 2, message_task: 2, update_soul: 2,
     get_exec_policy: 1, test_exec_policy: 1,
+    get_autostart_status: 1, toggle_autostart: 2,
+    get_exec_policy_rules: 1, add_exec_policy_rule: 2, remove_exec_policy_rule: 2,
     // 1: 任务查询 / 代理查询
     list_tasks: 1, get_task: 1, list_agents: 1,
     // 3: 危险操作（需确认）
@@ -2764,6 +2827,42 @@ async function init() {
       conv.compressionSummary = undefined;
       conversationStore.touch(conv);
       return { success: true, message: `会话 ${args.conversationId} 已清空` };
+    },
+
+    get_autostart_status: async () => {
+      const autostart = require('./lib/autostart');
+      return autostart.isEnabled();
+    },
+
+    toggle_autostart: async (args) => {
+      const autostart = require('./lib/autostart');
+      const result = args.enabled ? autostart.enable() : autostart.disable();
+      if (!result.success) return { error: result.error };
+      return result;
+    },
+
+    get_exec_policy_rules: async () => {
+      const { execPolicy } = require('./lib/exec-policy');
+      return execPolicy.getAllRules();
+    },
+
+    add_exec_policy_rule: async (args) => {
+      const { execPolicy } = require('./lib/exec-policy');
+      const { category, pattern, description } = args;
+      if (!['allow', 'prompt', 'forbidden'].includes(category)) {
+        return { error: 'category 必须是 allow、prompt 或 forbidden' };
+      }
+      const added = execPolicy.addRule(category, pattern, description);
+      if (!added) return { error: '规则已存在' };
+      return { success: true, message: `已添加 ${category} 规则: ${pattern}` };
+    },
+
+    remove_exec_policy_rule: async (args) => {
+      const { execPolicy } = require('./lib/exec-policy');
+      const { category, pattern } = args;
+      const removed = execPolicy.removeRule(category, pattern);
+      if (!removed) return { success: false, message: `未找到匹配规则: ${category}/${pattern}` };
+      return { success: true, message: `已删除 ${category} 规则: ${pattern}` };
     },
   };
 
