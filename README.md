@@ -1,5 +1,12 @@
 # Protocol Proxy
 
+[English](./README_EN.md) | 中文
+
+[![npm version](https://img.shields.io/npm/v/protocol-proxy.svg)](https://www.npmjs.com/package/protocol-proxy)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/liaoxinjie666/protocol-proxy.svg)](https://github.com/liaoxinjie666/protocol-proxy)
+
 OpenAI / Anthropic / Gemini 协议转换透明代理与 AI 运维管理平台。
 
 ## 功能特性
@@ -30,6 +37,15 @@ OpenAI / Anthropic / Gemini 协议转换透明代理与 AI 运维管理平台。
 - **版本快照**：自动保存配置变更历史，支持回滚与差异对比
 - **增量差异重建**：即使快照被清理，也能通过差异链回溯历史版本
 - **配置导入导出**：支持 overwrite / merge 两种导入模式
+
+## 截图
+
+<!-- 将你的截图放到 screenshots/ 目录下，然后替换下方占位符 -->
+<!-- ![管理界面](screenshots/dashboard.png) -->
+<!-- ![智控助手](screenshots/ai-assistant.png) -->
+<!-- ![协议转换](screenshots/protocol-conversion.png) -->
+
+> 📸 截图待补充 — 欢迎提交 PR 添加
 
 ## 快速开始
 
@@ -119,6 +135,77 @@ open http://localhost:3000
 3. Agent 配置 base URL 为代理地址，例如 `http://localhost:8080`
 4. Agent 正常发送请求（OpenAI / Anthropic / Gemini 格式均可）
 5. 代理自动识别入站协议，必要时进行协议转换后转发到目标供应商
+
+## 客户端配置示例
+
+### Claude Code
+
+```bash
+# 设置环境变量
+export ANTHROPIC_BASE_URL=http://localhost:8080
+export ANTHROPIC_API_KEY=your-api-key
+
+# 直接使用
+claude
+```
+
+### Cursor
+
+在 Cursor Settings → Models → OpenAI API Key 中：
+- **API Key**: 填入你的 Key
+- **Override OpenAI Base URL**: `http://localhost:8080`
+
+### Python (OpenAI SDK)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="your-api-key"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(response.choices[0].message.content)
+```
+
+### Python (Anthropic SDK)
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://localhost:8080",
+    api_key="your-api-key"
+)
+
+message = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(message.content[0].text)
+```
+
+### curl
+
+```bash
+# OpenAI 格式
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello!"}]}'
+
+# Anthropic 格式
+curl http://localhost:8080/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-api-key" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model": "claude-sonnet-4-20250514", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello!"}]}'
+```
 
 ## 智控助手
 
