@@ -702,6 +702,103 @@
           </div>
           <div class="panel">
             <div class="panel-header">
+              <h3>快捷助手 & 执行策略</h3>
+            </div>
+            <div class="settings-body">
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">启用独立配置</div>
+                  <div class="setting-desc">开启后使用下方单独配置，关闭则跟随智控助手页面的设置</div>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="floating-custom-config" onchange="onFloatingConfigToggle(this.checked)">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div id="floating-config-fields" style="display:none">
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">代理</div>
+                    <div class="setting-desc">选择快捷助手使用的后端代理</div>
+                  </div>
+                  <select id="floating-proxy-select" style="width:200px" onchange="onFloatingProxyChange(this.value)">
+                    <option value="">选择代理...</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">供应商</div>
+                    <div class="setting-desc">选择供应商，留空则自动跟随代理</div>
+                  </div>
+                  <select id="floating-provider-select" style="width:200px" onchange="onFloatingProviderChange(this.value)">
+                    <option value="">自动（跟随代理）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">模型</div>
+                    <div class="setting-desc">选择模型，留空则自动跟随代理</div>
+                  </div>
+                  <select id="floating-model-select" style="width:200px" onchange="saveFloatingConfig()">
+                    <option value="">自动（跟随代理）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">思考深度</div>
+                    <div class="setting-desc">DeepSeek 等支持推理的模型可设置思考深度</div>
+                  </div>
+                  <select id="floating-thinking-select" style="width:200px" onchange="saveFloatingConfig()">
+                    <option value="">跟随模型配置</option>
+                    <option value="disabled">关闭</option>
+                    <option value="high">高</option>
+                    <option value="max">极限</option>
+                  </select>
+                </div>
+              </div>
+              <div class="setting-item" style="flex-direction:column;align-items:stretch;border-top:1px solid var(--border-subtle);padding-top:16px;margin-top:4px">
+                <div class="setting-info" style="margin-bottom:8px">
+                  <div class="setting-name">命令安全策略</div>
+                  <div class="setting-desc">控制子代理执行 shell 命令的权限。Allow=直接执行，Prompt=需确认（子代理自动批准并记录），Forbidden=禁止</div>
+                </div>
+
+                <!-- 添加规则表单 -->
+                <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+                  <select id="exec-policy-add-category" style="padding:6px 8px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px">
+                    <option value="allow">Allow</option>
+                    <option value="prompt">Prompt</option>
+                    <option value="forbidden">Forbidden</option>
+                  </select>
+                  <input type="text" id="exec-policy-add-pattern" placeholder="命令模式 (如: git push *)" style="flex:1;min-width:150px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;font-family:var(--font-mono)">
+                  <input type="text" id="exec-policy-add-desc" placeholder="说明 (可选)" style="width:120px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px">
+                  <button class="btn btn-primary" onclick="addExecPolicyRule()" style="font-size:13px">添加</button>
+                </div>
+
+                <!-- 测试输入 -->
+                <div style="display:flex;gap:8px;margin-bottom:8px">
+                  <input type="text" id="exec-policy-test-input" placeholder="输入命令测试策略..." style="flex:1;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;font-family:var(--font-mono)">
+                  <button class="btn btn-secondary" onclick="testExecPolicy()" style="font-size:13px">测试</button>
+                </div>
+                <div id="exec-policy-test-result" style="display:none;font-size:12px;padding:6px 10px;border-radius:var(--radius-sm);margin-bottom:8px"></div>
+                <div id="exec-policy-stats" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">加载中...</div>
+                <div id="exec-policy-user-rules" style="max-height:200px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-md);display:none">
+                  <div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border-subtle);position:sticky;top:0;background:var(--bg-surface)">自定义规则</div>
+                  <div id="exec-policy-rules-list"></div>
+                </div>
+
+                <!-- 默认规则折叠面板 -->
+                <details id="exec-policy-default-details" style="margin-top:8px">
+                  <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);user-select:none">查看内置规则</summary>
+                  <div style="margin-top:6px">
+                    <input type="text" id="exec-policy-default-search" placeholder="搜索规则..." style="width:100%;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;margin-bottom:6px">
+                    <div id="exec-policy-default-rules" style="max-height:300px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-md)"></div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
               <h3>子智能体</h3>
             </div>
             <div class="settings-body">
@@ -751,52 +848,6 @@
                   </div>
                   <div id="agent-tools-items"></div>
                 </div>
-              </div>
-            </div>
-          </div>
-          <div class="panel">
-            <div class="panel-header">
-              <h3>执行策略</h3>
-            </div>
-            <div class="settings-body">
-              <div class="setting-item" style="flex-direction:column;align-items:stretch">
-                <div class="setting-info" style="margin-bottom:8px">
-                  <div class="setting-name">命令安全策略</div>
-                  <div class="setting-desc">控制子代理执行 shell 命令的权限。Allow=直接执行，Prompt=需确认（子代理自动批准并记录），Forbidden=禁止</div>
-                </div>
-
-                <!-- 添加规则表单 -->
-                <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
-                  <select id="exec-policy-add-category" style="padding:6px 8px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px">
-                    <option value="allow">Allow</option>
-                    <option value="prompt">Prompt</option>
-                    <option value="forbidden">Forbidden</option>
-                  </select>
-                  <input type="text" id="exec-policy-add-pattern" placeholder="命令模式 (如: git push *)" style="flex:1;min-width:150px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;font-family:var(--font-mono)">
-                  <input type="text" id="exec-policy-add-desc" placeholder="说明 (可选)" style="width:120px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px">
-                  <button class="btn btn-primary" onclick="addExecPolicyRule()" style="font-size:13px">添加</button>
-                </div>
-
-                <!-- 测试输入 -->
-                <div style="display:flex;gap:8px;margin-bottom:8px">
-                  <input type="text" id="exec-policy-test-input" placeholder="输入命令测试策略..." style="flex:1;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;font-family:var(--font-mono)">
-                  <button class="btn btn-secondary" onclick="testExecPolicy()" style="font-size:13px">测试</button>
-                </div>
-                <div id="exec-policy-test-result" style="display:none;font-size:12px;padding:6px 10px;border-radius:var(--radius-sm);margin-bottom:8px"></div>
-                <div id="exec-policy-stats" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">加载中...</div>
-                <div id="exec-policy-user-rules" style="max-height:200px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-md);display:none">
-                  <div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border-subtle);position:sticky;top:0;background:var(--bg-surface)">自定义规则</div>
-                  <div id="exec-policy-rules-list"></div>
-                </div>
-
-                <!-- 默认规则折叠面板 -->
-                <details id="exec-policy-default-details" style="margin-top:8px">
-                  <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);user-select:none">查看内置规则</summary>
-                  <div style="margin-top:6px">
-                    <input type="text" id="exec-policy-default-search" placeholder="搜索规则..." style="width:100%;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-primary);font-size:13px;margin-bottom:6px">
-                    <div id="exec-policy-default-rules" style="max-height:300px;overflow-y:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-md)"></div>
-                  </div>
-                </details>
               </div>
             </div>
           </div>
@@ -1601,6 +1652,54 @@
         <button class="btn btn-primary" id="memory-entry-save" onclick="saveMemoryEntry()">保存</button>
       </div>
     </div>
+  </div>
+
+  <!-- ==================== Floating Robot Chat ==================== -->
+  <div class="floating-robot-btn" id="floating-robot-btn">
+    <svg class="robot-icon" width="72" height="72" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="60" cy="110" rx="22" ry="4" fill="#0EA5E9" opacity="0.12"/>
+      <rect x="10" y="38" width="12" height="24" rx="6" fill="#0EA5E9"/>
+      <rect x="12" y="40" width="8" height="20" rx="4" fill="#38BDF8"/>
+      <rect x="98" y="38" width="12" height="24" rx="6" fill="#0EA5E9"/>
+      <rect x="100" y="40" width="8" height="20" rx="4" fill="#38BDF8"/>
+      <ellipse cx="60" cy="85" rx="32" ry="28" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3"/>
+      <ellipse cx="60" cy="88" rx="16" ry="12" fill="#0EA5E9"/>
+      <ellipse cx="60" cy="86" rx="12" ry="8" fill="#38BDF8"/>
+      <ellipse cx="22" cy="80" rx="10" ry="14" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3" transform="rotate(25 22 80)"/>
+      <g class="robot-wave-arm"><ellipse cx="98" cy="68" rx="10" ry="14" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3" transform="rotate(-35 98 68)"/></g>
+      <circle cx="60" cy="42" r="36" fill="#F8FAFC" stroke="#0EA5E9" stroke-width="3"/>
+      <rect x="50" y="2" width="20" height="8" rx="4" fill="#0EA5E9"/>
+      <ellipse cx="60" cy="44" rx="28" ry="22" fill="#0F172A"/>
+      <ellipse cx="48" cy="32" rx="10" ry="5" fill="white" opacity="0.12"/>
+      <path class="robot-eye" d="M42 44 Q48 38 54 44" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      <path class="robot-eye" d="M66 44 Q72 38 78 44" stroke="#38BDF8" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      <path d="M50 54 Q60 60 70 54" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+    </svg>
+  </div>
+
+  <div class="floating-chat" id="floating-chat" style="display:none">
+    <div class="floating-chat-header">
+      <span>智控助手</span>
+      <div class="floating-chat-header-actions">
+        <button class="floating-chat-btn" id="floating-chat-new" title="新会话" onclick="floatingNewConversation()">＋</button>
+        <button class="floating-chat-btn" id="floating-chat-expand" title="打开完整页面" onclick="navigateTo('assistant');closeFloatingChat()">⤢</button>
+        <button class="floating-chat-btn" onclick="closeFloatingChat()" title="关闭">&times;</button>
+      </div>
+    </div>
+    <div class="floating-chat-messages" id="floating-chat-messages">
+      <div class="floating-chat-welcome">
+        <p>你好！我是智控助手，有什么可以帮你的？</p>
+        <p class="floating-chat-hint" id="floating-chat-proxy-hint">请先在智控助手页面选择代理</p>
+      </div>
+    </div>
+    <div class="floating-chat-input-area" style="position:relative">
+      <div class="floating-autocomplete" id="floating-autocomplete"></div>
+      <div class="floating-attachment-preview" id="floating-attachment-preview"></div>
+      <textarea id="floating-chat-input" placeholder="输入消息... 输入 / 触发命令" rows="1"></textarea>
+      <button class="btn" id="floating-mic-btn" onclick="toggleFloatingVoiceRecording()" title="语音输入" style="padding:0 8px;display:flex;align-items:center;justify-content:center"></button>
+      <button class="btn btn-primary floating-chat-send" id="floating-chat-send" onclick="sendFloatingChatMessage()" disabled>发送</button>
+    </div>
+    <div class="floating-chat-resize" id="floating-chat-resize"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>

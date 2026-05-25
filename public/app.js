@@ -139,6 +139,8 @@ function cycleTheme() {
     if (settings.assistantConversationId) {
       assistantConversationId = settings.assistantConversationId;
     }
+    // 恢复快捷助手配置
+    if (typeof initFloatingConfigFromSettings === 'function') initFloatingConfigFromSettings(settings);
     // 加载开机自启状态
     try {
       const asRes = await fetch('/api/autostart');
@@ -196,6 +198,7 @@ function navigateTo(page) {
   }
   if (page === 'skills') loadSkills();
   if (page === 'agents') loadAgents();
+  if (page === 'settings') { populateFloatingProxySelect(); }
   if (page === 'mcp-servers') loadMcpServers();
   if (page === 'memory') loadMemoryPage();
   if (page === 'tasks') loadTasks();
@@ -5663,3 +5666,788 @@ function toggleAutostart(enabled) {
     if (cb) cb.checked = !enabled;
   });
 }
+
+// ---------- Floating Robot Chat ----------
+let floatingConfig = { enabled: false, proxyId: '', providerId: '', model: '', thinkingEffort: '' };
+let floatingProxyProviders = [];
+let floatingConversationId = '';
+let floatingAbortController = null;
+
+function getFloatingProxyId() {
+  if (floatingConfig.enabled && floatingConfig.proxyId) return floatingConfig.proxyId;
+  return assistantProxyId || savedAssistantProxyId || '';
+}
+function getFloatingProviderId() {
+  if (floatingConfig.enabled && floatingConfig.providerId) return floatingConfig.providerId;
+  return document.getElementById('assistant-provider-select')?.value || savedAssistantProviderId || '';
+}
+function getFloatingModel() {
+  if (floatingConfig.enabled && floatingConfig.model) return floatingConfig.model;
+  return document.getElementById('assistant-model-select')?.value || savedAssistantModel || '';
+}
+function getFloatingThinkingEffort() {
+  if (floatingConfig.enabled && floatingConfig.thinkingEffort) return floatingConfig.thinkingEffort;
+  return document.getElementById('assistant-thinking-select')?.value || '';
+}
+
+function saveFloatingConfig() {
+  floatingConfig.providerId = document.getElementById('floating-provider-select')?.value || '';
+  floatingConfig.model = document.getElementById('floating-model-select')?.value || '';
+  floatingConfig.thinkingEffort = document.getElementById('floating-thinking-select')?.value || '';
+  fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ floatingConfig }),
+  }).catch(() => {});
+}
+
+function onFloatingConfigToggle(enabled) {
+  floatingConfig.enabled = enabled;
+  document.getElementById('floating-config-fields').style.display = enabled ? '' : 'none';
+  saveFloatingConfig();
+  updateFloatingProxyHint();
+}
+
+function onFloatingProxyChange(proxyId) {
+  floatingConfig.proxyId = proxyId;
+  floatingConfig.providerId = '';
+  floatingConfig.model = '';
+  loadFloatingProxyProviders(proxyId);
+  saveFloatingConfig();
+}
+
+function onFloatingProviderChange(providerId) {
+  floatingConfig.providerId = providerId;
+  floatingConfig.model = '';
+  populateFloatingModelSelect();
+  saveFloatingConfig();
+}
+
+async function loadFloatingProxyProviders(proxyId) {
+  const sel = document.getElementById('floating-provider-select');
+  const modelSel = document.getElementById('floating-model-select');
+  if (!proxyId) {
+    if (sel) sel.innerHTML = '<option value="">自动（跟随代理）</option>';
+    if (modelSel) modelSel.innerHTML = '<option value="">自动（跟随代理）</option>';
+    floatingProxyProviders = [];
+    return;
+  }
+  try {
+    const res = await fetch(`/api/assistant/proxy-providers/${proxyId}`);
+    const data = await res.json();
+    floatingProxyProviders = data.providers || [];
+    if (sel) {
+      sel.innerHTML = '<option value="">自动（跟随代理）</option>' +
+        floatingProxyProviders.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.protocol)})</option>`).join('');
+      if (floatingConfig.providerId && floatingProxyProviders.find(p => p.id === floatingConfig.providerId)) {
+        sel.value = floatingConfig.providerId;
+      }
+    }
+    populateFloatingModelSelect();
+  } catch {}
+}
+
+function populateFloatingModelSelect() {
+  const sel = document.getElementById('floating-model-select');
+  if (!sel) return;
+  const provider = floatingProxyProviders.find(p => p.id === floatingConfig.providerId);
+  const models = provider?.models || [];
+  sel.innerHTML = '<option value="">自动（跟随代理）</option>' +
+    models.map(m => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)}</option>`).join('');
+  if (floatingConfig.model && models.find(m => m.name === floatingConfig.model)) {
+    sel.value = floatingConfig.model;
+  }
+}
+
+function updateFloatingProxyHint() {
+  const hint = document.getElementById('floating-chat-proxy-hint');
+  if (!hint) return;
+  const pid = getFloatingProxyId();
+  hint.style.display = pid ? 'none' : '';
+}
+
+function populateFloatingProxySelect() {
+  const sel = document.getElementById('floating-proxy-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">选择代理...</option>' +
+    proxies.filter(p => p.running).map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (:${p.port})</option>`).join('');
+  if (floatingConfig.proxyId) sel.value = floatingConfig.proxyId;
+}
+
+(function initFloatingRobot() {
+  const btn = document.getElementById('floating-robot-btn');
+  const chat = document.getElementById('floating-chat');
+  const chatInput = document.getElementById('floating-chat-input');
+  const chatSend = document.getElementById('floating-chat-send');
+  const chatMessages = document.getElementById('floating-chat-messages');
+  if (!btn || !chat) return;
+
+  let isDragging = false;
+  let dragMoved = false;
+  let startX, startY, startLeft, startTop;
+
+  // Position button at bottom-right initially
+  btn.style.right = '24px';
+  btn.style.bottom = '24px';
+  btn.style.left = 'auto';
+  btn.style.top = 'auto';
+
+  function getBtnRect() { return btn.getBoundingClientRect(); }
+  function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+
+  // --- Drag logic ---
+  function onPointerDown(e) {
+    if (e.button && e.button !== 0) return;
+    isDragging = true;
+    dragMoved = false;
+    btn.classList.add('dragging');
+    const rect = getBtnRect();
+    startX = (e.touches ? e.touches[0].clientX : e.clientX);
+    startY = (e.touches ? e.touches[0].clientY : e.clientY);
+    startLeft = rect.left;
+    startTop = rect.top;
+    btn.style.left = rect.left + 'px';
+    btn.style.top = rect.top + 'px';
+    btn.style.right = 'auto';
+    btn.style.bottom = 'auto';
+    e.preventDefault();
+  }
+
+  function onPointerMove(e) {
+    if (!isDragging) return;
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    const dx = cx - startX;
+    const dy = cy - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
+    const bw = btn.offsetWidth;
+    const bh = btn.offsetHeight;
+    btn.style.left = clamp(startLeft + dx, 0, window.innerWidth - bw) + 'px';
+    btn.style.top = clamp(startTop + dy, 0, window.innerHeight - bh) + 'px';
+  }
+
+  function onPointerUp() {
+    if (!isDragging) return;
+    isDragging = false;
+    btn.classList.remove('dragging');
+  }
+
+  btn.addEventListener('mousedown', onPointerDown);
+  btn.addEventListener('touchstart', onPointerDown, { passive: false });
+  document.addEventListener('mousemove', onPointerMove);
+  document.addEventListener('touchmove', onPointerMove, { passive: false });
+  document.addEventListener('mouseup', onPointerUp);
+  document.addEventListener('touchend', onPointerUp);
+
+  // --- Click to toggle chat ---
+  btn.addEventListener('click', function() {
+    if (dragMoved) return;
+    if (chat.style.display === 'none') openFloatingChat();
+    else closeFloatingChat();
+  });
+
+  function openFloatingChat() {
+    const rect = getBtnRect();
+    const chatW = 370;
+    const chatH = 480;
+    let left = rect.right - chatW;
+    let top = rect.top - chatH - 10;
+    left = clamp(left, 8, window.innerWidth - chatW - 8);
+    top = clamp(top, 8, window.innerHeight - chatH - 8);
+    if (top < 8) top = rect.bottom + 10;
+    chat.style.left = left + 'px';
+    chat.style.top = top + 'px';
+    chat.style.display = 'flex';
+    btn.style.display = 'none';
+    updateFloatingProxyHint();
+    chatInput.focus();
+  }
+
+  window.openFloatingChat = openFloatingChat;
+  window.floatingNewConversation = function() {
+    if (floatingConversationId) {
+      // Sync old conversation into main assistant's history
+      if (typeof loadConversations === 'function') loadConversations();
+    }
+    floatingConversationId = '';
+    floatingAttachments = [];
+    renderFloatingAttachments();
+    stopFloatingVoice();
+    chatMessages.innerHTML = '';
+    // Re-add welcome
+    const welcome = document.createElement('div');
+    welcome.className = 'floating-chat-welcome';
+    welcome.innerHTML = '<p>已开启新会话</p>';
+    chatMessages.appendChild(welcome);
+    updateFloatingProxyHint();
+    // Persist cleared conversation ID
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ floatingConversationId: '' }),
+    }).catch(() => {});
+  };
+  window.closeFloatingChat = function() {
+    // Place robot at chat window's current position
+    const chatRect = chat.getBoundingClientRect();
+    btn.style.left = (chatRect.right - btn.offsetWidth) + 'px';
+    btn.style.top = (chatRect.bottom - btn.offsetHeight) + 'px';
+    btn.style.right = 'auto';
+    btn.style.bottom = 'auto';
+    chat.style.display = 'none';
+    btn.style.display = '';
+  };
+
+  // --- Resize handle ---
+  const resizeHandle = document.getElementById('floating-chat-resize');
+  if (resizeHandle) {
+    let resizing = false, resizeStartX, resizeStartY, resizeStartW, resizeStartH;
+    resizeHandle.addEventListener('mousedown', function(e) {
+      resizing = true;
+      resizeStartX = e.clientX;
+      resizeStartY = e.clientY;
+      resizeStartW = chat.offsetWidth;
+      resizeStartH = chat.offsetHeight;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!resizing) return;
+      const newW = Math.max(280, Math.min(window.innerWidth * 0.9, resizeStartW + (e.clientX - resizeStartX)));
+      const newH = Math.max(320, Math.min(window.innerHeight * 0.9, resizeStartH + (e.clientY - resizeStartY)));
+      chat.style.width = newW + 'px';
+      chat.style.height = newH + 'px';
+    });
+    document.addEventListener('mouseup', function() { resizing = false; });
+  }
+
+  // --- Drag chat window by header ---
+  const chatHeader = chat.querySelector('.floating-chat-header');
+  if (chatHeader) {
+    let chatDragging = false, chatDragX, chatDragY, chatDragStartLeft, chatDragStartTop;
+    chatHeader.addEventListener('mousedown', function(e) {
+      if (e.target.closest('.floating-chat-btn')) return;
+      chatDragging = true;
+      chatDragX = e.clientX;
+      chatDragY = e.clientY;
+      chatDragStartLeft = chat.offsetLeft;
+      chatDragStartTop = chat.offsetTop;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!chatDragging) return;
+      const newLeft = clamp(chatDragStartLeft + (e.clientX - chatDragX), 0, window.innerWidth - chat.offsetWidth);
+      const newTop = clamp(chatDragStartTop + (e.clientY - chatDragY), 0, window.innerHeight - chat.offsetHeight);
+      chat.style.left = newLeft + 'px';
+      chat.style.top = newTop + 'px';
+    });
+    document.addEventListener('mouseup', function() { chatDragging = false; });
+  }
+
+  // --- Chat input ---
+  const floatingAc = document.getElementById('floating-autocomplete');
+  let floatingAcIndex = -1;
+
+  function updateFloatingAutocomplete(text) {
+    if (!floatingAc) return;
+    const match = text.match(/^\/([a-zA-Z0-9_-]*)$/);
+    if (!match) { floatingAc.style.display = 'none'; floatingAcIndex = -1; return; }
+    const query = match[1].toLowerCase();
+    const cmdItems = SLASH_COMMANDS.filter(c => c.name !== 'compact' && c.name.includes(query)).map(c => ({ name: c.name, description: '[命令] ' + c.description }));
+    const skillItems = assistantSkills.filter(s => s.name.toLowerCase().includes(query)).map(s => ({ name: s.name, description: s.description || '' }));
+    const filtered = [...cmdItems, ...skillItems];
+    if (filtered.length === 0) { floatingAc.style.display = 'none'; floatingAcIndex = -1; return; }
+    floatingAcIndex = -1;
+    floatingAc.innerHTML = filtered.map((s, i) =>
+      `<div class="floating-ac-item" data-name="${escapeHtml(s.name)}" data-index="${i}"><strong>/${escapeHtml(s.name)}</strong><span class="floating-ac-desc">${escapeHtml(s.description)}</span></div>`
+    ).join('');
+    floatingAc.style.display = 'block';
+    floatingAc.onclick = (e) => {
+      const item = e.target.closest('[data-name]');
+      if (item) selectFloatingAcItem(item.dataset.name);
+    };
+  }
+
+  function selectFloatingAcItem(name) {
+    chatInput.value = '/' + name + ' ';
+    chatInput.focus();
+    floatingAc.style.display = 'none';
+    floatingAcIndex = -1;
+  }
+
+  function highlightFloatingAcItem(items, index) {
+    items.forEach((item, i) => item.classList.toggle('active', i === index));
+    if (items[index]) items[index].scrollIntoView({ block: 'nearest' });
+  }
+
+  chatInput.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+    chatSend.disabled = (!this.value.trim() && floatingAttachments.length === 0) || !getFloatingProxyId();
+    updateFloatingAutocomplete(this.value);
+  });
+
+  chatInput.addEventListener('keydown', function(e) {
+    const isOpen = floatingAc && floatingAc.style.display === 'block';
+    const items = isOpen ? floatingAc.querySelectorAll('.floating-ac-item') : [];
+
+    if (e.key === 'ArrowDown' && isOpen) {
+      e.preventDefault();
+      floatingAcIndex = floatingAcIndex < items.length - 1 ? floatingAcIndex + 1 : 0;
+      highlightFloatingAcItem(items, floatingAcIndex);
+    } else if (e.key === 'ArrowUp' && isOpen) {
+      e.preventDefault();
+      floatingAcIndex = floatingAcIndex > 0 ? floatingAcIndex - 1 : items.length - 1;
+      highlightFloatingAcItem(items, floatingAcIndex);
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      if (isOpen && floatingAcIndex >= 0 && items[floatingAcIndex]) {
+        e.preventDefault();
+        selectFloatingAcItem(items[floatingAcIndex].dataset.name);
+      } else {
+        e.preventDefault();
+        const text = this.value.trim();
+        if (text.startsWith('/')) {
+          sendFloatingChatMessage();
+        } else if (!chatSend.disabled) {
+          sendFloatingChatMessage();
+        }
+      }
+    } else if (e.key === 'Escape') {
+      if (isOpen) {
+        floatingAc.style.display = 'none';
+        floatingAcIndex = -1;
+      }
+    }
+  });
+
+  // Close autocomplete on outside click
+  document.addEventListener('click', function(e) {
+    if (floatingAc && !floatingAc.contains(e.target) && e.target !== chatInput) {
+      floatingAc.style.display = 'none';
+      floatingAcIndex = -1;
+    }
+  });
+
+  // --- Attachments & Voice ---
+  let floatingAttachments = [];
+  let floatingVoiceRecorder = null;
+  let floatingVoiceChunks = [];
+  let floatingIsRecording = false;
+  let floatingVoiceAnalyser = null;
+  let floatingVoiceAnimId = null;
+  const floatingMicBtn = document.getElementById('floating-mic-btn');
+
+  function renderFloatingAttachments() {
+    const container = document.getElementById('floating-attachment-preview');
+    if (!container) return;
+    if (floatingAttachments.length === 0) { container.innerHTML = ''; return; }
+    container.innerHTML = floatingAttachments.map((att, i) => {
+      if (att.type === 'image_url') {
+        return `<div class="floating-att-item"><img src="data:${att.mimeType};base64,${att.data}" alt=""><span class="att-name">${escapeHtml(att.name)}</span><button class="floating-att-remove" onclick="removeFloatingAttachment(${i})">×</button></div>`;
+      }
+      return `<div class="floating-att-item"><span>🔊</span><span class="att-name">${escapeHtml(att.name)}</span><button class="floating-att-remove" onclick="removeFloatingAttachment(${i})">×</button></div>`;
+    }).join('');
+  }
+
+  window.removeFloatingAttachment = function(index) {
+    floatingAttachments.splice(index, 1);
+    renderFloatingAttachments();
+    chatSend.disabled = (!chatInput.value.trim() && floatingAttachments.length === 0) || !getFloatingProxyId();
+  };
+
+  // Paste image support
+  chatInput.addEventListener('paste', function(e) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file && file.type.startsWith('image/')) {
+          e.preventDefault();
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const base64 = ev.target.result.split(',')[1];
+            floatingAttachments.push({ type: 'image_url', mimeType: file.type, name: file.name || 'pasted.png', data: base64 });
+            renderFloatingAttachments();
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    }
+  });
+
+  // Voice recording
+  function updateFloatingMicState() {
+    if (!floatingMicBtn) return;
+    if (floatingIsRecording) {
+      floatingMicBtn.innerHTML = buildMicSvg(0);
+      floatingMicBtn.title = '点击停止录音';
+    } else {
+      floatingMicBtn.innerHTML = MIC_SVG_IDLE;
+      floatingMicBtn.title = '语音输入';
+    }
+  }
+  updateFloatingMicState();
+
+  window.toggleFloatingVoiceRecording = function() {
+    if (floatingIsRecording) stopFloatingVoice();
+    else startFloatingVoice();
+  };
+
+  async function startFloatingVoice() {
+    const proxyId = getFloatingProxyId();
+    if (!proxyId) { showToast('请先配置代理后再使用语音', true); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      floatingVoiceAnalyser = audioCtx.createAnalyser();
+      floatingVoiceAnalyser.fftSize = 256;
+      source.connect(floatingVoiceAnalyser);
+      floatingVoiceRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      floatingVoiceChunks = [];
+      floatingVoiceRecorder.ondataavailable = (e) => { if (e.data.size > 0) floatingVoiceChunks.push(e.data); };
+      floatingVoiceRecorder.onstop = async () => {
+        const blob = new Blob(floatingVoiceChunks, { type: mimeType || 'audio/webm' });
+        const arrayBuffer = await blob.arrayBuffer();
+        const ac2 = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuffer = await ac2.decodeAudioData(arrayBuffer);
+        const wavBuffer = audioBufferToWav(audioBuffer);
+        const base64 = arrayBufferToBase64(wavBuffer);
+        const timeStr = new Date().toLocaleTimeString('zh-CN', { hour12: false }).replace(/:/g, '-');
+        floatingAttachments.push({ type: 'input_audio', mimeType: 'audio/wav', name: `录音_${timeStr}.wav`, data: base64 });
+        renderFloatingAttachments();
+        await ac2.close();
+        stream.getTracks().forEach(t => t.stop());
+        audioCtx.close();
+        sendFloatingChatMessage();
+      };
+      floatingVoiceRecorder.start();
+      floatingIsRecording = true;
+      updateFloatingMicState();
+      // Volume animation
+      const micBtn = floatingMicBtn;
+      const dataArray = new Uint8Array(floatingVoiceAnalyser.frequencyBinCount);
+      let smoothVol = 0;
+      function animate() {
+        if (!floatingIsRecording) return;
+        floatingVoiceAnalyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        smoothVol += ((sum / dataArray.length) - smoothVol) * 0.3;
+        micBtn.innerHTML = buildMicSvg(Math.min(smoothVol / 100, 1));
+        floatingVoiceAnimId = requestAnimationFrame(animate);
+      }
+      floatingVoiceAnimId = requestAnimationFrame(animate);
+    } catch (err) {
+      showToast('无法访问麦克风: ' + err.message, true);
+    }
+  }
+
+  function stopFloatingVoice() {
+    if (!floatingIsRecording) return;
+    floatingIsRecording = false;
+    if (floatingVoiceAnimId) { cancelAnimationFrame(floatingVoiceAnimId); floatingVoiceAnimId = null; }
+    floatingVoiceAnalyser = null;
+    updateFloatingMicState();
+    try {
+      if (floatingVoiceRecorder && floatingVoiceRecorder.state !== 'inactive') floatingVoiceRecorder.stop();
+    } catch {}
+  }
+
+  // --- Send message ---
+  window.sendFloatingChatMessage = async function() {
+    const text = chatInput.value.trim();
+    const hasAttachments = floatingAttachments.length > 0;
+    if (!text && !hasAttachments) return;
+    if (floatingAbortController) return;
+
+    // Slash commands — must run before proxy check so /help etc. always work
+    if (text.startsWith('/') && !hasAttachments) {
+      const cmdMatch = text.match(/^\/(\w+)(?:\s+(.*))?$/);
+      if (cmdMatch) {
+        const cmd = cmdMatch[1].toLowerCase();
+        const handled = handleFloatingSlashCommand(cmd, cmdMatch[2]);
+        if (handled) {
+          chatInput.value = '';
+          chatInput.style.height = 'auto';
+          return;
+        }
+      }
+    }
+
+    const proxyId = getFloatingProxyId();
+    if (!proxyId) {
+      addFloatingMsg('error', '请先在设置中配置快捷助手代理，或在智控助手页面选择代理');
+      return;
+    }
+
+    // Remove welcome
+    const welcome = chatMessages.querySelector('.floating-chat-welcome');
+    if (welcome) welcome.remove();
+
+    // Build multimodal message payload
+    let messagePayload = text;
+    if (hasAttachments) {
+      const content = [];
+      if (text) content.push({ type: 'text', text });
+      for (const att of floatingAttachments) {
+        if (att.type === 'image_url') {
+          content.push({ type: 'image_url', image_url: { url: `data:${att.mimeType};base64,${att.data}` } });
+        } else if (att.type === 'input_audio') {
+          const format = att.mimeType.replace(/^audio\//, '').replace(/;.*$/, '') || 'mp3';
+          content.push({ type: 'input_audio', input_audio: { data: att.data, format } });
+        }
+      }
+      messagePayload = content;
+    }
+
+    // Display user message
+    const displayText = text || (hasAttachments ? floatingAttachments.map(a => a.name).join(', ') : '');
+    addFloatingMsg('user', displayText + (hasAttachments && text ? ' 📎' : hasAttachments ? ' 📎' : ''));
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+    floatingAttachments = [];
+    renderFloatingAttachments();
+    chatSend.disabled = true;
+
+    const thinkingEl = addFloatingThinking();
+    const controller = new AbortController();
+    floatingAbortController = controller;
+
+    try {
+      const providerVal = getFloatingProviderId();
+      const modelVal = getFloatingModel();
+      const thinkingVal = getFloatingThinkingEffort();
+      const res = await fetch('/api/assistant/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proxyId,
+          conversationId: floatingConversationId || undefined,
+          message: messagePayload,
+          ...(providerVal && { providerId: providerVal }),
+          ...(modelVal && { model: modelVal }),
+          permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
+          ...(thinkingVal && { thinkingEffort: thinkingVal }),
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        thinkingEl.remove();
+        addFloatingMsg('error', `请求失败: HTTP ${res.status}`);
+        return;
+      }
+
+      await processFloatingSSE(res, thinkingEl);
+    } catch (err) {
+      thinkingEl.remove();
+      if (err.name !== 'AbortError') {
+        addFloatingMsg('error', `请求出错: ${err.message}`);
+      }
+    } finally {
+      if (floatingAbortController === controller) floatingAbortController = null;
+      chatSend.disabled = !chatInput.value.trim();
+    }
+  };
+
+  function handleFloatingSlashCommand(cmd, args) {
+    // If it matches a skill name, let it pass through to the backend
+    if (assistantSkills.find(s => s.name === cmd)) return false;
+    switch (cmd) {
+      case 'help': {
+        const cmdList = SLASH_COMMANDS.filter(c => c.name !== 'compact').map(c => `- \`/${c.name}\` — ${c.description}`).join('\n');
+        const skillList = assistantSkills.length
+          ? '\n**技能：**\n' + assistantSkills.map(s => `- \`/${s.name}\` — ${s.description || ''}`).join('\n')
+          : '';
+        addFloatingMsg('assistant', '**可用命令：**\n' + cmdList + skillList);
+        return true;
+      }
+      case 'clear':
+        chatMessages.innerHTML = '';
+        floatingConversationId = '';
+        return true;
+      case 'new':
+        floatingConversationId = '';
+        chatMessages.innerHTML = '';
+        addFloatingMsg('assistant', '已开启新会话。');
+        return true;
+      case 'model': {
+        const pid = getFloatingProxyId();
+        const prov = getFloatingProviderId();
+        const mdl = getFloatingModel();
+        const think = getFloatingThinkingEffort();
+        const proxyName = proxies.find(p => p.id === pid)?.name || pid;
+        addFloatingMsg('assistant',
+          `**当前配置：**\n` +
+          `- 代理：${proxyName || '未设置'}\n` +
+          `- 供应商：${prov || '自动'}\n` +
+          `- 模型：${mdl || '自动'}\n` +
+          `- 思考深度：${think || '跟随模型'}`
+        );
+        return true;
+      }
+      default: return false;
+    }
+  }
+
+  // --- SSE processing ---
+  function attachFloatingDeleteBtn(el, backendMsgId) {
+    if (!el || !backendMsgId || el.querySelector('.msg-delete-btn')) return;
+    el.dataset.backendMsgId = backendMsgId;
+    el.style.position = 'relative';
+    const delBtn = document.createElement('button');
+    delBtn.className = 'msg-delete-btn';
+    delBtn.title = '删除该问答对';
+    delBtn.innerHTML = '&times;';
+    delBtn.onclick = (e) => { e.stopPropagation(); deleteFloatingMsgPair(backendMsgId); };
+    el.appendChild(delBtn);
+  }
+
+  async function deleteFloatingMsgPair(backendMsgId) {
+    if (!backendMsgId || !floatingConversationId) { showToast('消息尚未就绪', true); return; }
+    const ok = await showConfirm('确定删除该问答对吗？');
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/assistant/conversations/${floatingConversationId}/messages/${backendMsgId}`, { method: 'DELETE' });
+      if (!res.ok) { showToast('删除失败', true); return; }
+      // Remove the message and its pair from DOM
+      const allMsgs = chatMessages.querySelectorAll('.floating-msg');
+      let found = false;
+      for (const msg of allMsgs) {
+        if (msg.dataset.backendMsgId === backendMsgId) { found = true; msg.remove(); continue; }
+        if (found && !msg.dataset.backendMsgId) break; // reached next pair boundary
+        if (found) { msg.remove(); break; } // remove the paired message
+      }
+      // If nothing matched by data attr, remove the last user + assistant pair
+      if (!found) {
+        const msgs = [...chatMessages.querySelectorAll('.floating-msg')];
+        const lastAssistant = msgs.reverse().find(m => m.classList.contains('assistant'));
+        const lastUser = msgs.find(m => m.classList.contains('user'));
+        if (lastAssistant) lastAssistant.remove();
+        if (lastUser) lastUser.remove();
+      }
+    } catch (err) {
+      showToast('删除失败: ' + err.message, true);
+    }
+  }
+
+  async function processFloatingSSE(response, thinkingEl) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullContent = '';
+    let currentEvent = '';
+    let contentEl = null;
+    let lastUserEl = chatMessages.querySelector('.floating-msg.user:last-of-type');
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith('event: ')) { currentEvent = trimmed.slice(7); continue; }
+        if (!trimmed.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(trimmed.slice(6)); } catch { continue; }
+
+        switch (currentEvent) {
+          case 'content':
+            if (thinkingEl.parentNode) thinkingEl.remove();
+            if (!contentEl) contentEl = addFloatingMsg('assistant', '');
+            fullContent += data.delta;
+            contentEl.innerHTML = DOMPurify.sanitize(marked.parse(fullContent));
+            scrollFloatingChat();
+            break;
+          case 'conversation':
+            floatingConversationId = data.id;
+            fetch('/api/settings', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ floatingConversationId: data.id }),
+            }).catch(() => {});
+            if (data.userMessageId && lastUserEl) {
+              attachFloatingDeleteBtn(lastUserEl, data.userMessageId);
+            }
+            break;
+          case 'done':
+            if (thinkingEl.parentNode) thinkingEl.remove();
+            if (contentEl && data.reasoning_content && !fullContent.includes('<think>')) {
+              fullContent = `<think>${data.reasoning_content}</think>` + fullContent;
+              contentEl.innerHTML = DOMPurify.sanitize(marked.parse(fullContent));
+            }
+            if (data.assistantMessageId && contentEl) {
+              attachFloatingDeleteBtn(contentEl, data.assistantMessageId);
+            }
+            break;
+          case 'error':
+            if (thinkingEl.parentNode) thinkingEl.remove();
+            addFloatingMsg('error', `错误: ${data.message}`);
+            break;
+        }
+      }
+    }
+    if (thinkingEl.parentNode) thinkingEl.remove();
+    scrollFloatingChat();
+  }
+
+  // --- DOM helpers ---
+  function addFloatingMsg(type, content) {
+    const div = document.createElement('div');
+    div.className = 'floating-msg ' + type;
+    if (type === 'assistant') {
+      div.innerHTML = content ? DOMPurify.sanitize(marked.parse(content)) : '';
+    } else {
+      div.textContent = content;
+    }
+    chatMessages.appendChild(div);
+    scrollFloatingChat();
+    return div;
+  }
+
+  function addFloatingThinking() {
+    const div = document.createElement('div');
+    div.className = 'floating-msg-thinking';
+    div.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+    chatMessages.appendChild(div);
+    scrollFloatingChat();
+    return div;
+  }
+
+  function scrollFloatingChat() {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  // Load skills so /commands work without visiting assistant page
+  if (typeof loadAssistantSkills === 'function') loadAssistantSkills();
+
+  // Restore floating config from settings (called after settings load)
+  window.initFloatingConfigFromSettings = function(settings) {
+    if (settings.floatingConfig) {
+      Object.assign(floatingConfig, settings.floatingConfig);
+    }
+    if (settings.floatingConversationId) {
+      floatingConversationId = settings.floatingConversationId;
+    }
+    const toggle = document.getElementById('floating-custom-config');
+    if (toggle) toggle.checked = !!floatingConfig.enabled;
+    const fields = document.getElementById('floating-config-fields');
+    if (fields) fields.style.display = floatingConfig.enabled ? '' : 'none';
+    if (floatingConfig.enabled) {
+      populateFloatingProxySelect();
+      if (floatingConfig.proxyId) {
+        loadFloatingProxyProviders(floatingConfig.proxyId);
+      }
+    }
+    const thinkSel = document.getElementById('floating-thinking-select');
+    if (thinkSel && floatingConfig.thinkingEffort) thinkSel.value = floatingConfig.thinkingEffort;
+  };
+})();
