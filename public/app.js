@@ -838,15 +838,19 @@ function renderModelContextTable() {
   if (!wrapper || !tbody) return;
   if (providerModelTags.length === 0) { wrapper.style.display = 'none'; return; }
   wrapper.style.display = '';
+  const isDeepseek = document.getElementById('provider-adapter')?.value === 'deepseek';
+  const thEl = document.getElementById('model-thinking-th');
+  if (thEl) thEl.style.display = isDeepseek ? '' : 'none';
   tbody.innerHTML = providerModelTags.map((m, i) => {
     const unit = m._unit || 'k';
     const divisor = unit === 'm' ? 1000000 : 1000;
     const effort = m.thinkingEffort || '';
+    const thinkingCol = isDeepseek ? `<td><select onchange="updateModelThinkingEffort(${i}, this.value)" style="font-size:12px;padding:2px 4px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary)"><option value=""${effort === '' ? ' selected' : ''}>关闭</option><option value="high"${effort === 'high' ? ' selected' : ''}>高</option><option value="max"${effort === 'max' ? ' selected' : ''}>极限</option></select></td>` : '';
     return `<tr>
       <td>${escapeHtml(m.name)}</td>
       <td style="display:flex;align-items:center;gap:4px"><input type="number" min="0" step="any" value="${m.contextLength ? m.contextLength / divisor : ''}" placeholder="跟随系统设置"
           onchange="updateModelContext(${i}, this.value)" style="width:90px"><select onchange="updateModelContextUnit(${i}, this.value)" style="font-size:12px;padding:2px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary);width:40px"><option value="k"${unit === 'k' ? ' selected' : ''}>k</option><option value="m"${unit === 'm' ? ' selected' : ''}>m</option></select></td>
-      <td><select onchange="updateModelThinkingEffort(${i}, this.value)" style="font-size:12px;padding:2px 4px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary)"><option value=""${effort === '' ? ' selected' : ''}>关闭</option><option value="high"${effort === 'high' ? ' selected' : ''}>高</option><option value="max"${effort === 'max' ? ' selected' : ''}>极限</option></select></td>
+      ${thinkingCol}
     </tr>`;
   }).join('');
 }
@@ -3740,6 +3744,7 @@ async function loadProxyProviders(proxyId) {
       if (savedAssistantModel) savedAssistantModel = '';
     }
     saveAssistantSelection();
+    updateThinkingVisibility();
   } catch (err) {
     console.warn('[assistant] 加载供应商列表失败:', err.message);
   }
@@ -3766,7 +3771,14 @@ function populateModelSelect() {
 function onAssistantProviderChange(value) {
   assistantProviderId = value;
   populateModelSelect();
+  updateThinkingVisibility();
   saveAssistantSelection();
+}
+
+function updateThinkingVisibility() {
+  const provider = proxyProviders.find(p => p.id === assistantProviderId);
+  const wrap = document.getElementById('assistant-thinking-wrap');
+  if (wrap) wrap.style.display = (provider?.adapter === 'deepseek') ? '' : 'none';
 }
 
 function saveAssistantSelection() {

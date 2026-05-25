@@ -393,7 +393,7 @@
                   <option value="4">🔓 完全放开</option>
                 </select>
               </div>
-              <div class="assistant-model-select">
+              <div class="assistant-model-select" id="assistant-thinking-wrap" style="display:none">
                 <label>思考深度</label>
                 <select id="assistant-thinking-select" onchange="saveAssistantSelection()">
                   <option value="">跟随模型配置</option>
@@ -1028,7 +1028,7 @@
             </div>
             <div class="form-group">
               <label>适配器</label>
-              <select id="provider-adapter">
+              <select id="provider-adapter" onchange="renderModelContextTable()">
                 <option value="">无 (None)</option>
                 <option value="qwen">Qwen (通义千问)</option>
                 <option value="deepseek">DeepSeek (深度求索)</option>
@@ -1062,7 +1062,7 @@
           <div class="form-group" id="model-context-table" style="display:none">
             <label>模型参数配置</label>
             <table class="model-context-table">
-              <thead><tr><th>模型</th><th>上下文长度</th><th>思考深度</th></tr></thead>
+              <thead><tr><th>模型</th><th>上下文长度</th><th id="model-thinking-th">思考深度</th></tr></thead>
               <tbody id="model-context-tbody"></tbody>
             </table>
           </div>

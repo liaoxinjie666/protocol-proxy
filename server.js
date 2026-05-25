@@ -552,14 +552,16 @@ async function init() {
   }
 
   function buildThinkingParams(thinkingEffort, protocol, adapter) {
+    if (protocol !== 'openai' && protocol !== 'responses') return {};
     if (thinkingEffort === 'high' || thinkingEffort === 'max') {
-      if (protocol === 'openai' || protocol === 'responses') {
-        return { thinking: { type: 'enabled' }, reasoning_effort: thinkingEffort };
-      }
+      const params = { reasoning_effort: thinkingEffort };
+      // thinking 参数仅 DeepSeek 支持
+      if (adapter === 'deepseek') params.thinking = { type: 'enabled' };
+      return params;
     }
-    // DeepSeek 等推理模型默认开启思考，需显式传 reasoning_effort: 0 关闭
+    // DeepSeek 默认开启思考，需显式传 thinking.type=disabled 关闭
     if (adapter === 'deepseek') {
-      return { reasoning_effort: 0 };
+      return { thinking: { type: 'disabled' } };
     }
     return {};
   }
@@ -4153,6 +4155,7 @@ async function init() {
       id: p.id,
       name: p.name,
       protocol: p.protocol,
+      adapter: p.adapter || '',
       models: p.models || [],
     }));
     res.json({ providers, defaultModel: proxy.defaultModel || '' });
