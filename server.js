@@ -530,32 +530,38 @@ async function init() {
       if (overrideProviderId) {
         const p = configStore.getProviderById(overrideProviderId);
         if (p) {
-          const m = (p.models || []).find(m => m.name === effectiveModel);
-          if (m && m.thinkingEffort) return m.thinkingEffort;
+          const entry = (p.models || []).find(m => m.name === effectiveModel);
+          if (entry && entry.thinkingEffort) return entry.thinkingEffort;
         }
       }
       if (proxy) {
         const provider = configStore.getProviderById(proxy.providerId);
         if (provider) {
-          const m = (provider.models || []).find(m => m.name === effectiveModel);
-          if (m && m.thinkingEffort) return m.thinkingEffort;
+          const entry = (provider.models || []).find(m => m.name === effectiveModel);
+          if (entry && entry.thinkingEffort) return entry.thinkingEffort;
         }
-        for (const entry of (proxy.providerPool || [])) {
-          const p = configStore.getProviderById(entry.providerId);
+        for (const poolItem of (proxy.providerPool || [])) {
+          const p = configStore.getProviderById(poolItem.providerId);
           if (!p) continue;
-          const m = (p.models || []).find(m => m.name === effectiveModel);
-          if (m && m.thinkingEffort) return m.thinkingEffort;
+          const entry = (p.models || []).find(m => m.name === effectiveModel);
+          if (entry && entry.thinkingEffort) return entry.thinkingEffort;
         }
       }
     }
     return '';
   }
 
-  function buildThinkingParams(thinkingEffort) {
+  function buildThinkingParams(thinkingEffort, protocol, adapter) {
     if (thinkingEffort === 'high' || thinkingEffort === 'max') {
-      return { thinking: { type: 'enabled' }, reasoning_effort: thinkingEffort };
+      if (protocol === 'openai' || protocol === 'responses') {
+        return { thinking: { type: 'enabled' }, reasoning_effort: thinkingEffort };
+      }
     }
-    return { thinking: { type: 'disabled' } };
+    // DeepSeek 等推理模型默认开启思考，需显式传 reasoning_effort: 0 关闭
+    if (adapter === 'deepseek') {
+      return { reasoning_effort: 0 };
+    }
+    return {};
   }
 
   function normalizeProviderPoolInput(pool) {
@@ -4610,7 +4616,10 @@ async function init() {
     const MAX_CONTEXT = resolveModelContext(effectiveModel, proxy, settings, providerId);
     const MAX_TOOL_ROUNDS = Math.max(1, Math.min(100, parseInt(settings.maxRounds) || 10));
     const effectiveThinkingEffort = thinkingEffort || resolveThinkingEffort(effectiveModel, proxy, providerId);
-    const thinkingParams = buildThinkingParams(effectiveThinkingEffort);
+    const effectiveProvider = providerId ? configStore.getProviderById(providerId) : configStore.getProviderById(proxy.providerId);
+    const effectiveProtocol = effectiveProvider?.protocol || 'openai';
+    // 只在用户明确指定了供应商时才传 adapter，避免自动路由时把 reasoning_effort: 0 广播给不支持的供应商
+    const thinkingParams = buildThinkingParams(effectiveThinkingEffort, effectiveProtocol, providerId ? effectiveProvider?.adapter : '');
 
     // 音频输入协议兼容性检查
     if (Array.isArray(message) && message.some(b => b.type === 'input_audio')) {

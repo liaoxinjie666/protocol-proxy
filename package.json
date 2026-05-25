@@ -1,6 +1,6 @@
 {
   "name": "protocol-proxy",
-  "version": "3.3.3",
+  "version": "3.3.4",
   "description": "OpenAI / Anthropic / Gemini 协议转换透明代理与 AI 运维管理平台",
   "main": "server.js",
   "bin": {

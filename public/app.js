@@ -3801,11 +3801,12 @@ function saveAssistantSelection() {
   }
 })();
 
-// 恢复侧边栏状态（默认收起）
+// 恢复侧边栏状态（默认收起，首次访问保持收起避免闪烁）
 (function() {
   const sidebar = document.getElementById('assistant-sidebar');
   const toggleBtn = document.getElementById('sidebar-toggle-btn');
-  if (sidebar && localStorage.getItem('assistant-sidebar-collapsed') !== '1') {
+  const saved = localStorage.getItem('assistant-sidebar-collapsed');
+  if (sidebar && saved !== null && saved !== '1') {
     sidebar.classList.remove('collapsed');
     if (toggleBtn) toggleBtn.style.display = 'none';
   }
