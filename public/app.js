@@ -28,6 +28,8 @@ let savedAssistantProviderId = '';
 let savedAssistantModel = '';
 let assistantAbortController = null;
 let assistantConversationId = '';
+let assistantChatMode = 'full';
+let assistantWindowSize = 20;
 let contextTokens = 0;
 let contextMaxTokens = 200000;
 let contextPercent = 0;
@@ -138,6 +140,16 @@ function cycleTheme() {
     }
     if (settings.assistantConversationId) {
       assistantConversationId = settings.assistantConversationId;
+    }
+    if (settings.assistantChatMode) {
+      assistantChatMode = settings.assistantChatMode;
+      const modeSel = document.getElementById('assistant-mode-select');
+      if (modeSel) modeSel.value = assistantChatMode;
+    }
+    if (settings.assistantWindowSize) {
+      assistantWindowSize = settings.assistantWindowSize;
+      const wsInput = document.getElementById('settings-window-size');
+      if (wsInput) wsInput.value = assistantWindowSize;
     }
     // 恢复快捷助手配置
     if (typeof initFloatingConfigFromSettings === 'function') initFloatingConfigFromSettings(settings);
@@ -2610,6 +2622,8 @@ async function sendAssistantMessage() {
         ...(modelVal && { model: modelVal }),
         permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
         thinkingEffort: document.getElementById('assistant-thinking-select')?.value || '',
+        mode: assistantChatMode,
+        ...(assistantChatMode === 'sliding' && { windowSize: assistantWindowSize }),
       }),
       signal: assistantAbortController.signal,
     });
@@ -2759,6 +2773,16 @@ async function processAssistantSSE(response, thinkingId) {
           contextMaxTokens = data.maxTokens || contextMaxTokens;
           contextPercent = data.percent;
           contextMessages = data.messages;
+          if (data.mode) {
+            assistantChatMode = data.mode;
+            const modeSel = document.getElementById('assistant-mode-select');
+            if (modeSel) modeSel.value = data.mode;
+          }
+          if (data.windowSize) {
+            assistantWindowSize = data.windowSize;
+            const wsInput = document.getElementById('settings-window-size');
+            if (wsInput) wsInput.value = data.windowSize;
+          }
           updateContextBar();
           break;
         }
@@ -3411,7 +3435,7 @@ async function loadConversations() {
       item.className = 'sidebar-conv-item' + (c.id === assistantConversationId ? ' active' : '');
       item.dataset.id = c.id;
       item.innerHTML = `<span class="sidebar-conv-item-label">${escapeHtml(label)}</span><button class="sidebar-conv-item-delete" title="删除">×</button>`;
-      item.querySelector('.sidebar-conv-item-label').onclick = () => switchConversation(c.id);
+      item.querySelector('.sidebar-conv-item-label').onclick = () => switchConversation(c.id, c);
       item.querySelector('.sidebar-conv-item-delete').onclick = (e) => deleteConversationById(c.id, e);
       list.appendChild(item);
     }
@@ -3420,7 +3444,7 @@ async function loadConversations() {
   }
 }
 
-async function switchConversation(convId) {
+async function switchConversation(convId, convData) {
   // 中断进行中的请求，避免旧流的 DOM 更新与新会话冲突
   if (assistantAbortController) {
     assistantAbortController.abort();
@@ -3432,6 +3456,15 @@ async function switchConversation(convId) {
     return;
   }
   assistantConversationId = convId;
+  // Restore conversation mode
+  if (convData) {
+    assistantChatMode = convData.mode || 'full';
+    assistantWindowSize = convData.windowSize || 20;
+    const modeSel = document.getElementById('assistant-mode-select');
+    if (modeSel) modeSel.value = assistantChatMode;
+    const wsInput = document.getElementById('settings-window-size');
+    if (wsInput) wsInput.value = assistantWindowSize;
+  }
   assistantMessages = [];
   const chat = document.getElementById('assistant-chat');
   if (chat) chat.innerHTML = '';
@@ -3791,8 +3824,38 @@ function saveAssistantSelection() {
   fetch('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel: modelVal, assistantPermissionLevel: permVal, assistantThinkingEffort: thinkingVal, assistantConversationId }),
+    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel: modelVal, assistantPermissionLevel: permVal, assistantThinkingEffort: thinkingVal, assistantConversationId, assistantChatMode, assistantWindowSize }),
   }).catch(() => {});
+}
+
+async function onChatModeChange(newMode) {
+  // sliding → full: estimate full conversation context usage
+  if (newMode === 'full' && assistantChatMode === 'sliding') {
+    // In sliding mode, contextPercent only reflects the window — estimate full usage
+    const ws = assistantWindowSize || 20;
+    const estimatedPercent = contextMessages > ws
+      ? Math.round(contextPercent * contextMessages / ws)
+      : contextPercent;
+    if (estimatedPercent > 80) {
+      const ok = await showConfirm(`完整会话约 ${contextMessages} 条消息，预估上下文使用约 ${estimatedPercent}%，切换到专业模式需要先压缩会话。是否立即压缩？`);
+      if (ok) {
+        await compressAssistantContext();
+      } else {
+        const sel = document.getElementById('assistant-mode-select');
+        if (sel) sel.value = 'sliding';
+        return;
+      }
+    }
+  }
+  assistantChatMode = newMode;
+  saveAssistantSelection();
+}
+
+function onWindowSizeChange(val) {
+  assistantWindowSize = Math.max(1, Math.min(200, parseInt(val) || 20));
+  const el = document.getElementById('settings-window-size');
+  if (el) el.value = assistantWindowSize;
+  saveAssistantSelection();
 }
 
 // 监听代理选择
@@ -5701,6 +5764,12 @@ function saveFloatingConfig() {
   }).catch(() => {});
 }
 
+function onFloatingWindowSizeChange(val) {
+  floatingConfig.windowSize = Math.max(1, Math.min(200, parseInt(val) || 20));
+  document.getElementById('floating-window-size').value = floatingConfig.windowSize;
+  saveFloatingConfig();
+}
+
 function onFloatingConfigToggle(enabled) {
   floatingConfig.enabled = enabled;
   document.getElementById('floating-config-fields').style.display = enabled ? '' : 'none';
@@ -6232,6 +6301,8 @@ function populateFloatingProxySelect() {
           ...(modelVal && { model: modelVal }),
           permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
           ...(thinkingVal && { thinkingEffort: thinkingVal }),
+          mode: 'sliding',
+          windowSize: floatingConfig.enabled ? (floatingConfig.windowSize || 20) : assistantWindowSize,
         }),
         signal: controller.signal,
       });
@@ -6281,12 +6352,14 @@ function populateFloatingProxySelect() {
         const mdl = getFloatingModel();
         const think = getFloatingThinkingEffort();
         const proxyName = proxies.find(p => p.id === pid)?.name || pid;
+        const ws = floatingConfig.enabled ? (floatingConfig.windowSize || 20) : assistantWindowSize;
         addFloatingMsg('assistant',
           `**当前配置：**\n` +
           `- 代理：${proxyName || '未设置'}\n` +
           `- 供应商：${prov || '自动'}\n` +
           `- 模型：${mdl || '自动'}\n` +
-          `- 思考深度：${think || '跟随模型'}`
+          `- 思考深度：${think || '跟随模型'}\n` +
+          `- 对话模式：长对话（最近 ${ws} 条）`
         );
         return true;
       }
@@ -6449,5 +6522,7 @@ function populateFloatingProxySelect() {
     }
     const thinkSel = document.getElementById('floating-thinking-select');
     if (thinkSel && floatingConfig.thinkingEffort) thinkSel.value = floatingConfig.thinkingEffort;
+    const wsInput = document.getElementById('floating-window-size');
+    if (wsInput && floatingConfig.windowSize) wsInput.value = floatingConfig.windowSize;
   };
 })();

@@ -4515,7 +4515,7 @@ async function init() {
   });
 
   app.post('/api/assistant/chat', async (req, res) => {
-    const { proxyId, conversationId, message, compress, providerId, model, thinkingEffort } = req.body;
+    const { proxyId, conversationId, message, compress, providerId, model, thinkingEffort, mode, windowSize } = req.body;
     if (!proxyId || (!compress && !message)) {
       return res.status(400).json({ error: '需要 proxyId 和 message' });
     }
@@ -4545,6 +4545,9 @@ async function init() {
       return res.status(429).json({ error: '该会话正在处理中，请稍后再试' });
     }
     activeStreams.add(convId);
+    // 保存对话模式
+    if (mode && (mode === 'full' || mode === 'sliding')) conv.mode = mode;
+    if (windowSize && windowSize > 0) conv.windowSize = Math.min(200, Math.max(1, parseInt(windowSize)));
     conversationStore.touch(conv);
 
     // 客户端断开时，停止当前批次的所有子任务，并释放并发锁
@@ -4689,8 +4692,17 @@ async function init() {
         if (conv.compressionSummary) {
           systemParts.push(`[压缩摘要]\n${conv.compressionSummary}\n\n---\n以上是之前对话的压缩摘要。最近的消息保留原文。请继续对话，不要复述摘要内容。`);
         }
+        if (conv.mode === 'sliding') {
+          const ws = conv.windowSize || 20;
+          systemParts.push(`[长对话模式] 当前为长对话模式，只提供了最近的 ${ws} 条消息。更早的历史消息未包含在上下文中，如用户需要回顾之前的内容，请提示用户查看历史会话或切换到专业模式。`);
+        }
         const msgs = [{ role: 'system', content: systemParts.join('\n\n---\n\n') }];
-        msgs.push(...conv.messages);
+        if (conv.mode === 'sliding') {
+          const ws = conv.windowSize || 20;
+          msgs.push(...conv.messages.slice(-ws));
+        } else {
+          msgs.push(...conv.messages);
+        }
         return msgs;
       };
 
@@ -4702,7 +4714,7 @@ async function init() {
       let currentTokens = estimateConversationTokens(buildMessages());
       const sendContext = () => {
         const pct = Math.round(currentTokens / MAX_CONTEXT * 1000) / 10;
-        safeSSE('context', { tokens: currentTokens, maxTokens: MAX_CONTEXT, percent: pct, messages: conv.messages.length });
+        safeSSE('context', { tokens: currentTokens, maxTokens: MAX_CONTEXT, percent: pct, messages: conv.messages.length, mode: conv.mode || 'full', windowSize: conv.windowSize || 20 });
       };
       sendContext();
 

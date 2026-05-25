@@ -402,6 +402,13 @@
                   <option value="max">极限</option>
                 </select>
               </div>
+              <div class="assistant-model-select">
+                <label>对话模式</label>
+                <select id="assistant-mode-select" onchange="onChatModeChange(this.value)">
+                  <option value="full">专业</option>
+                  <option value="sliding">长对话</option>
+                </select>
+              </div>
             </div>
             <div class="assistant-chat" id="assistant-chat">
               <div class="assistant-welcome">
@@ -667,6 +674,14 @@
                   <span class="toggle-slider"></span>
                 </label>
               </div>
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-name">智控助手 · 长对话窗口大小</div>
+                  <div class="setting-desc">长对话模式下每次发送给模型的最近消息条数（快捷助手有独立配置）</div>
+                </div>
+                <input type="number" id="settings-window-size" value="20" min="1" max="200"
+                       style="width:120px" onchange="onWindowSizeChange(this.value)">
+              </div>
             </div>
           </div>
           <div class="panel">
@@ -754,6 +769,13 @@
                     <option value="high">高</option>
                     <option value="max">极限</option>
                   </select>
+                </div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">窗口大小</div>
+                    <div class="setting-desc">长对话模式下每次发送给模型的最近消息条数</div>
+                  </div>
+                  <input type="number" id="floating-window-size" value="20" min="1" max="200" style="width:120px" onchange="onFloatingWindowSizeChange(this.value)">
                 </div>
               </div>
               <div class="setting-item" style="flex-direction:column;align-items:stretch;border-top:1px solid var(--border-subtle);padding-top:16px;margin-top:4px">
