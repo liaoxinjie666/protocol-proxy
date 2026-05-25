@@ -54,15 +54,32 @@ OpenAI / Anthropic / Gemini 协议转换透明代理与 AI 运维管理平台。
 
 ## 快速开始
 
+### 方式一：npm 全局安装（推荐）
+
 ```bash
-# 1. 安装依赖
-npm install
+# 安装
+npm install -g protocol-proxy
 
-# 2. 启动服务
-npm start
+# 启动
+protocol-proxy
 
-# 3. 打开管理界面
+# 打开管理界面
 open http://localhost:3000
+```
+
+### 方式二：npx 免安装运行
+
+```bash
+npx protocol-proxy
+```
+
+### 方式三：克隆源码运行
+
+```bash
+git clone https://github.com/liaoxinjie666/protocol-proxy.git
+cd protocol-proxy
+npm install
+npm start
 ```
 
 ## 配置说明

@@ -54,15 +54,32 @@ SSE-based built-in AI management assistant with:
 
 ## Quick Start
 
+### Option 1: Install via npm (Recommended)
+
 ```bash
-# 1. Install dependencies
-npm install
+# Install
+npm install -g protocol-proxy
 
-# 2. Start the server
-npm start
+# Start
+protocol-proxy
 
-# 3. Open the management UI
+# Open the management UI
 open http://localhost:3000
+```
+
+### Option 2: Run without installing
+
+```bash
+npx protocol-proxy
+```
+
+### Option 3: Clone and run from source
+
+```bash
+git clone https://github.com/liaoxinjie666/protocol-proxy.git
+cd protocol-proxy
+npm install
+npm start
 ```
 
 ## Configuration
