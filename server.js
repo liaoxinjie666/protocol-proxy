@@ -117,6 +117,9 @@ async function testProvider(nameFilter) {
         const _fm = provider.models?.[0]; const testModel = (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
         return { url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) } };
       }
+      if (protocol === 'responses') {
+        return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
+      }
       if (protocol === 'gemini') return { url: `${base}/v1beta/models?key=${key}`, opts: {} };
       return null;
     }
@@ -2264,6 +2267,9 @@ async function init() {
           }
           return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
         }
+        if (protocol === 'responses') {
+          return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
+        }
         if (protocol === 'anthropic') {
           const _fm = provider.models?.[0]; const testModel = (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
           return { url: hasV1Suffix ? `${base}/messages` : `${base}/v1/messages`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: testModel, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) } };
@@ -2305,7 +2311,7 @@ async function init() {
       const hasV1Suffix = base.endsWith('/v1');
       const isAzure = protocol === 'openai' && !!provider.azureDeployment;
       let url, headers = {};
-      if (protocol === 'openai') {
+      if (protocol === 'openai' || protocol === 'responses') {
         if (isAzure) {
           const ver = provider.azureApiVersion || '2024-02-01';
           url = `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`;
@@ -2976,7 +2982,7 @@ async function init() {
     const results = await Promise.all(keys.map(async (k, i) => {
       try {
         let testUrl, fetchOpts;
-        if (protocol === 'openai') {
+        if (protocol === 'openai' || protocol === 'responses') {
           if (isAzure) {
             const ver = provider.azureApiVersion || '2024-02-01';
             testUrl = `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`;
@@ -3138,7 +3144,7 @@ async function init() {
     const isAzure = protocol === 'openai' && !!provider.azureDeployment;
 
     function buildTestOpts(key) {
-      if (protocol === 'openai') {
+      if (protocol === 'openai' || protocol === 'responses') {
         if (isAzure) {
           const ver = provider.azureApiVersion || '2024-02-01';
           return {
@@ -3168,7 +3174,7 @@ async function init() {
       return null;
     }
 
-    if (protocol !== 'openai' && protocol !== 'anthropic' && protocol !== 'gemini') {
+    if (protocol !== 'openai' && protocol !== 'responses' && protocol !== 'anthropic' && protocol !== 'gemini') {
       return res.json({ ok: false, message: `不支持的协议: ${protocol}`, results: [] });
     }
 
@@ -3217,6 +3223,9 @@ async function init() {
         }
         return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
       }
+      if (protocol === 'responses') {
+        return { url: hasV1Suffix ? `${base}/models` : `${base}/v1/models`, opts: { headers: { 'Authorization': `Bearer ${key}` } } };
+      }
       if (protocol === 'anthropic') {
         const _fm = Array.isArray(models) ? models[0] : null; const testModel = (typeof _fm === 'string' ? _fm : _fm?.name) || 'claude-3-haiku-20240307';
         return {
@@ -3261,7 +3270,7 @@ async function init() {
 
     try {
       let fetchUrl, fetchOpts, body;
-      if (protocol === 'openai') {
+      if (protocol === 'openai' || protocol === 'responses') {
         fetchUrl = hasV1Suffix ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
         body = JSON.stringify({ model, messages: [{ role: 'user', content: '你好，请简单回复一个问候。' }], max_tokens: 20 });
         fetchOpts = {
@@ -3307,7 +3316,7 @@ async function init() {
 
       const data = await fetchRes.json().catch(() => null);
       let responseText = '';
-      if (protocol === 'openai') {
+      if (protocol === 'openai' || protocol === 'responses') {
         responseText = data?.choices?.[0]?.message?.content || '';
       } else if (protocol === 'anthropic') {
         responseText = data?.content?.[0]?.text || '';
@@ -3399,7 +3408,7 @@ async function init() {
     const isAzure = protocol === 'openai' && !!azureDeployment;
     try {
       let fetchUrl, fetchOpts;
-      if (protocol === 'openai') {
+      if (protocol === 'openai' || protocol === 'responses') {
         if (isAzure) {
           const ver = azureApiVersion || '2024-02-01';
           fetchUrl = `${base}/openai/deployments/${azureDeployment}/models?api-version=${ver}`;
@@ -3474,7 +3483,7 @@ async function init() {
 
     try {
       let fetchUrl, fetchOpts;
-      if (protocol === 'openai') {
+      if (protocol === 'openai' || protocol === 'responses') {
         if (isAzure) {
           const ver = provider.azureApiVersion || '2024-02-01';
           fetchUrl = `${base}/openai/deployments/${provider.azureDeployment}/models?api-version=${ver}`;
