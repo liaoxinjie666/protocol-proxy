@@ -353,85 +353,97 @@
       <!-- ==================== Assistant Page ==================== -->
       <div class="page" id="page-assistant">
         <div class="assistant-layout">
-          <div class="assistant-toolbar">
-            <div class="assistant-model-select">
-              <label>后端代理</label>
-              <select id="assistant-proxy-select">
-                <option value="">选择后端代理...</option>
-              </select>
-            </div>
-            <div class="assistant-model-select">
-              <label>供应商</label>
-              <select id="assistant-provider-select" onchange="onAssistantProviderChange(this.value)">
-                <option value="">自动（跟随代理）</option>
-              </select>
-            </div>
-            <div class="assistant-model-select">
-              <label>模型</label>
-              <select id="assistant-model-select">
-                <option value="">自动（跟随代理）</option>
-              </select>
-            </div>
-            <div class="assistant-model-select">
-              <label>会话</label>
-              <div class="conversation-dropdown" id="conversation-dropdown">
-                <button class="conversation-dropdown-trigger" id="conversation-dropdown-trigger" onclick="toggleConversationDropdown()">新会话</button>
-                <div class="conversation-dropdown-menu" id="conversation-dropdown-menu"></div>
+          <aside class="assistant-sidebar collapsed" id="assistant-sidebar">
+            <div class="sidebar-header">
+              <span>会话历史</span>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-sm" onclick="clearAssistantChat()" title="新会话">+ 新会话</button>
+                <button class="btn btn-sm" onclick="toggleAssistantSidebar()" title="收起">◀</button>
               </div>
             </div>
-            <div class="assistant-model-select">
-              <label>工具权限</label>
-              <select id="assistant-permission-select" onchange="saveAssistantSelection()">
-                <option value="1">🔒 只读</option>
-                <option value="2">📝 配置写入</option>
-                <option value="3" selected>⚠️ 受限（危险需确认）</option>
-                <option value="4">🔓 完全放开</option>
-              </select>
-            </div>
-            <div class="toolbar-actions">
-              <button class="btn btn-sm" onclick="clearAssistantChat()">新会话</button>
-            </div>
-          </div>
-          <div class="assistant-chat" id="assistant-chat">
-            <div class="assistant-welcome">
-              <div class="assistant-welcome-icon">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            <div class="sidebar-list" id="conversation-list"></div>
+          </aside>
+          <div class="assistant-main">
+            <div class="assistant-toolbar">
+              <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" onclick="toggleAssistantSidebar()" title="会话历史">☰</button>
+              <div class="assistant-model-select">
+                <label>后端代理</label>
+                <select id="assistant-proxy-select">
+                  <option value="">选择后端代理...</option>
+                </select>
               </div>
-              <h3>智控助手</h3>
-              <p>我是你的 Protocol Proxy 智能助手，可以帮你：</p>
-              <ul>
-                <li>查询代理和供应商运行状态</li>
-                <li>分析日志，定位异常原因</li>
-                <li>解读配置并给出优化建议</li>
-                <li>自然语言排障与问答</li>
-              </ul>
-              <p class="assistant-hint">请先选择一个运行中的代理作为对话后端</p>
+              <div class="assistant-model-select">
+                <label>供应商</label>
+                <select id="assistant-provider-select" onchange="onAssistantProviderChange(this.value)">
+                  <option value="">自动（跟随代理）</option>
+                </select>
+              </div>
+              <div class="assistant-model-select">
+                <label>模型</label>
+                <select id="assistant-model-select">
+                  <option value="">自动（跟随代理）</option>
+                </select>
+              </div>
+              <div class="assistant-model-select">
+                <label>工具权限</label>
+                <select id="assistant-permission-select" onchange="saveAssistantSelection()">
+                  <option value="1">🔒 只读</option>
+                  <option value="2">📝 配置写入</option>
+                  <option value="3" selected>⚠️ 受限（危险需确认）</option>
+                  <option value="4">🔓 完全放开</option>
+                </select>
+              </div>
+              <div class="assistant-model-select">
+                <label>思考深度</label>
+                <select id="assistant-thinking-select" onchange="saveAssistantSelection()">
+                  <option value="">跟随模型配置</option>
+                  <option value="disabled">关闭</option>
+                  <option value="high">高</option>
+                  <option value="max">极限</option>
+                </select>
+              </div>
             </div>
-          </div>
-          <div class="assistant-context-bar" id="assistant-context-bar" style="display:none">
-            <div class="context-bar-track">
-              <div class="context-bar-fill" id="context-bar-fill" style="width:0%"></div>
+            <div class="assistant-chat" id="assistant-chat">
+              <div class="assistant-welcome">
+                <div class="assistant-welcome-icon">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                </div>
+                <h3>智控助手</h3>
+                <p>我是你的 Protocol Proxy 智能助手，可以帮你：</p>
+                <ul>
+                  <li>查询代理和供应商运行状态</li>
+                  <li>分析日志，定位异常原因</li>
+                  <li>解读配置并给出优化建议</li>
+                  <li>自然语言排障与问答</li>
+                </ul>
+                <p class="assistant-hint">请先选择一个运行中的代理作为对话后端</p>
+              </div>
             </div>
-            <div class="context-bar-info">
-              <span id="context-bar-tokens">0</span> / <span id="context-bar-max">200K</span> tokens
-              (<span id="context-bar-percent">0</span>%)
-              · <span id="context-bar-messages">0</span> 条消息
+            <div class="assistant-context-bar" id="assistant-context-bar" style="display:none">
+              <div class="context-bar-track">
+                <div class="context-bar-fill" id="context-bar-fill" style="width:0%"></div>
+              </div>
+              <div class="context-bar-info">
+                <span id="context-bar-tokens">0</span> / <span id="context-bar-max">200K</span> tokens
+                (<span id="context-bar-percent">0</span>%)
+                · <span id="context-bar-messages">0</span> 条消息
+              </div>
+              <button class="btn btn-sm context-compress-btn" id="context-compress-btn" onclick="compressAssistantContext()" style="display:none">压缩</button>
             </div>
-            <button class="btn btn-sm context-compress-btn" id="context-compress-btn" onclick="compressAssistantContext()" style="display:none">压缩</button>
-          </div>
-          <div class="skill-panel" id="skill-panel" style="display:none">
-            <div class="skill-panel-header"><span>可用技能</span><button class="btn btn-sm" onclick="toggleSkillPanel()">收起</button></div>
-            <div class="skill-panel-list" id="skill-panel-list"></div>
-          </div>
-          <div class="assistant-input-area" style="position:relative">
-            <div class="skill-autocomplete" id="skill-autocomplete"></div>
-            <div class="attachment-preview" id="attachment-preview"></div>
-            <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？ 输入 / 触发技能" rows="1"></textarea>
-            <input type="file" id="assistant-file-input" accept="image/*,audio/*" multiple style="display:none" onchange="handleAssistantFileSelect(this.files)">
-            <button class="btn" onclick="document.getElementById('assistant-file-input').click()" title="上传图片或音频" style="padding:0 10px;font-size:16px">📎</button>
-            <button class="btn" id="mic-btn" onclick="toggleVoiceRecording()" title="语音输入" style="padding:0 8px;display:flex;align-items:center;justify-content:center"></button>
-            <button class="btn" onclick="toggleSkillPanel()" title="查看可用技能" style="padding:0 10px;font-size:16px">⚡</button>
-            <button class="btn btn-primary" id="assistant-send-btn" onclick="sendAssistantMessage()" disabled>发送</button>
+            <div class="skill-panel" id="skill-panel" style="display:none">
+              <div class="skill-panel-header"><span>可用技能</span><button class="btn btn-sm" onclick="toggleSkillPanel()">收起</button></div>
+              <div class="skill-panel-list" id="skill-panel-list"></div>
+            </div>
+            <div class="assistant-input-area" style="position:relative">
+              <div class="skill-autocomplete" id="skill-autocomplete"></div>
+              <div class="attachment-preview" id="attachment-preview"></div>
+              <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？ 输入 / 触发技能" rows="1"></textarea>
+              <input type="file" id="assistant-file-input" accept="image/*,audio/*" multiple style="display:none" onchange="handleAssistantFileSelect(this.files)">
+              <button class="btn" onclick="document.getElementById('assistant-file-input').click()" title="上传图片或音频" style="padding:0 10px;font-size:16px">📎</button>
+              <button class="btn" id="mic-btn" onclick="toggleVoiceRecording()" title="语音输入" style="padding:0 8px;display:flex;align-items:center;justify-content:center"></button>
+              <button class="btn" onclick="toggleSkillPanel()" title="查看可用技能" style="padding:0 10px;font-size:16px">⚡</button>
+              <button class="btn btn-primary" id="assistant-send-btn" onclick="sendAssistantMessage()" disabled>发送</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1048,9 +1060,9 @@
             <button type="button" class="btn btn-sm" onclick="fetchModelsForProvider(this)" style="margin-top:8px">自动获取模型列表</button>
           </div>
           <div class="form-group" id="model-context-table" style="display:none">
-            <label>模型上下文长度</label>
+            <label>模型参数配置</label>
             <table class="model-context-table">
-              <thead><tr><th>模型</th><th>上下文长度</th></tr></thead>
+              <thead><tr><th>模型</th><th>上下文长度</th><th>思考深度</th></tr></thead>
               <tbody id="model-context-tbody"></tbody>
             </table>
           </div>

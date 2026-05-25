@@ -525,6 +525,39 @@ async function init() {
     return Math.max(10000, parseInt(settings.maxContext) || 200000);
   }
 
+  function resolveThinkingEffort(effectiveModel, proxy, overrideProviderId) {
+    if (effectiveModel) {
+      if (overrideProviderId) {
+        const p = configStore.getProviderById(overrideProviderId);
+        if (p) {
+          const m = (p.models || []).find(m => m.name === effectiveModel);
+          if (m && m.thinkingEffort) return m.thinkingEffort;
+        }
+      }
+      if (proxy) {
+        const provider = configStore.getProviderById(proxy.providerId);
+        if (provider) {
+          const m = (provider.models || []).find(m => m.name === effectiveModel);
+          if (m && m.thinkingEffort) return m.thinkingEffort;
+        }
+        for (const entry of (proxy.providerPool || [])) {
+          const p = configStore.getProviderById(entry.providerId);
+          if (!p) continue;
+          const m = (p.models || []).find(m => m.name === effectiveModel);
+          if (m && m.thinkingEffort) return m.thinkingEffort;
+        }
+      }
+    }
+    return '';
+  }
+
+  function buildThinkingParams(thinkingEffort) {
+    if (thinkingEffort === 'high' || thinkingEffort === 'max') {
+      return { thinking: { type: 'enabled' }, reasoning_effort: thinkingEffort };
+    }
+    return { thinking: { type: 'disabled' } };
+  }
+
   function normalizeProviderPoolInput(pool) {
     if (!Array.isArray(pool)) return [];
     const seen = new Set();
@@ -4464,7 +4497,7 @@ async function init() {
   });
 
   app.post('/api/assistant/chat', async (req, res) => {
-    const { proxyId, conversationId, message, compress, providerId, model } = req.body;
+    const { proxyId, conversationId, message, compress, providerId, model, thinkingEffort } = req.body;
     if (!proxyId || (!compress && !message)) {
       return res.status(400).json({ error: '需要 proxyId 和 message' });
     }
@@ -4576,6 +4609,8 @@ async function init() {
     const effectiveModel = model || proxy.defaultModel;
     const MAX_CONTEXT = resolveModelContext(effectiveModel, proxy, settings, providerId);
     const MAX_TOOL_ROUNDS = Math.max(1, Math.min(100, parseInt(settings.maxRounds) || 10));
+    const effectiveThinkingEffort = thinkingEffort || resolveThinkingEffort(effectiveModel, proxy, providerId);
+    const thinkingParams = buildThinkingParams(effectiveThinkingEffort);
 
     // 音频输入协议兼容性检查
     if (Array.isArray(message) && message.some(b => b.type === 'input_audio')) {
@@ -4684,6 +4719,7 @@ async function init() {
               stream: true,
               tools: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
               tool_choice: 'auto',
+              ...thinkingParams,
             }),
           });
         } catch (fetchErr) {

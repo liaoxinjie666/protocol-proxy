@@ -132,6 +132,10 @@ function cycleTheme() {
       const permSel = document.getElementById('assistant-permission-select');
       if (permSel) permSel.value = settings.assistantPermissionLevel;
     }
+    if (settings.assistantThinkingEffort) {
+      const thinkSel = document.getElementById('assistant-thinking-select');
+      if (thinkSel) thinkSel.value = settings.assistantThinkingEffort;
+    }
     if (settings.assistantConversationId) {
       assistantConversationId = settings.assistantConversationId;
     }
@@ -821,7 +825,7 @@ function handleModelTagInput(e) {
     e.preventDefault();
     const val = e.target.value.trim();
     if (val && !providerModelTags.some(m => m.name === val)) {
-      providerModelTags.push({ name: val, contextLength: 0 });
+      providerModelTags.push({ name: val, contextLength: 0, thinkingEffort: '' });
       renderModelTags();
       e.target.value = '';
     }
@@ -837,10 +841,12 @@ function renderModelContextTable() {
   tbody.innerHTML = providerModelTags.map((m, i) => {
     const unit = m._unit || 'k';
     const divisor = unit === 'm' ? 1000000 : 1000;
+    const effort = m.thinkingEffort || '';
     return `<tr>
       <td>${escapeHtml(m.name)}</td>
       <td style="display:flex;align-items:center;gap:4px"><input type="number" min="0" step="any" value="${m.contextLength ? m.contextLength / divisor : ''}" placeholder="跟随系统设置"
           onchange="updateModelContext(${i}, this.value)" style="width:90px"><select onchange="updateModelContextUnit(${i}, this.value)" style="font-size:12px;padding:2px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary);width:40px"><option value="k"${unit === 'k' ? ' selected' : ''}>k</option><option value="m"${unit === 'm' ? ' selected' : ''}>m</option></select></td>
+      <td><select onchange="updateModelThinkingEffort(${i}, this.value)" style="font-size:12px;padding:2px 4px;border:1px solid var(--border-default);border-radius:3px;background:var(--bg-surface);color:var(--text-primary)"><option value=""${effort === '' ? ' selected' : ''}>关闭</option><option value="high"${effort === 'high' ? ' selected' : ''}>高</option><option value="max"${effort === 'max' ? ' selected' : ''}>极限</option></select></td>
     </tr>`;
   }).join('');
 }
@@ -865,6 +871,12 @@ function updateModelContext(index, value) {
     const unit = providerModelTags[index]._unit || 'k';
     const multiplier = unit === 'm' ? 1000000 : 1000;
     providerModelTags[index].contextLength = Math.max(0, Math.round((parseFloat(value) || 0) * multiplier));
+  }
+}
+
+function updateModelThinkingEffort(index, value) {
+  if (providerModelTags[index]) {
+    providerModelTags[index].thinkingEffort = value;
   }
 }
 
@@ -2590,6 +2602,7 @@ async function sendAssistantMessage() {
         ...(providerVal && { providerId: providerVal }),
         ...(modelVal && { model: modelVal }),
         permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
+        thinkingEffort: document.getElementById('assistant-thinking-select')?.value || '',
       }),
       signal: assistantAbortController.signal,
     });
@@ -3018,6 +3031,7 @@ async function retryLastMessage() {
         ...(providerVal && { providerId: providerVal }),
         ...(modelVal && { model: modelVal }),
         permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
+        thinkingEffort: document.getElementById('assistant-thinking-select')?.value || '',
       }),
       signal: assistantAbortController.signal,
     });
@@ -3171,8 +3185,7 @@ function clearAssistantChat() {
   assistantMessages = [];
   assistantConversationId = '';
   saveAssistantSelection();
-  const trigger = document.getElementById('conversation-dropdown-trigger');
-  if (trigger) trigger.textContent = '新会话';
+  highlightActiveConversation();
   const savedModel = document.getElementById('assistant-model-select')?.value || '';
   populateProviderSelect();
   populateModelSelect();
@@ -3346,21 +3359,20 @@ function onAgentToolCheck(checkbox) {
   }).then(showSaveToast).catch(() => {});
 }
 
-function toggleConversationDropdown() {
-  const menu = document.getElementById('conversation-dropdown-menu');
-  if (!menu) return;
-  menu.classList.toggle('open');
+function toggleAssistantSidebar() {
+  const sidebar = document.getElementById('assistant-sidebar');
+  const toggleBtn = document.getElementById('sidebar-toggle-btn');
+  if (!sidebar) return;
+  sidebar.classList.toggle('collapsed');
+  const collapsed = sidebar.classList.contains('collapsed');
+  if (toggleBtn) toggleBtn.style.display = collapsed ? '' : 'none';
+  localStorage.setItem('assistant-sidebar-collapsed', collapsed ? '1' : '');
 }
 
-function updateConversationTriggerLabel() {
-  const trigger = document.getElementById('conversation-dropdown-trigger');
-  if (!trigger) return;
-  if (assistantConversationId) {
-    const item = document.querySelector(`.conversation-dropdown-item[data-id="${assistantConversationId}"] .conversation-dropdown-item-label`);
-    trigger.textContent = item ? item.textContent : assistantConversationId;
-  } else {
-    trigger.textContent = '新会话';
-  }
+function highlightActiveConversation() {
+  document.querySelectorAll('.sidebar-conv-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === assistantConversationId);
+  });
 }
 
 async function deleteConversationById(convId, event) {
@@ -3381,26 +3393,21 @@ async function loadConversations() {
   try {
     const res = await fetch('/api/assistant/conversations');
     const data = await res.json();
-    const menu = document.getElementById('conversation-dropdown-menu');
-    if (!menu) return;
+    const list = document.getElementById('conversation-list');
+    if (!list) return;
     const sorted = (data.conversations || []).slice().reverse();
-    menu.innerHTML = '';
+    list.innerHTML = '';
     for (const c of sorted) {
       const date = new Date(c.lastActivity).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
       const label = (c.preview || '空会话').slice(0, 30) + ' — ' + date;
       const item = document.createElement('div');
-      item.className = 'conversation-dropdown-item' + (c.id === assistantConversationId ? ' active' : '');
+      item.className = 'sidebar-conv-item' + (c.id === assistantConversationId ? ' active' : '');
       item.dataset.id = c.id;
-      item.innerHTML = `<span class="conversation-dropdown-item-label">${escapeHtml(label)}</span><button class="conversation-dropdown-item-delete" title="删除">×</button>`;
-      item.querySelector('.conversation-dropdown-item-label').onclick = () => {
-        menu.classList.remove('open');
-        document.getElementById('conversation-dropdown-trigger').textContent = label;
-        switchConversation(c.id);
-      };
-      item.querySelector('.conversation-dropdown-item-delete').onclick = (e) => deleteConversationById(c.id, e);
-      menu.appendChild(item);
+      item.innerHTML = `<span class="sidebar-conv-item-label">${escapeHtml(label)}</span><button class="sidebar-conv-item-delete" title="删除">×</button>`;
+      item.querySelector('.sidebar-conv-item-label').onclick = () => switchConversation(c.id);
+      item.querySelector('.sidebar-conv-item-delete').onclick = (e) => deleteConversationById(c.id, e);
+      list.appendChild(item);
     }
-    updateConversationTriggerLabel();
   } catch (err) {
     showToast('加载会话列表失败: ' + err.message, true);
   }
@@ -3765,10 +3772,11 @@ function onAssistantProviderChange(value) {
 function saveAssistantSelection() {
   const modelVal = document.getElementById('assistant-model-select')?.value || '';
   const permVal = document.getElementById('assistant-permission-select')?.value || '3';
+  const thinkingVal = document.getElementById('assistant-thinking-select')?.value || '';
   fetch('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel: modelVal, assistantPermissionLevel: permVal, assistantConversationId }),
+    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel: modelVal, assistantPermissionLevel: permVal, assistantThinkingEffort: thinkingVal, assistantConversationId }),
   }).catch(() => {});
 }
 
@@ -3793,13 +3801,15 @@ function saveAssistantSelection() {
   }
 })();
 
-// 点击外部关闭会话下拉
-document.addEventListener('click', (e) => {
-  const dropdown = document.getElementById('conversation-dropdown');
-  if (dropdown && !dropdown.contains(e.target)) {
-    document.getElementById('conversation-dropdown-menu')?.classList.remove('open');
+// 恢复侧边栏状态（默认收起）
+(function() {
+  const sidebar = document.getElementById('assistant-sidebar');
+  const toggleBtn = document.getElementById('sidebar-toggle-btn');
+  if (sidebar && localStorage.getItem('assistant-sidebar-collapsed') !== '1') {
+    sidebar.classList.remove('collapsed');
+    if (toggleBtn) toggleBtn.style.display = 'none';
   }
-});
+})();
 
 // ========== 助手 Skill 补全 ==========
 let assistantSkills = []; // 助手页面缓存的 skill 列表
