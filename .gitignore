@@ -1,5 +1,6 @@
 node_modules/
 .openchrome/
+.deepseek/
 dist/
 *.log
 *.tgz
