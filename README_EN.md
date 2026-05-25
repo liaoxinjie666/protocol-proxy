@@ -40,12 +40,17 @@ SSE-based built-in AI management assistant with:
 
 ## Screenshots
 
-<!-- Place your screenshots in the screenshots/ directory and replace the placeholders below -->
-<!-- ![Dashboard](screenshots/dashboard.png) -->
-<!-- ![AI Assistant](screenshots/ai-assistant.png) -->
-<!-- ![Protocol Conversion](screenshots/protocol-conversion.png) -->
+| Dashboard | AI Assistant | Proxy Management |
+|:---:|:---:|:---:|
+| ![Dashboard](screenshots/01-dashboard.png) | ![AI Assistant](screenshots/02-ai-assistant.png) | ![Proxy Management](screenshots/03-proxy-management.png) |
 
-> 📸 Screenshots coming soon — PRs welcome
+| Usage Stats | Provider Management | MCP Services |
+|:---:|:---:|:---:|
+| ![Usage Stats](screenshots/04-usage-stats.png) | ![Provider Management](screenshots/05-provider-management.png) | ![MCP Services](screenshots/06-mcp-services.png) |
+
+| Skills Management |
+|:---:|
+| ![Skills Management](screenshots/07-skills.png) |
 
 ## Quick Start
 

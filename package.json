@@ -13,7 +13,10 @@
     "config/",
     "agents/",
     "skills/",
-    "README.md"
+    "README.md",
+    "README_EN.md",
+    "CONTRIBUTING.md",
+    "LICENSE"
   ],
   "keywords": [
     "proxy",

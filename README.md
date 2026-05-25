@@ -40,12 +40,17 @@ OpenAI / Anthropic / Gemini 协议转换透明代理与 AI 运维管理平台。
 
 ## 截图
 
-<!-- 将你的截图放到 screenshots/ 目录下，然后替换下方占位符 -->
-<!-- ![管理界面](screenshots/dashboard.png) -->
-<!-- ![智控助手](screenshots/ai-assistant.png) -->
-<!-- ![协议转换](screenshots/protocol-conversion.png) -->
+| 总览 | 智控助手 | 代理管理 |
+|:---:|:---:|:---:|
+| ![总览](screenshots/01-dashboard.png) | ![智控助手](screenshots/02-ai-assistant.png) | ![代理管理](screenshots/03-proxy-management.png) |
 
-> 📸 截图待补充 — 欢迎提交 PR 添加
+| 用量统计 | 供应商管理 | MCP 服务 |
+|:---:|:---:|:---:|
+| ![用量统计](screenshots/04-usage-stats.png) | ![供应商管理](screenshots/05-provider-management.png) | ![MCP服务](screenshots/06-mcp-services.png) |
+
+| 技能管理 |
+|:---:|
+| ![技能管理](screenshots/07-skills.png) |
 
 ## 快速开始
 
