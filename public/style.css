@@ -4287,3 +4287,21 @@ body {
   color: var(--text-muted, #888);
   font-size: 13px;
 }
+.cc-backup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.cc-backup-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text, #1e293b);
+}
+.cc-backup-item .btn { flex-shrink: 0; }

@@ -5316,6 +5316,38 @@ async function init() {
     }
   });
 
+  app.post('/api/client-config/test', async (req, res) => {
+    try {
+      const { proxyId } = req.body || {};
+      if (!proxyId) return res.json({ ok: false, message: '缺少 proxyId' });
+      const proxy = configStore.getProxyById(proxyId);
+      if (!proxy) return res.json({ ok: false, message: '代理不存在' });
+      if (!proxy.running) return res.json({ ok: false, message: '代理未运行' });
+      const result = await clientConfig.testConnection(proxy);
+      res.json(result);
+    } catch (err) {
+      res.json({ ok: false, message: err.message });
+    }
+  });
+
+  app.get('/api/client-config/backups/:tool', (req, res) => {
+    try {
+      res.json({ ok: true, backups: clientConfig.listBackups(req.params.tool) });
+    } catch (err) {
+      res.json({ ok: false, message: err.message });
+    }
+  });
+
+  app.post('/api/client-config/restore/:tool', (req, res) => {
+    try {
+      const { backupId } = req.body || {};
+      if (!backupId) return res.json({ ok: false, message: '缺少 backupId' });
+      res.json(clientConfig.restoreBackup(req.params.tool, backupId));
+    } catch (err) {
+      res.json({ ok: false, message: err.message });
+    }
+  });
+
   // 前端首页
   app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
