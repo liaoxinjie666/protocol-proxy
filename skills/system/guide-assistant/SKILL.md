@@ -199,24 +199,10 @@ MCP 服务器可为 AI 提供额外工具能力。系统预置了 10+ 个常用 
 | `stop_task` | 终止任务 | 停止正在运行的子任务 |
 | `message_task` | 追加消息 | 向已完成或失败的子任务追加消息，可指定额外轮次继续执行 |
 | `list_agents` | 列出代理身份 | 查看所有可用的代理身份（用于 `delegate_task` 的 `agent` 参数） |
-| `get_agent` | 查看代理详情 | 获取单个 Agent 身份的完整信息 |
-| `create_agent` | 创建代理身份 | 创建新的 Agent 身份（名称、人设、颜色、角色） |
-| `update_agent` | 更新代理身份 | 修改已有 Agent 身份的配置 |
-| `delete_agent` | 删除代理身份 | 删除非系统级 Agent 身份 |
-| `reload_agents` | 重载代理身份 | 从磁盘重新加载所有 Agent 定义 |
 
 ### 子任务安全限制
 
-子智能体运行在受限沙盒环境中：
-
-| 限制 | 说明 |
-|------|------|
-| **工具限制** | 部分工具（如 `delegate_task`）被阻止，子代理无法递归委派 |
-| **写入隔离** | 文件写入和编辑操作被限制在沙盒目录内 |
-| **命令策略** | shell 命令通过执行策略引擎评估（Allow/Prompt/Forbidden），危险命令被禁止 |
-| **自动拒绝** | write_file、edit_file 被自动拒绝，子代理需在沙盒内操作 |
-
-这些限制可在「设置」→「子智能体」和「设置」→「执行策略」中自定义。使用 `get_exec_policy` 查看策略概览，`get_exec_policy_rules` 查看完整规则，`test_exec_policy` 测试命令安全性，`add_exec_policy_rule` / `remove_exec_policy_rule` 管理自定义规则。
+子智能体运行在受限沙盒中：递归委派被阻止，写入隔离在沙盒目录内，危险命令由执行策略引擎拦截。详见 `/guide-settings` 第三节（子智能体设置）和第六节（执行策略）。
 
 ### 子任务状态
 
@@ -229,6 +215,19 @@ MCP 服务器可为 AI 提供额外工具能力。系统预置了 10+ 个常用 
 | **completed** | 执行完成，显示结果摘要 |
 | **failed** | 执行失败，显示错误信息 |
 | **stopped** | 被手动终止 |
+
+## Agent 身份管理
+
+Agent 身份用于定义子代理的人设和行为风格，可通过 `delegate_task` 的 `agent` 参数指定。
+
+| 工具 | 功能 |
+|------|------|
+| `list_agents` | 列出所有可用的代理身份 |
+| `get_agent` | 获取单个 Agent 的详细信息 |
+| `create_agent` | 创建新的 Agent 身份（名称、人设、颜色、角色） |
+| `update_agent` | 修改已有 Agent 身份的配置 |
+| `delete_agent` | 删除非系统级 Agent 身份 |
+| `reload_agents` | 从磁盘重新加载所有 Agent 定义 |
 
 ## Agent 人设（SOUL.md）
 
@@ -251,28 +250,10 @@ MCP 服务器可为 AI 提供额外工具能力。系统预置了 10+ 个常用 
 
 工具审批权限可在「设置」中配置，也可通过工具权限分级自动控制。
 
-## 客户端配置管理
+## 其他能力
 
-智控助手可以帮助配置外部客户端工具（Claude Code、Codex）连接到本系统的代理。
-
-| 工具 | 功能 | 权限 |
-|------|------|------|
-| `detect_client_config` | 检测客户端工具的安装状态和配置情况 | 只读 |
-| `preview_client_config` | 预览配置内容（写入前查看） | 只读 |
-| `write_client_config` | 将代理配置写入客户端（自动备份） | 写入 |
-| `test_client_connection` | 测试客户端通过代理的连通性 | 只读 |
-| `list_client_backups` | 列出客户端配置的历史备份 | 只读 |
-| `restore_client_backup` | 从备份恢复客户端配置 | 写入 |
-
-典型用法："帮我检测 Claude Code 的配置状态"、"把代理 xxx 写入 Codex 的配置"、"测试一下代理连通性"。
-
-## MCP 预设管理
-
-| 工具 | 功能 |
-|------|------|
-| `get_mcp_presets` | 获取系统预置的 MCP 服务器列表（含是否已添加状态） |
-
-通过此工具，AI 可以推荐并引导用户安装预置的 MCP 服务器（如 Context7、Sequential Thinking 等）。
+- **客户端配置管理**：检测、配置、备份恢复 Claude Code / Codex 的代理连接，详见 `/guide-client-config`
+- **MCP 预设推荐**：通过 `get_mcp_presets` 获取预置 MCP 服务器列表并引导安装，详见 `/guide-mcp`
 
 ## 快捷键
 
