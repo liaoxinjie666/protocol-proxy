@@ -400,6 +400,7 @@ async function init() {
   const statsStore = require('./lib/stats-store');
   const mcpClient = require('./lib/mcp-client');
   const mcpToolStats = require('./lib/mcp-tool-stats');
+  const clientConfig = require('./lib/client-config');
   mcpToolStats.load();
 
   const app = express();
@@ -5240,6 +5241,79 @@ async function init() {
     const result = configStore.restoreSnapshot(file, versionId);
     if (result.error) return res.status(400).json({ error: result.error });
     res.json({ success: true, reconstructed: !!result.reconstructed });
+  });
+
+  // ==================== 客户端一键配置 API ====================
+
+  app.get('/api/client-config/detect/:tool', async (req, res) => {
+    try {
+      const proxies = configStore.getProxies();
+      const result = await clientConfig.detectTool(req.params.tool, proxies);
+      res.json(result);
+    } catch (err) {
+      res.json({ ok: false, message: err.message });
+    }
+  });
+
+  app.post('/api/client-config/install/:tool', async (req, res) => {
+    const { method } = req.body || {};
+    // SSE for streaming install logs
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const sendEvent = (data) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const result = await clientConfig.installTool(req.params.tool, method || 'npm', (log) => {
+        sendEvent({ type: 'log', message: log });
+      });
+      sendEvent({ type: 'done', ...result });
+    } catch (err) {
+      sendEvent({ type: 'done', ok: false, message: err.message });
+    }
+    res.end();
+  });
+
+  app.get('/api/client-config/preview/:tool', async (req, res) => {
+    try {
+      const { proxyId } = req.query;
+      if (!proxyId) return res.json({ ok: false, message: '缺少 proxyId' });
+      const proxy = configStore.getProxyById(proxyId);
+      if (!proxy) return res.json({ ok: false, message: '代理不存在' });
+
+      if (req.params.tool === 'claude-code') {
+        res.json(clientConfig.previewClaudeCode(proxy));
+      } else if (req.params.tool === 'codex') {
+        res.json(clientConfig.previewCodex(proxy));
+      } else {
+        res.json({ ok: false, message: '未知工具' });
+      }
+    } catch (err) {
+      res.json({ ok: false, message: err.message });
+    }
+  });
+
+  app.post('/api/client-config/write/:tool', async (req, res) => {
+    try {
+      const { proxyId } = req.body || {};
+      if (!proxyId) return res.json({ ok: false, message: '缺少 proxyId' });
+      const proxy = configStore.getProxyById(proxyId);
+      if (!proxy) return res.json({ ok: false, message: '代理不存在' });
+
+      if (req.params.tool === 'claude-code') {
+        res.json(clientConfig.writeClaudeCode(proxy));
+      } else if (req.params.tool === 'codex') {
+        res.json(clientConfig.writeCodex(proxy));
+      } else {
+        res.json({ ok: false, message: '未知工具' });
+      }
+    } catch (err) {
+      res.json({ ok: false, message: err.message });
+    }
   });
 
   // 前端首页

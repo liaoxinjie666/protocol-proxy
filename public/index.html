@@ -134,6 +134,27 @@
           </div>
         </div>
 
+        <div class="client-config-grid" id="client-config-grid">
+          <div class="client-config-card" onclick="startClientConfig('claude-code')">
+            <div class="client-config-icon claude-code-icon">
+              <img src="claude-color.svg" alt="Claude" width="28" height="28" style="display:block">
+            </div>
+            <div class="client-config-info">
+              <div class="client-config-name">Claude Code</div>
+              <div class="client-config-status" id="cc-status">检测中...</div>
+            </div>
+          </div>
+          <div class="client-config-card" onclick="startClientConfig('codex')">
+            <div class="client-config-icon codex-icon">
+              <img src="codex-color.svg" alt="Codex" width="28" height="28" style="display:block">
+            </div>
+            <div class="client-config-info">
+              <div class="client-config-name">Codex</div>
+              <div class="client-config-status" id="codex-status">检测中...</div>
+            </div>
+          </div>
+        </div>
+
         <div class="dashboard-row">
           <div class="panel flex-2">
             <div class="panel-header">
@@ -1722,6 +1743,52 @@
       <button class="btn btn-primary floating-chat-send" id="floating-chat-send" onclick="sendFloatingChatMessage()" disabled>发送</button>
     </div>
     <div class="floating-chat-resize" id="floating-chat-resize"></div>
+  </div>
+
+  <!-- Client Config Modal -->
+  <div class="modal-overlay" id="client-config-modal">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <h3 id="client-config-modal-title">一键配置</h3>
+        <button class="modal-close" onclick="closeClientConfigModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Step: Select Proxy -->
+        <div id="cc-step-select-proxy" style="display:none">
+          <p class="cc-step-label">选择要使用的代理</p>
+          <div class="cc-proxy-list" id="cc-proxy-list"></div>
+        </div>
+        <!-- Step: Install -->
+        <div id="cc-step-install" style="display:none">
+          <p class="cc-step-label" id="cc-install-label">检测到未安装，是否一键安装？</p>
+          <div class="cc-install-methods" id="cc-install-methods">
+            <label class="cc-radio-item"><input type="radio" name="cc-install-method" value="npm" checked> npm install -g</label>
+            <label class="cc-radio-item"><input type="radio" name="cc-install-method" value="npm-mirror"> npm + 国内镜像加速</label>
+            <label class="cc-radio-item"><input type="radio" name="cc-install-method" value="npx"> npx (免安装运行)</label>
+          </div>
+          <div class="cc-install-log" id="cc-install-log"></div>
+        </div>
+        <!-- Step: Preview -->
+        <div id="cc-step-preview" style="display:none">
+          <p class="cc-step-label">将进行以下配置变更：</p>
+          <div class="cc-preview-file" id="cc-preview-file"></div>
+          <div class="cc-preview-changes" id="cc-preview-changes"></div>
+        </div>
+        <!-- Step: Result -->
+        <div id="cc-step-result" style="display:none">
+          <div class="cc-result-icon" id="cc-result-icon"></div>
+          <p class="cc-result-text" id="cc-result-text"></p>
+        </div>
+        <!-- Hint for errors -->
+        <div class="cc-hint" id="cc-hint" style="display:none">
+          如果遇到问题，可以点击右下角小机器人与智控助手沟通处理
+        </div>
+        <div class="modal-footer" id="cc-modal-footer">
+          <button class="btn" onclick="closeClientConfigModal()">取消</button>
+          <button class="btn btn-primary" id="cc-action-btn" onclick="clientConfigAction()">确认</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>

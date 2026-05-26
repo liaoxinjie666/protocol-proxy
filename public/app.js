@@ -302,6 +302,281 @@ function refreshDashboard() {
   renderDashProxies();
   renderDashProviderHealth();
   renderDashRecentRequests();
+  detectClientTools();
+}
+
+// ---------- Client Config (Claude Code / Codex) ----------
+let ccCurrentTool = null;    // 'claude-code' | 'codex'
+let ccCurrentStep = null;    // 'select-proxy' | 'install' | 'preview' | 'result'
+let ccSelectedProxyId = null;
+let ccToolInfo = null;       // { installed, configured, ... }
+
+async function detectClientTools() {
+  for (const toolId of ['claude-code', 'codex']) {
+    const el = document.getElementById(toolId === 'claude-code' ? 'cc-status' : 'codex-status');
+    if (!el) continue;
+    try {
+      const res = await fetch(`/api/client-config/detect/${toolId}`);
+      const data = await res.json();
+      if (!data.ok) { el.textContent = '检测失败'; continue; }
+      if (!data.installed) {
+        el.textContent = '未安装';
+        el.className = 'client-config-status not-installed';
+      } else if (data.configuredOurProxy) {
+        el.textContent = '已配置 · 指向本代理';
+        el.className = 'client-config-status configured';
+      } else if (data.configured) {
+        el.textContent = '已配置 · 指向其他代理';
+        el.className = 'client-config-status configured-other';
+      } else {
+        el.textContent = '已安装 · 未配置';
+        el.className = 'client-config-status not-configured';
+      }
+    } catch {
+      el.textContent = '检测失败';
+    }
+  }
+}
+
+async function startClientConfig(toolId) {
+  ccCurrentTool = toolId;
+  ccSelectedProxyId = null;
+  const toolName = toolId === 'claude-code' ? 'Claude Code' : 'Codex';
+  document.getElementById('client-config-modal-title').textContent = `一键配置 ${toolName}`;
+
+  // Hide all steps
+  ['cc-step-select-proxy', 'cc-step-install', 'cc-step-preview', 'cc-step-result', 'cc-hint'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  showModal('client-config-modal');
+
+  // Step 1: Check proxies
+  if (!proxies || proxies.length === 0) {
+    // No proxies - show onboarding first
+    hideModal('client-config-modal');
+    navigateTo('proxies');
+    openOnboardingModal();
+    return;
+  }
+
+  // Step 2: Detect tool
+  const detectRes = await fetch(`/api/client-config/detect/${toolId}`);
+  const detectData = await detectRes.json();
+  ccToolInfo = detectData;
+
+  if (!detectData.ok) {
+    showClientConfigResult(false, '检测工具状态失败');
+    return;
+  }
+
+  if (!detectData.installed) {
+    // Not installed - show install step
+    showClientConfigInstall();
+    return;
+  }
+
+  // Installed - select proxy (or auto-select if only one)
+  if (proxies.length === 1) {
+    ccSelectedProxyId = proxies[0].id;
+    showClientConfigPreview();
+  } else {
+    showClientConfigSelectProxy();
+  }
+}
+
+function showClientConfigSelectProxy() {
+  ccCurrentStep = 'select-proxy';
+  const stepEl = document.getElementById('cc-step-select-proxy');
+  stepEl.style.display = '';
+  document.getElementById('cc-install-log').className = 'cc-install-log';
+
+  const listEl = document.getElementById('cc-proxy-list');
+  listEl.innerHTML = proxies.map(p => {
+    const provider = providers.find(pr => pr.id === p.providerId);
+    return `<div class="cc-proxy-item" data-id="${p.id}" onclick="selectClientConfigProxy('${p.id}')">
+      <div class="proxy-dot ${p.running ? 'running' : 'stopped'}"></div>
+      <span class="proxy-name">${escapeHtml(p.name)}</span>
+      <span class="proxy-port">:${p.port} · ${escapeHtml(provider?.name || '')}</span>
+    </div>`;
+  }).join('');
+
+  const actionBtn = document.getElementById('cc-action-btn');
+  actionBtn.textContent = '下一步';
+  actionBtn.disabled = true;
+}
+
+function selectClientConfigProxy(proxyId) {
+  ccSelectedProxyId = proxyId;
+  document.querySelectorAll('.cc-proxy-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.id === proxyId);
+  });
+  document.getElementById('cc-action-btn').disabled = false;
+}
+
+function showClientConfigInstall() {
+  ccCurrentStep = 'install';
+  const toolName = ccCurrentTool === 'claude-code' ? 'Claude Code' : 'Codex';
+  document.getElementById('cc-install-label').textContent = `检测到未安装 ${toolName}，是否一键安装？`;
+  document.getElementById('cc-step-install').style.display = '';
+  document.getElementById('cc-install-log').className = 'cc-install-log';
+  document.getElementById('cc-install-log').textContent = '';
+
+  const actionBtn = document.getElementById('cc-action-btn');
+  actionBtn.textContent = '安装';
+  actionBtn.disabled = false;
+}
+
+function showClientConfigPreview() {
+  ccCurrentStep = 'preview';
+  const stepEl = document.getElementById('cc-step-preview');
+  stepEl.style.display = '';
+
+  const actionBtn = document.getElementById('cc-action-btn');
+  actionBtn.textContent = '确认配置';
+  actionBtn.disabled = true;
+
+  // Ensure proxy is running
+  const proxy = proxies.find(p => p.id === ccSelectedProxyId);
+  if (proxy && !proxy.running) {
+    fetch(`/api/proxies/${proxy.id}/start`, { method: 'POST' }).then(() => {
+      loadProxies().then(() => fetchPreview());
+    });
+  } else {
+    fetchPreview();
+  }
+}
+
+async function fetchPreview() {
+  try {
+    const res = await fetch(`/api/client-config/preview/${ccCurrentTool}?proxyId=${ccSelectedProxyId}`);
+    const data = await res.json();
+    if (!data.ok) {
+      showClientConfigResult(false, data.message);
+      return;
+    }
+
+    const fileEl = document.getElementById('cc-preview-file');
+    fileEl.textContent = data.willCreate
+      ? `将创建: ${data.configPath}`
+      : `修改: ${data.configPath}`;
+
+    const changesEl = document.getElementById('cc-preview-changes');
+    if (data.changes.length === 0) {
+      changesEl.innerHTML = '<div class="cc-no-proxy-msg">配置已是最新，无需变更</div>';
+      document.getElementById('cc-action-btn').disabled = true;
+    } else {
+      changesEl.innerHTML = data.changes.map(c => `<div class="cc-change-item">
+        <div class="cc-change-field">${escapeHtml(c.field)}</div>
+        <div><span class="cc-change-old">${escapeHtml(String(c.old))}</span> <span class="cc-change-arrow">→</span> <span class="cc-change-new">${escapeHtml(String(c.new))}</span></div>
+      </div>`).join('');
+      document.getElementById('cc-action-btn').disabled = false;
+    }
+  } catch {
+    showClientConfigResult(false, '获取配置预览失败');
+  }
+}
+
+function showClientConfigResult(success, message) {
+  ccCurrentStep = 'result';
+  ['cc-step-select-proxy', 'cc-step-install', 'cc-step-preview'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+  document.getElementById('cc-step-result').style.display = '';
+  document.getElementById('cc-result-icon').textContent = success ? '✅' : '❌';
+  document.getElementById('cc-result-text').textContent = message;
+  document.getElementById('cc-hint').style.display = success ? 'none' : '';
+
+  const actionBtn = document.getElementById('cc-action-btn');
+  actionBtn.textContent = '完成';
+  actionBtn.onclick = () => closeClientConfigModal();
+}
+
+function closeClientConfigModal() {
+  hideModal('client-config-modal');
+  ccCurrentTool = null;
+  ccCurrentStep = null;
+  ccSelectedProxyId = null;
+  // Reset action button onclick
+  document.getElementById('cc-action-btn').onclick = clientConfigAction;
+  detectClientTools();
+}
+
+async function clientConfigAction() {
+  const actionBtn = document.getElementById('cc-action-btn');
+
+  if (ccCurrentStep === 'select-proxy') {
+    if (!ccSelectedProxyId) return;
+    showClientConfigPreview();
+  } else if (ccCurrentStep === 'install') {
+    actionBtn.disabled = true;
+    actionBtn.textContent = '安装中...';
+    const logEl = document.getElementById('cc-install-log');
+    logEl.className = 'cc-install-log active';
+    const method = document.querySelector('input[name="cc-install-method"]:checked')?.value || 'npm';
+
+    try {
+      const res = await fetch(`/api/client-config/install/${ccCurrentTool}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method }),
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'log') {
+              logEl.textContent += data.message;
+              logEl.scrollTop = logEl.scrollHeight;
+            } else if (data.type === 'done') {
+              if (data.ok) {
+                showClientConfigResult(true, '安装成功');
+              } else {
+                // Show retry button
+                actionBtn.disabled = false;
+                actionBtn.textContent = '重试';
+                actionBtn.onclick = () => {
+                  actionBtn.textContent = '安装中...';
+                  actionBtn.disabled = true;
+                  logEl.textContent = '';
+                  clientConfigAction();
+                };
+                document.getElementById('cc-hint').style.display = '';
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      showClientConfigResult(false, `安装出错: ${err.message}`);
+    }
+  } else if (ccCurrentStep === 'preview') {
+    actionBtn.disabled = true;
+    actionBtn.textContent = '写入中...';
+    try {
+      const res = await fetch(`/api/client-config/write/${ccCurrentTool}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proxyId: ccSelectedProxyId }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showClientConfigResult(true, '配置完成，可以开始使用');
+      } else {
+        showClientConfigResult(false, data.message || '写入失败');
+      }
+    } catch (err) {
+      showClientConfigResult(false, `写入出错: ${err.message}`);
+    }
+  }
 }
 
 // ---------- Dashboard Rendering ----------
