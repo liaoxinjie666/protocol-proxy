@@ -11,15 +11,8 @@ trigger: 用户询问怎么添加供应商、API Key 配置、密钥轮换、供
 ## 首次使用三步走
 
 1. **添加供应商** → 「供应商管理」→ 新建供应商，填写 API 地址和 Key
-2. **创建代理** → 「代理管理」→ 新建代理，选择供应商，分配端口
+2. **创建代理** → 「代理管理」→ 新建代理，选择供应商，分配端口（详见 `/guide-proxy`）
 3. **启动代理** → 点击代理卡片的「启动」按钮，然后用 curl 或客户端测试请求
-
-```bash
-# 快速测试
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
-```
 
 ## 配置项详解
 
