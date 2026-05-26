@@ -1062,7 +1062,7 @@ async function init() {
           properties: {
             name: { type: 'string', description: '供应商名称' },
             url: { type: 'string', description: '供应商 API 地址' },
-            protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini'], description: '协议类型，默认自动检测' },
+            protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini', 'responses'], description: '协议类型，默认自动检测' },
             apiKey: { type: 'string', description: 'API Key（单个）' },
             apiKeys: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, alias: { type: 'string' } } }, description: '多个 API Key 数组' },
             models: { type: 'array', items: { type: 'string' }, description: '可用模型列表' },
@@ -1086,7 +1086,7 @@ async function init() {
             providerId: { type: 'string', description: '供应商 ID' },
             name: { type: 'string', description: '新的名称' },
             url: { type: 'string', description: '新的 URL' },
-            protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini'], description: '新的协议' },
+            protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini', 'responses'], description: '新的协议' },
             apiKey: { type: 'string', description: '新的 API Key' },
             models: { type: 'array', items: { type: 'string' }, description: '新的模型列表' },
             adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax'], description: '新的供应商适配器' },
@@ -1875,6 +1875,177 @@ async function init() {
         },
       },
     },
+    // ==================== 客户端配置管理 ====================
+    {
+      type: 'function',
+      function: {
+        name: 'detect_client_config',
+        description: '检测客户端工具（Claude Code / Codex）的安装状态和配置情况。',
+        parameters: {
+          type: 'object',
+          properties: {
+            tool: { type: 'string', enum: ['claude-code', 'codex'], description: '客户端工具名称' },
+          },
+          required: ['tool'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'preview_client_config',
+        description: '预览客户端工具的配置内容（写入前查看）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            tool: { type: 'string', enum: ['claude-code', 'codex'], description: '客户端工具名称' },
+            proxyId: { type: 'string', description: '要关联的代理 ID' },
+          },
+          required: ['tool', 'proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'write_client_config',
+        description: '将代理配置写入客户端工具的配置文件（写入前会自动备份）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            tool: { type: 'string', enum: ['claude-code', 'codex'], description: '客户端工具名称' },
+            proxyId: { type: 'string', description: '要关联的代理 ID' },
+          },
+          required: ['tool', 'proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'test_client_connection',
+        description: '测试客户端工具通过代理的连接是否正常。',
+        parameters: {
+          type: 'object',
+          properties: {
+            proxyId: { type: 'string', description: '要测试的代理 ID' },
+          },
+          required: ['proxyId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_client_backups',
+        description: '列出客户端工具配置的历史备份。',
+        parameters: {
+          type: 'object',
+          properties: {
+            tool: { type: 'string', enum: ['claude-code', 'codex'], description: '客户端工具名称' },
+          },
+          required: ['tool'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'restore_client_backup',
+        description: '从备份恢复客户端工具的配置文件。',
+        parameters: {
+          type: 'object',
+          properties: {
+            tool: { type: 'string', enum: ['claude-code', 'codex'], description: '客户端工具名称' },
+            backupId: { type: 'string', description: '备份 ID（时间戳）' },
+          },
+          required: ['tool', 'backupId'],
+        },
+      },
+    },
+    // ==================== Agent 身份管理 ====================
+    {
+      type: 'function',
+      function: {
+        name: 'get_agent',
+        description: '获取单个 Agent 身份的详细信息。',
+        parameters: {
+          type: 'object',
+          properties: {
+            slug: { type: 'string', description: 'Agent 的 slug 标识' },
+          },
+          required: ['slug'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_agent',
+        description: '创建新的 Agent 身份。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Agent 名称' },
+            body: { type: 'string', description: 'Agent 的人设/指令内容（Markdown）' },
+            description: { type: 'string', description: '简短描述' },
+            color: { type: 'string', description: '显示颜色，如 #6B7280' },
+            defaultRole: { type: 'string', description: '默认角色: writer / reviewer / assistant' },
+          },
+          required: ['name', 'body'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_agent',
+        description: '更新已有 Agent 身份的配置。',
+        parameters: {
+          type: 'object',
+          properties: {
+            slug: { type: 'string', description: 'Agent 的 slug 标识' },
+            name: { type: 'string', description: '新的名称' },
+            body: { type: 'string', description: '新的人设/指令内容' },
+            description: { type: 'string', description: '新的描述' },
+            color: { type: 'string', description: '新的颜色' },
+            defaultRole: { type: 'string', description: '新的默认角色' },
+          },
+          required: ['slug'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_agent',
+        description: '删除一个 Agent 身份（系统级 Agent 不可删除）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            slug: { type: 'string', description: 'Agent 的 slug 标识' },
+          },
+          required: ['slug'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'reload_agents',
+        description: '重新加载所有 Agent 身份定义（从磁盘读取）。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    // ==================== MCP 预设 ====================
+    {
+      type: 'function',
+      function: {
+        name: 'get_mcp_presets',
+        description: '获取可用的 MCP 服务器预设列表，包含是否已添加的状态。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
   ];
 
   // ==================== 工具权限分级 ====================
@@ -1905,7 +2076,14 @@ async function init() {
     get_autostart_status: 1, toggle_autostart: 2,
     get_exec_policy_rules: 1, add_exec_policy_rule: 2, remove_exec_policy_rule: 2,
     // 1: 任务查询 / 代理查询
-    list_tasks: 1, get_task: 1, list_agents: 1,
+    list_tasks: 1, get_task: 1, list_agents: 1, get_agent: 1,
+    // 1-2: 客户端配置
+    detect_client_config: 1, preview_client_config: 1, list_client_backups: 1,
+    write_client_config: 2, restore_client_backup: 2, test_client_connection: 1,
+    // 2: Agent 管理
+    create_agent: 2, update_agent: 2, delete_agent: 2, reload_agents: 2,
+    // 1: MCP 预设
+    get_mcp_presets: 1,
     // 3: 危险操作（需确认）
     execute_command: 3, write_file: 3, edit_file: 3,
   };
@@ -2938,6 +3116,84 @@ async function init() {
       const removed = execPolicy.removeRule(category, pattern);
       if (!removed) return { success: false, message: `未找到匹配规则: ${category}/${pattern}` };
       return { success: true, message: `已删除 ${category} 规则: ${pattern}` };
+    },
+
+    // ==================== 客户端配置管理 ====================
+    detect_client_config: async (args) => {
+      const proxies = configStore.getProxies();
+      return await clientConfig.detectTool(args.tool, proxies);
+    },
+
+    preview_client_config: async (args) => {
+      const proxy = configStore.getProxyById(args.proxyId);
+      if (!proxy) return { ok: false, message: '代理不存在' };
+      if (args.tool === 'claude-code') return clientConfig.previewClaudeCode(proxy);
+      if (args.tool === 'codex') return clientConfig.previewCodex(proxy);
+      return { ok: false, message: '未知工具' };
+    },
+
+    write_client_config: async (args) => {
+      const proxy = configStore.getProxyById(args.proxyId);
+      if (!proxy) return { ok: false, message: '代理不存在' };
+      if (args.tool === 'claude-code') return clientConfig.writeClaudeCode(proxy);
+      if (args.tool === 'codex') return clientConfig.writeCodex(proxy);
+      return { ok: false, message: '未知工具' };
+    },
+
+    test_client_connection: async (args) => {
+      const proxy = configStore.getProxyById(args.proxyId);
+      if (!proxy) return { ok: false, message: '代理不存在' };
+      if (!proxy.running) return { ok: false, message: '代理未运行' };
+      return await clientConfig.testConnection(proxy);
+    },
+
+    list_client_backups: async (args) => {
+      return { ok: true, backups: clientConfig.listBackups(args.tool) };
+    },
+
+    restore_client_backup: async (args) => {
+      return clientConfig.restoreBackup(args.tool, args.backupId);
+    },
+
+    // ==================== Agent 身份管理 ====================
+    get_agent: async (args) => {
+      const agent = agentStore.get(args.slug);
+      if (!agent) return { error: `Agent ${args.slug} 不存在` };
+      return agent;
+    },
+
+    create_agent: async (args) => {
+      const { name, body, description, color, defaultRole } = args;
+      const agent = agentStore.create(name, description || '', body, color || '#6B7280', defaultRole || 'writer');
+      if (!agent) return { error: 'Agent 已存在' };
+      return agent;
+    },
+
+    update_agent: async (args) => {
+      const { slug, ...updates } = args;
+      const agent = agentStore.update(slug, updates);
+      if (!agent) return { error: `Agent ${slug} 不存在或不可编辑` };
+      return agent;
+    },
+
+    delete_agent: async (args) => {
+      const agent = agentStore.get(args.slug);
+      if (!agent) return { error: `Agent ${args.slug} 不存在` };
+      if (agent.category === 'system') return { error: '系统级 Agent 不可删除' };
+      if (!agentStore.remove(args.slug)) return { error: '删除失败' };
+      return { success: true };
+    },
+
+    reload_agents: async () => {
+      agentStore.init();
+      return { success: true, count: agentStore.list().length };
+    },
+
+    // ==================== MCP 预设 ====================
+    get_mcp_presets: async () => {
+      const presets = configStore.getMcpPresets();
+      const existing = configStore.getMcpServers();
+      return presets.map(p => ({ ...p, added: !!existing[p.name] }));
     },
   };
 
