@@ -799,6 +799,94 @@ async function init() {
 
   const MAX_TOOL_OUTPUT = 16384; // 16KB — 防止工具输出撑爆 LLM 上下文
 
+  // ---------- 对话文件存储（供 Code Interpreter 使用） ----------
+  const CONV_FILES_DIR = path.join(os.tmpdir(), 'pp-conv-files');
+
+  function getConvFilesPath(convId) {
+    return path.join(CONV_FILES_DIR, convId);
+  }
+
+  // 文件所有权映射：convId → { msgId → [filename] }
+  const convFileOwnership = new Map();
+
+  function saveConvFiles(convId, messageContent, msgId) {
+    if (!Array.isArray(messageContent)) return;
+    const dir = getConvFilesPath(convId);
+    let saved = false;
+    const ownedFiles = [];
+    for (const part of messageContent) {
+      try {
+        // 从前端 __FILE_DATA__ 标记中提取文件并保存到磁盘
+        if (part.type === 'text' && part.text?.startsWith('__FILE_DATA__')) {
+          const match = part.text.match(/^__FILE_DATA__(.+?)\|(.+?)\|(.+)__END_FILE_DATA__$/s);
+          if (match) {
+            if (!saved) { fs.mkdirSync(dir, { recursive: true }); saved = true; }
+            fs.writeFileSync(path.join(dir, match[1]), Buffer.from(match[3], 'base64'));
+            ownedFiles.push(match[1]);
+            logger.log(`[conv-files] 保存文件: ${match[1]}`);
+          }
+        }
+        // 图片也保存一份供 Code Interpreter 使用
+        if (part.type === 'image_url' && part.image_url?.url?.startsWith('data:')) {
+          const match = part.image_url.url.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            if (!saved) { fs.mkdirSync(dir, { recursive: true }); saved = true; }
+            const ext = match[1].split('/')[1] || 'png';
+            const name = `image_${Date.now()}.${ext}`;
+            fs.writeFileSync(path.join(dir, name), Buffer.from(match[2], 'base64'));
+            ownedFiles.push(name);
+          }
+        }
+        // 文本附件也保存
+        if (part.type === 'text' && part.text?.startsWith('📄')) {
+          const lines = part.text.split('\n');
+          const nameMatch = lines[0].match(/📄\s*(.+?)[:：]/);
+          if (nameMatch) {
+            if (!saved) { fs.mkdirSync(dir, { recursive: true }); saved = true; }
+            fs.writeFileSync(path.join(dir, nameMatch[1]), lines.slice(1).join('\n'), 'utf8');
+            ownedFiles.push(nameMatch[1]);
+          }
+        }
+      } catch {}
+    }
+    // 记录文件所有权
+    if (msgId && ownedFiles.length > 0) {
+      if (!convFileOwnership.has(convId)) convFileOwnership.set(convId, {});
+      convFileOwnership.get(convId)[msgId] = ownedFiles;
+    }
+    // 从消息中移除 __FILE_DATA__ 标记（不发给 LLM）
+    if (saved) {
+      for (let i = messageContent.length - 1; i >= 0; i--) {
+        if (messageContent[i].type === 'text' && messageContent[i].text?.startsWith('__FILE_DATA__')) {
+          messageContent.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  function cleanupConvFiles(convId) {
+    try { fs.rmSync(getConvFilesPath(convId), { recursive: true, force: true }); } catch {}
+    convFileOwnership.delete(convId);
+  }
+
+  function deleteConvMsgFiles(convId, msgId) {
+    const ownership = convFileOwnership.get(convId);
+    if (!ownership || !ownership[msgId]) return;
+    const dir = getConvFilesPath(convId);
+    for (const fname of ownership[msgId]) {
+      try { fs.unlinkSync(path.join(dir, fname)); } catch {}
+    }
+    delete ownership[msgId];
+  }
+
+  function loadConvFiles(convId) {
+    const dir = getConvFilesPath(convId);
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(f => fs.statSync(path.join(dir, f)).isFile())
+      .map(f => ({ name: f, base64: fs.readFileSync(path.join(dir, f)).toString('base64') }));
+  }
+
   function truncateOutput(obj) {
     const str = typeof obj === 'string' ? obj : JSON.stringify(obj);
     if (str.length <= MAX_TOOL_OUTPUT) return obj;
@@ -1016,6 +1104,20 @@ async function init() {
             files: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, base64: { type: 'string' } } }, description: '临时文件列表，代码中可直接用文件名引用' },
           },
           required: ['code'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'parse_document',
+        description: '解析文档文件（PDF/DOCX/PPTX/XLSX），提取文本内容和内嵌媒体（图片、视频、音频）。比 execute_code 更快，无需编写代码。返回文本和图片，视频/音频保存到工作目录。',
+        parameters: {
+          type: 'object',
+          properties: {
+            filename: { type: 'string', description: '对话中已上传的文件名（如 document.docx）' },
+          },
+          required: ['filename'],
         },
       },
     },
@@ -1833,6 +1935,14 @@ async function init() {
     {
       type: 'function',
       function: {
+        name: 'clear_all_conversations',
+        description: '清空所有历史会话及关联文件，此操作不可恢复。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'get_autostart_status',
         description: '获取开机自启动状态，返回是否支持、是否已启用及注册命令。',
         parameters: { type: 'object', properties: {} },
@@ -2085,7 +2195,7 @@ async function init() {
     // 1-2: 记忆系统
     get_memory: 1, save_memory: 2, edit_memory: 2, read_memory: 1, search_memory: 1,
     // 1-2: 会话管理
-    list_conversations: 1, delete_conversation: 2, clear_conversation: 2,
+    list_conversations: 1, delete_conversation: 2, clear_conversation: 2, clear_all_conversations: 3,
     // 2: 委派任务
     delegate_task: 2, stop_task: 2, message_task: 2, update_soul: 2,
     get_exec_policy: 1, test_exec_policy: 1,
@@ -2102,6 +2212,7 @@ async function init() {
     get_mcp_presets: 1,
     // 3: 危险操作（需确认）
     execute_command: 3, execute_code: 3, write_file: 3, edit_file: 3,
+    parse_document: 1,
   };
 
   // 工具审批等待机制
@@ -2340,11 +2451,22 @@ async function init() {
       try {
         fs.mkdirSync(tmpDir, { recursive: true });
 
-        // 写入临时文件
+        // 写入显式传入的临时文件
         for (const f of files) {
           if (f.name && f.base64) {
             fs.writeFileSync(path.join(tmpDir, f.name), Buffer.from(f.base64, 'base64'));
           }
+        }
+
+        // 自动注入对话中上传的文件
+        if (args._convId) {
+          const convFiles = loadConvFiles(args._convId);
+          for (const f of convFiles) {
+            if (!fs.existsSync(path.join(tmpDir, f.name))) {
+              fs.writeFileSync(path.join(tmpDir, f.name), Buffer.from(f.base64, 'base64'));
+            }
+          }
+          if (convFiles.length > 0) logger.log(`[execute_code] 注入 ${convFiles.length} 个对话文件`);
         }
 
         // 写入代码文件
@@ -2396,6 +2518,106 @@ async function init() {
       } finally {
         // 清理临时目录
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      }
+    },
+
+    parse_document: async (args) => {
+      const { filename } = args;
+      if (!filename) return { error: '请指定文件名' };
+
+      const convFilesDir = args._convId ? getConvFilesPath(args._convId) : null;
+      const filePath = convFilesDir ? path.join(convFilesDir, filename) : null;
+      if (!filePath || !fs.existsSync(filePath)) {
+        return { error: `文件 ${filename} 不存在，请确认文件已上传` };
+      }
+
+      const ext = path.extname(filename).toLowerCase().slice(1);
+      const SUPPORTED_IMG = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']);
+      const UNSUPPORTED_IMG = new Set(['emf', 'wmf', 'tif', 'tiff', 'svg']);
+      const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'wmv', 'webm']);
+      const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'ogg', 'aac']);
+
+      try {
+        // PDF 解析
+        if (ext === 'pdf') {
+          const pdfjsLib = require('pdfjs-dist');
+          pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+          const data = new Uint8Array(fs.readFileSync(filePath));
+          const pdf = await pdfjsLib.getDocument({ data }).promise;
+          let text = '';
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            text += content.items.map(item => item.str).join(' ') + '\n\n';
+          }
+          return { text: text.trim(), images: [], media: [], pages: pdf.numPages };
+        }
+
+        // Office 文件解析（docx/pptx/xlsx）
+        if (['docx', 'pptx', 'xlsx'].includes(ext)) {
+          const JSZip = require('jszip');
+          const zip = await JSZip.loadAsync(fs.readFileSync(filePath));
+          const config = {
+            docx: { textFiles: ['word/document.xml'], mediaDir: 'word/media/' },
+            pptx: { textFiles: ['ppt/slides/slide*.xml'], mediaDir: 'ppt/media/' },
+            xlsx: { textFiles: ['xl/sharedStrings.xml'], mediaDir: 'xl/media/' },
+          }[ext];
+
+          let text = '';
+          const images = [];
+          const media = [];
+          const unsupported = [];
+
+          // 提取媒体文件
+          for (const [entryPath, zipEntry] of Object.entries(zip.files)) {
+            if (!entryPath.startsWith(config.mediaDir) || zipEntry.dir) continue;
+            const mediaExt = path.extname(entryPath).toLowerCase().slice(1);
+            const name = path.basename(entryPath);
+            const data = await zipEntry.async('base64');
+
+            if (SUPPORTED_IMG.has(mediaExt)) {
+              const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp' };
+              images.push({ name, base64_data: data, mime: mimeMap[mediaExt] || 'image/png' });
+            } else if (VIDEO_EXTS.has(mediaExt) || AUDIO_EXTS.has(mediaExt)) {
+              // 保存到对话文件目录
+              if (convFilesDir) {
+                fs.mkdirSync(convFilesDir, { recursive: true });
+                fs.writeFileSync(path.join(convFilesDir, name), Buffer.from(data, 'base64'));
+              }
+              media.push({ name, type: VIDEO_EXTS.has(mediaExt) ? 'video' : 'audio' });
+            } else if (UNSUPPORTED_IMG.has(mediaExt)) {
+              unsupported.push({ name, format: mediaExt });
+              // 也保存到磁盘，供 execute_code 转换
+              if (convFilesDir) {
+                fs.mkdirSync(convFilesDir, { recursive: true });
+                fs.writeFileSync(path.join(convFilesDir, name), Buffer.from(data, 'base64'));
+              }
+            }
+          }
+
+          // 提取文本
+          for (const pattern of config.textFiles) {
+            const regex = pattern.includes('*') ? new RegExp('^' + pattern.replace('*', '[^/]+') + '$') : null;
+            for (const [entryPath, zipEntry] of Object.entries(zip.files)) {
+              const match = regex ? regex.test(entryPath) : entryPath === pattern;
+              if (!match) continue;
+              const xml = await zipEntry.async('text');
+              const clean = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              text += (ext === 'pptx' ? clean + '\n\n---\n\n' : clean.replace(/<\/w:p>/g, '\n').replace(/<\/w:tr>/g, '\n') + '\n');
+            }
+          }
+
+          const result = { text: text.trim(), images, media };
+          if (unsupported.length > 0) {
+            result.unsupported = unsupported;
+            result.hint = `发现 ${unsupported.length} 张不支持的图片格式（${unsupported.map(u => u.format).join(', ')}），已保存到工作目录，可通过 execute_code 使用 Python Pillow 转换为 PNG`;
+          }
+          return result;
+        }
+
+        return { error: `不支持的文件格式: ${ext}。支持 PDF、DOCX、PPTX、XLSX` };
+      } catch (err) {
+        return { error: `解析 ${filename} 失败: ${err.message}` };
       }
     },
 
@@ -3181,6 +3403,7 @@ async function init() {
       const conv = conversationStore.get(args.conversationId);
       if (!conv) return { error: `会话 ${args.conversationId} 不存在` };
       conversationStore.remove(args.conversationId);
+      cleanupConvFiles(args.conversationId);
       return { success: true, message: `会话 ${args.conversationId} 已删除` };
     },
 
@@ -3190,7 +3413,18 @@ async function init() {
       conv.messages = [];
       conv.compressionSummary = undefined;
       conversationStore.touch(conv);
+      cleanupConvFiles(args.conversationId);
       return { success: true, message: `会话 ${args.conversationId} 已清空` };
+    },
+
+    clear_all_conversations: async () => {
+      const all = conversationStore.list();
+      const count = all.length;
+      for (const conv of all) {
+        conversationStore.remove(conv.id);
+        cleanupConvFiles(conv.id);
+      }
+      return { success: true, message: `已清空 ${count} 个会话` };
     },
 
     get_autostart_status: async () => {
@@ -4479,7 +4713,19 @@ async function init() {
     const conv = conversationStore.get(req.params.id);
     if (!conv) return res.status(404).json({ error: '会话不存在' });
     conversationStore.remove(req.params.id);
+    cleanupConvFiles(req.params.id);
     res.json({ success: true });
+  });
+
+  // 清空所有历史会话
+  app.delete('/api/assistant/conversations', (req, res) => {
+    const all = conversationStore.list();
+    const count = all.length;
+    for (const conv of all) {
+      conversationStore.remove(conv.id);
+      cleanupConvFiles(conv.id);
+    }
+    res.json({ success: true, count });
   });
 
   // 获取单个会话的消息历史（用于恢复会话显示）
@@ -4519,6 +4765,10 @@ async function init() {
     while (endIdx + 1 < conv.messages.length && conv.messages[endIdx + 1].role !== 'user') endIdx++;
 
     const removedCount = endIdx - startIdx + 1;
+    // 清理被删除消息关联的文件
+    for (let i = startIdx; i <= endIdx; i++) {
+      if (conv.messages[i]?.id) deleteConvMsgFiles(conv.id, conv.messages[i].id);
+    }
     conv.messages.splice(startIdx, removedCount);
     conversationStore.saveImmediate(conv);
     res.json({ success: true, removedCount });
@@ -4938,6 +5188,8 @@ async function init() {
       if (Array.isArray(message)) {
         lastUserMsgId = generateMsgId();
         conv.messages.push({ id: lastUserMsgId, role: 'user', content: message });
+        // 保存文件到对话目录（供 Code Interpreter 使用）
+        saveConvFiles(convId, message, lastUserMsgId);
       } else {
         const slashMatch = message.match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
         if (slashMatch) {
@@ -5047,7 +5299,8 @@ async function init() {
 
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
-      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore });
+      const convFilesList = (() => { try { return fs.readdirSync(getConvFilesPath(convId)).filter(f => fs.statSync(path.join(getConvFilesPath(convId), f)).isFile()); } catch { return []; } })();
+      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, convFiles: convFilesList });
       const buildMessages = () => {
         // 将所有 system 内容合并为一条消息，避免某些模型（如 MiniMax）不支持多条 system 消息
         const systemParts = [systemPrompt];
@@ -5313,6 +5566,7 @@ async function init() {
                   const parts = tc.name.split('__');
                   mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
                 } else {
+                  if (tc.name === 'execute_code' || tc.name === 'parse_document') args._convId = convId;
                   result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
                 }
                 if (result && result.error) isError = true;

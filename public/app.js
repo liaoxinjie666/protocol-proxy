@@ -2791,83 +2791,6 @@ function isDocumentFile(file) {
   return ['pdf', 'docx', 'pptx', 'xlsx'].includes(ext);
 }
 
-async function parseDocumentFile(file) {
-  const ext = (file.name.split('.').pop() || '').toLowerCase();
-  if (ext === 'pdf') return parsePdfFile(file);
-  return parseOfficeFile(file);
-}
-
-async function parsePdfFile(file) {
-  const pdfjsLib = window.pdfjsLib;
-  if (!pdfjsLib) {
-    showToast('PDF 库加载中，请稍后重试', true);
-    throw new Error('pdf.js not ready');
-  }
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let allText = '';
-  const images = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items.map(item => item.str).join(' ');
-    if (pageText.trim()) allText += pageText + '\n\n';
-    try {
-      const viewport = page.getViewport({ scale: 1.5 });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-      images.push({ name: `第${i}页.png`, data: canvas.toDataURL('image/png').split(',')[1] });
-    } catch {}
-    console.log(`PDF 第 ${i}/${pdf.numPages} 页已处理`);
-  }
-  return { text: allText.trim(), images };
-}
-
-async function parseOfficeFile(file) {
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  const ext = (file.name.split('.').pop() || '').toLowerCase();
-  const config = {
-    docx: { textFiles: ['word/document.xml'], mediaDir: 'word/media/' },
-    pptx: { textFiles: ['ppt/slides/slide*.xml'], mediaDir: 'ppt/media/' },
-    xlsx: { textFiles: ['xl/sharedStrings.xml'], mediaDir: 'xl/media/' },
-  }[ext];
-  let allText = '';
-  const images = [];
-  const SUPPORTED_IMG_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
-  // 提取内嵌图片（仅支持的格式，跳过 emf/wmf/tif 等）
-  for (const [filePath, zipEntry] of Object.entries(zip.files)) {
-    if (filePath.startsWith(config.mediaDir) && !zipEntry.dir) {
-      const imgExt = (filePath.split('.').pop() || '').toLowerCase();
-      if (!SUPPORTED_IMG_EXTS.includes('.' + imgExt)) {
-        console.log(`Office 跳过不支持的图片格式: ${filePath}`);
-        continue;
-      }
-      const data = await zipEntry.async('base64');
-      const name = filePath.split('/').pop();
-      images.push({ name, data });
-      console.log(`Office 提取图片: ${filePath}`);
-    }
-  }
-  // 提取文本（XML 标签清理）
-  for (const pattern of config.textFiles) {
-    const globPattern = pattern.includes('*') ? new RegExp('^' + pattern.replace('*', '[^/]+') + '$') : null;
-    for (const [path, zipEntry] of Object.entries(zip.files)) {
-      if (globPattern ? globPattern.test(path) : path === pattern) {
-        const xml = await zipEntry.async('text');
-        const text = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        if (ext === 'pptx') {
-          allText += text + '\n\n---\n\n';
-        } else {
-          allText += text.replace(/<\/w:p>/g, '\n').replace(/<\/w:tr>/g, '\n') + '\n';
-        }
-      }
-    }
-  }
-  return { text: allText.trim(), images };
-}
-
 function handleAssistantFileSelect(files) {
   if (!files || files.length === 0) return;
   const MAX_BASE64_SIZE = 50 * 1024 * 1024;
@@ -2888,31 +2811,12 @@ function handleAssistantFileSelect(files) {
       // 文本文件：读取为文本内容
       readAsText(file);
     } else if (isDocumentFile(file)) {
-      // Office/PDF：解析提取文本和内嵌媒体
-      parseDocumentFile(file).then(({ text, images }) => {
-        if (text) {
-          assistantAttachments.push({
-            type: 'text',
-            mimeType: file.type || 'application/octet-stream',
-            name: file.name,
-            data: text,
-          });
-        }
-        for (const img of images) {
-          const imgExt = (img.name.split('.').pop() || 'png').toLowerCase();
-          const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp' };
-          assistantAttachments.push({
-            type: 'image_url',
-            mimeType: mimeMap[imgExt] || 'image/png',
-            name: img.name,
-            data: img.data,
-          });
-        }
-        renderAttachmentPreview();
-        console.log(`文档解析完成: ${file.name}, 文本${text ? text.length : 0}字, ${images.length}张图片`);
-      }).catch((err) => {
-        showToast(`解析 ${file.name} 失败: ${err.message}`, true);
-      });
+      // Office/PDF：原样保存，交由 Code Interpreter 处理
+      if (file.size > MAX_BASE64_SIZE) {
+        showToast(`文件过大（${(file.size / 1024 / 1024).toFixed(1)}MB），限制 50MB`, true);
+        continue;
+      }
+      readAsBase64(file, 'file');
     } else {
       showToast(`暂不支持此文件类型: ${file.name}`, true);
     }
@@ -3005,6 +2909,14 @@ function renderAttachmentPreview() {
         <button class="attachment-remove" onclick="removeAttachment(${i})" title="移除">×</button>
       </div>`;
     }
+    if (att.type === 'file') {
+      const sizeKB = Math.round(att.data.length * 3 / 4 / 1024);
+      return `<div class="attachment-item">
+        <span style="font-size:16px">📎</span>
+        <span class="attachment-name">${escapeHtml(att.name)} (${sizeKB}KB)</span>
+        <button class="attachment-remove" onclick="removeAttachment(${i})" title="移除">×</button>
+      </div>`;
+    }
     return `<div class="attachment-item">
       <span style="font-size:16px">🔊</span>
       <span class="attachment-name">${escapeHtml(att.name)}</span>
@@ -3068,6 +2980,10 @@ async function sendAssistantMessage() {
         content.push({ type: 'video_url', video_url: { url }, fps: 2, media_resolution: 'default' });
       } else if (att.type === 'text') {
         content.push({ type: 'text', text: `📄 ${att.name}:\n${att.data}` });
+      } else if (att.type === 'file') {
+        // 文件附件：用 text block 告知模型，实际数据由后端保存到磁盘供 Code Interpreter 使用
+        content.push({ type: 'text', text: `[附件: ${att.name}]` });
+        content.push({ type: 'text', text: `__FILE_DATA__${att.name}|${att.mimeType}|${att.data}__END_FILE_DATA__` });
       }
     }
     messagePayload = content;
@@ -3365,6 +3281,7 @@ function addAssistantMessage(role, content, backendMsgId = null) {
     // 多模态用户消息
     let html = '';
     for (const part of content) {
+      if (part.type === 'text' && part.text?.startsWith('__FILE_DATA__')) continue;
       if (part.type === 'text' && part.text) {
         html += `<div>${escapeHtml(part.text)}</div>`;
       } else if (part.type === 'image_url' && part.image_url?.url) {
@@ -3375,6 +3292,9 @@ function addAssistantMessage(role, content, backendMsgId = null) {
       } else if (part.type === 'video_url' && part.video_url?.url) {
         const src = escapeHtml(part.video_url.url);
         html += `<video class="msg-video" controls src="${src}"></video>`;
+      } else if (part.type === 'file' && part.file?.name) {
+        const sizeKB = Math.round((part.file.data?.length || 0) * 3 / 4 / 1024);
+        html += `<div style="padding:4px 0;font-size:13px;opacity:0.8">📎 ${escapeHtml(part.file.name)} (${sizeKB}KB)</div>`;
       }
     }
     div.innerHTML = html;
@@ -3906,6 +3826,20 @@ async function deleteConversationById(convId, event) {
     showToast('会话已删除');
   } catch (err) {
     showToast('删除失败: ' + err.message, true);
+  }
+}
+
+async function clearAllConversations() {
+  const ok = await showConfirm('确定清空所有历史会话？此操作不可恢复。');
+  if (!ok) return;
+  try {
+    const res = await fetch('/api/assistant/conversations', { method: 'DELETE' });
+    const data = await res.json();
+    clearAssistantChat();
+    await loadConversations();
+    showToast(`已清空 ${data.count || 0} 个会话`);
+  } catch (err) {
+    showToast('清空失败: ' + err.message, true);
   }
 }
 

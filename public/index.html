@@ -379,6 +379,7 @@
               <span>会话历史</span>
               <div style="display:flex;gap:4px">
                 <button class="btn btn-sm" onclick="clearAssistantChat()" title="新会话">+ 新会话</button>
+                <button class="btn btn-sm" onclick="clearAllConversations()" title="清空所有历史会话">🗑 全部</button>
                 <button class="btn btn-sm" onclick="toggleAssistantSidebar()" title="收起">◀</button>
               </div>
             </div>
@@ -1793,14 +1794,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs" type="module"></script>
-  <script type="module">
-    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
-    window.pdfjsLib = pdfjsLib;
-    window.dispatchEvent(new Event('pdfjs-ready'));
-  </script>
   <script src="app.js"></script>
 </body>
 </html>

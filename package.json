@@ -41,6 +41,8 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "jszip": "^3.10.1",
+    "pdfjs-dist": "^4.4.168",
     "ws": "^8.20.1"
   },
   "devDependencies": {
