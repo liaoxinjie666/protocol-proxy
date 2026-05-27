@@ -2854,6 +2854,20 @@ body {
   color: var(--text-secondary);
 }
 
+.tool-result-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px;
+}
+.tool-result-images .msg-media {
+  max-width: 400px;
+  max-height: 300px;
+  border-radius: var(--radius-md);
+  display: block;
+  cursor: pointer;
+}
+
 /* 工具审批卡片 */
 .assistant-message.tool-approval {
   align-self: flex-start;
@@ -3622,10 +3636,24 @@ body {
   margin: 4px 0;
   display: block;
 }
+.assistant-message.user .msg-video {
+  max-width: 400px;
+  max-height: 300px;
+  border-radius: var(--radius-md);
+  margin: 4px 0;
+  display: block;
+}
 .assistant-message.user audio {
   max-width: 240px;
   margin: 4px 0;
   display: block;
+}
+
+/* 拖拽文件到输入框 */
+#assistant-input.drag-over {
+  outline: 2px dashed var(--primary);
+  outline-offset: -2px;
+  background: rgba(79, 70, 229, 0.05);
 }
 
 /* ---------- Markdown View (tier 1 display) ---------- */

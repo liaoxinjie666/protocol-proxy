@@ -1006,6 +1006,22 @@ async function init() {
     {
       type: 'function',
       function: {
+        name: 'execute_code',
+        description: '在沙箱中执行 Python 或 JavaScript 代码。用于数据分析、文件处理、画图表等。图表应保存为 PNG 文件（如 plt.savefig("output.png")），会自动返回生成的图片。用户上传的文件可通过 files 参数传入。',
+        parameters: {
+          type: 'object',
+          properties: {
+            code: { type: 'string', description: '要执行的代码' },
+            language: { type: 'string', enum: ['python', 'javascript'], description: '代码语言，默认 python' },
+            files: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, base64: { type: 'string' } } }, description: '临时文件列表，代码中可直接用文件名引用' },
+          },
+          required: ['code'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'edit_file',
         description: '精确替换文件中的字符串。比 write_file 更安全，只替换匹配的内容，不会覆盖整个文件。',
         parameters: {
@@ -1066,7 +1082,7 @@ async function init() {
             apiKey: { type: 'string', description: 'API Key（单个）' },
             apiKeys: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, alias: { type: 'string' } } }, description: '多个 API Key 数组' },
             models: { type: 'array', items: { type: 'string' }, description: '可用模型列表' },
-            adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax'], description: '供应商适配器，用于国内模型特殊处理' },
+            adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax', 'mimo'], description: '供应商适配器，用于国内模型特殊处理' },
             capabilities: { type: 'array', items: { type: 'string' }, description: '供应商能力标签，如 vision、tools、json 等' },
             azureDeployment: { type: 'string', description: 'Azure OpenAI 部署名称' },
             azureApiVersion: { type: 'string', description: 'Azure OpenAI API 版本' },
@@ -1089,7 +1105,7 @@ async function init() {
             protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini', 'responses'], description: '新的协议' },
             apiKey: { type: 'string', description: '新的 API Key' },
             models: { type: 'array', items: { type: 'string' }, description: '新的模型列表' },
-            adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax'], description: '新的供应商适配器' },
+            adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax', 'mimo'], description: '新的供应商适配器' },
             capabilities: { type: 'array', items: { type: 'string' }, description: '新的能力标签' },
             azureDeployment: { type: 'string', description: '新的 Azure 部署名称' },
             azureApiVersion: { type: 'string', description: '新的 Azure API 版本' },
@@ -2085,7 +2101,7 @@ async function init() {
     // 1: MCP 预设
     get_mcp_presets: 1,
     // 3: 危险操作（需确认）
-    execute_command: 3, write_file: 3, edit_file: 3,
+    execute_command: 3, execute_code: 3, write_file: 3, edit_file: 3,
   };
 
   // 工具审批等待机制
@@ -2286,6 +2302,101 @@ async function init() {
           }
         });
       });
+    },
+
+    execute_code: async (args) => {
+      const { code, language = 'python', files = [] } = args;
+      if (!code) return { error: '代码不能为空' };
+
+      // 检测运行时可用性
+      let cmd, cmdArgs;
+      if (language === 'javascript') {
+        cmd = 'node';
+        cmdArgs = [];
+      } else {
+        // 尝试 python → python3
+        const candidates = ['python', 'python3'];
+        let found = false;
+        for (const c of candidates) {
+          try {
+            const check = await new Promise((resolve) => {
+              const p = spawn(c, ['--version'], { timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
+              let out = '';
+              p.stdout.on('data', d => { out += d.toString(); });
+              p.stderr.on('data', d => { out += d.toString(); });
+              p.on('error', () => resolve(null));
+              p.on('close', (code) => resolve(code === 0 ? c : null));
+            });
+            if (check) { cmd = check; found = true; break; }
+          } catch {}
+        }
+        if (!found) {
+          return { error: '未检测到 Python 环境。请安装 Python 或指定 language: "javascript" 使用 Node.js 执行。' };
+        }
+        cmdArgs = ['-u'];
+      }
+
+      const tmpDir = path.join(os.tmpdir(), 'pp-code-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+      try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+
+        // 写入临时文件
+        for (const f of files) {
+          if (f.name && f.base64) {
+            fs.writeFileSync(path.join(tmpDir, f.name), Buffer.from(f.base64, 'base64'));
+          }
+        }
+
+        // 写入代码文件
+        const ext = language === 'javascript' ? 'js' : 'py';
+        const scriptName = `__run__.${ext}`;
+        fs.writeFileSync(path.join(tmpDir, scriptName), code);
+        cmdArgs.push(scriptName);
+
+        // 执行代码
+        const result = await new Promise((resolve) => {
+          let stdout = '', stderr = '';
+          const child = spawn(cmd, cmdArgs, {
+            cwd: tmpDir,
+            timeout: 60000,
+            env: { ...process.env, MPLBACKEND: 'Agg', MPLCONFIGDIR: tmpDir },
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          child.stdout.on('data', d => { stdout += d.toString(); });
+          child.stderr.on('data', d => { stderr += d.toString(); });
+          child.on('error', (err) => {
+            resolve({ exitCode: 1, stdout, stderr: stderr + '\n' + err.message });
+          });
+          child.on('close', (exitCode) => {
+            resolve({ exitCode: exitCode || 0, stdout, stderr });
+          });
+        });
+
+        // 扫描生成的图片
+        const images = [];
+        const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.svg'];
+        try {
+          const files_ = fs.readdirSync(tmpDir);
+          for (const fname of files_) {
+            const ext_ = path.extname(fname).toLowerCase();
+            if (IMAGE_EXTS.includes(ext_)) {
+              const filePath = path.join(tmpDir, fname);
+              const stat = fs.statSync(filePath);
+              if (stat.size > 0 && stat.size < 5 * 1024 * 1024) {
+                const data = fs.readFileSync(filePath);
+                images.push({ name: fname, base64_data: data.toString('base64') });
+              }
+            }
+          }
+        } catch {}
+
+        return { ...result, images: images.length > 0 ? images : undefined };
+      } catch (err) {
+        return { error: err.message };
+      } finally {
+        // 清理临时目录
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      }
     },
 
     edit_file: async (args) => {
@@ -5214,10 +5325,16 @@ async function init() {
             result = { error: err.message };
             isError = true;
           }
+          // execute_code 图片提取：图片发给前端，不发给 LLM（base64 占上下文但模型无法解析）
+          let toolImages = null;
+          if (result && result.images) {
+            toolImages = result.images;
+            delete result.images;
+          }
           result = truncateOutput(result);
           const resultStr = JSON.stringify(result);
-          logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}`);
-          safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError });
+          logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}${toolImages ? `, ${toolImages.length} images` : ''}`);
+          safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError, images: toolImages });
           conv.messages.push({ id: generateMsgId(), role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
         }
 

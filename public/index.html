@@ -466,8 +466,8 @@
               <div class="skill-autocomplete" id="skill-autocomplete"></div>
               <div class="attachment-preview" id="attachment-preview"></div>
               <textarea id="assistant-input" placeholder="输入问题，例如：帮我看看哪个供应商最慢，最近有什么异常？ 输入 / 触发技能" rows="1"></textarea>
-              <input type="file" id="assistant-file-input" accept="image/*,audio/*" multiple style="display:none" onchange="handleAssistantFileSelect(this.files)">
-              <button class="btn" onclick="document.getElementById('assistant-file-input').click()" title="上传图片或音频" style="padding:0 10px;font-size:16px">📎</button>
+              <input type="file" id="assistant-file-input" multiple style="display:none" onchange="handleAssistantFileSelect(this.files)">
+              <button class="btn" onclick="document.getElementById('assistant-file-input').click()" title="上传文件（图片、音频、视频、文本等）" style="padding:0 10px;font-size:16px">📎</button>
               <button class="btn" id="mic-btn" onclick="toggleVoiceRecording()" title="语音输入" style="padding:0 8px;display:flex;align-items:center;justify-content:center"></button>
               <button class="btn" onclick="toggleSkillPanel()" title="查看可用技能" style="padding:0 10px;font-size:16px">⚡</button>
               <button class="btn btn-primary" id="assistant-send-btn" onclick="sendAssistantMessage()" disabled>发送</button>
@@ -1793,6 +1793,14 @@
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs" type="module"></script>
+  <script type="module">
+    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+    window.pdfjsLib = pdfjsLib;
+    window.dispatchEvent(new Event('pdfjs-ready'));
+  </script>
   <script src="app.js"></script>
 </body>
 </html>

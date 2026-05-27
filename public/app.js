@@ -2464,7 +2464,7 @@ async function init() {
         }
       }
     });
-    // 粘贴图片/音频支持
+    // 粘贴图片/音频/视频支持
     assistantInput.addEventListener('paste', function(e) {
       const items = e.clipboardData?.items;
       if (!items) return;
@@ -2478,6 +2478,29 @@ async function init() {
       if (files.length > 0) {
         e.preventDefault();
         handleAssistantFileSelect(files);
+        return;
+      }
+      // 检测粘贴的视频 URL
+      const text = e.clipboardData?.getData('text/plain')?.trim();
+      if (text && /^https?:\/\/\S+\.(mp4|mov|avi|wmv)(\?|$)/i.test(text)) {
+        e.preventDefault();
+        addVideoUrlAttachment(text);
+      }
+    });
+    // 拖拽文件到输入框
+    assistantInput.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      assistantInput.classList.add('drag-over');
+    });
+    assistantInput.addEventListener('dragleave', function() {
+      assistantInput.classList.remove('drag-over');
+    });
+    assistantInput.addEventListener('drop', function(e) {
+      e.preventDefault();
+      assistantInput.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) {
+        handleAssistantFileSelect(e.dataTransfer.files);
       }
     });
   }
@@ -2757,29 +2780,189 @@ function arrayBufferToBase64(buffer) {
 
 // ==================== 多模态附件处理 ====================
 
+function isTextFile(file) {
+  if (file.type.startsWith('text/')) return true;
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  return ['txt','json','csv','md','js','ts','jsx','tsx','py','rb','go','java','c','cpp','h','hpp','css','html','xml','yaml','yml','toml','ini','sh','bat','ps1','sql','log','env','gitignore','dockerfile','makefile'].includes(ext);
+}
+
+function isDocumentFile(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  return ['pdf', 'docx', 'pptx', 'xlsx'].includes(ext);
+}
+
+async function parseDocumentFile(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (ext === 'pdf') return parsePdfFile(file);
+  return parseOfficeFile(file);
+}
+
+async function parsePdfFile(file) {
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib) {
+    showToast('PDF 库加载中，请稍后重试', true);
+    throw new Error('pdf.js not ready');
+  }
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let allText = '';
+  const images = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map(item => item.str).join(' ');
+    if (pageText.trim()) allText += pageText + '\n\n';
+    try {
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      images.push({ name: `第${i}页.png`, data: canvas.toDataURL('image/png').split(',')[1] });
+    } catch {}
+    console.log(`PDF 第 ${i}/${pdf.numPages} 页已处理`);
+  }
+  return { text: allText.trim(), images };
+}
+
+async function parseOfficeFile(file) {
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const config = {
+    docx: { textFiles: ['word/document.xml'], mediaDir: 'word/media/' },
+    pptx: { textFiles: ['ppt/slides/slide*.xml'], mediaDir: 'ppt/media/' },
+    xlsx: { textFiles: ['xl/sharedStrings.xml'], mediaDir: 'xl/media/' },
+  }[ext];
+  let allText = '';
+  const images = [];
+  const SUPPORTED_IMG_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
+  // 提取内嵌图片（仅支持的格式，跳过 emf/wmf/tif 等）
+  for (const [filePath, zipEntry] of Object.entries(zip.files)) {
+    if (filePath.startsWith(config.mediaDir) && !zipEntry.dir) {
+      const imgExt = (filePath.split('.').pop() || '').toLowerCase();
+      if (!SUPPORTED_IMG_EXTS.includes('.' + imgExt)) {
+        console.log(`Office 跳过不支持的图片格式: ${filePath}`);
+        continue;
+      }
+      const data = await zipEntry.async('base64');
+      const name = filePath.split('/').pop();
+      images.push({ name, data });
+      console.log(`Office 提取图片: ${filePath}`);
+    }
+  }
+  // 提取文本（XML 标签清理）
+  for (const pattern of config.textFiles) {
+    const globPattern = pattern.includes('*') ? new RegExp('^' + pattern.replace('*', '[^/]+') + '$') : null;
+    for (const [path, zipEntry] of Object.entries(zip.files)) {
+      if (globPattern ? globPattern.test(path) : path === pattern) {
+        const xml = await zipEntry.async('text');
+        const text = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (ext === 'pptx') {
+          allText += text + '\n\n---\n\n';
+        } else {
+          allText += text.replace(/<\/w:p>/g, '\n').replace(/<\/w:tr>/g, '\n') + '\n';
+        }
+      }
+    }
+  }
+  return { text: allText.trim(), images };
+}
+
 function handleAssistantFileSelect(files) {
   if (!files || files.length === 0) return;
+  const MAX_BASE64_SIZE = 50 * 1024 * 1024;
   for (const file of files) {
-    if (!file.type.startsWith('image/') && !file.type.startsWith('audio/')) {
-      showToast(`不支持的文件类型: ${file.name}`, true);
-      continue;
-    }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target.result.split(',')[1];
-      assistantAttachments.push({
-        type: file.type.startsWith('image/') ? 'image_url' : 'input_audio',
-        mimeType: file.type,
-        name: file.name,
-        data: base64,
+    if (file.type.startsWith('image/')) {
+      // 图片：读取 base64
+      readAsBase64(file, 'image_url');
+    } else if (file.type.startsWith('audio/')) {
+      // 音频：读取 base64
+      readAsBase64(file, 'input_audio');
+    } else if (file.type.startsWith('video/')) {
+      if (file.size > MAX_BASE64_SIZE) {
+        showToast(`视频文件过大（${(file.size / 1024 / 1024).toFixed(1)}MB），base64 模式限制 50MB，请使用视频 URL 方式`, true);
+        continue;
+      }
+      readAsBase64(file, 'video_url');
+    } else if (isTextFile(file)) {
+      // 文本文件：读取为文本内容
+      readAsText(file);
+    } else if (isDocumentFile(file)) {
+      // Office/PDF：解析提取文本和内嵌媒体
+      parseDocumentFile(file).then(({ text, images }) => {
+        if (text) {
+          assistantAttachments.push({
+            type: 'text',
+            mimeType: file.type || 'application/octet-stream',
+            name: file.name,
+            data: text,
+          });
+        }
+        for (const img of images) {
+          const imgExt = (img.name.split('.').pop() || 'png').toLowerCase();
+          const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp' };
+          assistantAttachments.push({
+            type: 'image_url',
+            mimeType: mimeMap[imgExt] || 'image/png',
+            name: img.name,
+            data: img.data,
+          });
+        }
+        renderAttachmentPreview();
+        console.log(`文档解析完成: ${file.name}, 文本${text ? text.length : 0}字, ${images.length}张图片`);
+      }).catch((err) => {
+        showToast(`解析 ${file.name} 失败: ${err.message}`, true);
       });
-      renderAttachmentPreview();
-    };
-    reader.readAsDataURL(file);
+    } else {
+      showToast(`暂不支持此文件类型: ${file.name}`, true);
+    }
   }
   // 清空 input 以便重复选择同一文件
   const input = document.getElementById('assistant-file-input');
   if (input) input.value = '';
+}
+
+function readAsBase64(file, type) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    assistantAttachments.push({
+      type,
+      mimeType: file.type,
+      name: file.name,
+      data: e.target.result.split(',')[1],
+    });
+    renderAttachmentPreview();
+  };
+  reader.readAsDataURL(file);
+}
+
+function readAsText(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    assistantAttachments.push({
+      type: 'text',
+      mimeType: file.type || 'text/plain',
+      name: file.name,
+      data: e.target.result,
+    });
+    renderAttachmentPreview();
+  };
+  reader.readAsText(file);
+}
+
+function addVideoUrlAttachment(url) {
+  // 从 URL 提取文件名
+  const pathname = new URL(url).pathname;
+  const name = decodeURIComponent(pathname.split('/').pop() || 'video.mp4');
+  assistantAttachments.push({
+    type: 'video_url',
+    mimeType: 'video/mp4',
+    name,
+    data: url,
+    isUrl: true,
+  });
+  renderAttachmentPreview();
+  showToast(`已添加视频链接: ${name}`);
 }
 
 function removeAttachment(index) {
@@ -2804,6 +2987,21 @@ function renderAttachmentPreview() {
       return `<div class="attachment-item">
         <img src="data:${att.mimeType};base64,${att.data}" alt="${escapeHtml(att.name)}">
         <span class="attachment-name">${escapeHtml(att.name)}</span>
+        <button class="attachment-remove" onclick="removeAttachment(${i})" title="移除">×</button>
+      </div>`;
+    }
+    if (att.type === 'video_url') {
+      return `<div class="attachment-item">
+        <span style="font-size:16px">🎬</span>
+        <span class="attachment-name">${escapeHtml(att.name)}</span>
+        <button class="attachment-remove" onclick="removeAttachment(${i})" title="移除">×</button>
+      </div>`;
+    }
+    if (att.type === 'text') {
+      const lines = att.data.split('\n').length;
+      return `<div class="attachment-item">
+        <span style="font-size:16px">📄</span>
+        <span class="attachment-name">${escapeHtml(att.name)} (${lines}行)</span>
         <button class="attachment-remove" onclick="removeAttachment(${i})" title="移除">×</button>
       </div>`;
     }
@@ -2864,6 +3062,12 @@ async function sendAssistantMessage() {
       } else if (att.type === 'input_audio') {
         const format = att.mimeType.replace(/^audio\//, '').replace(/;.*$/, '') || 'mp3';
         content.push({ type: 'input_audio', input_audio: { data: att.data, format } });
+      } else if (att.type === 'video_url') {
+        // URL 类型直接用，base64 类型构造 data URI
+        const url = att.data.startsWith('http') ? att.data : `data:${att.mimeType};base64,${att.data}`;
+        content.push({ type: 'video_url', video_url: { url }, fps: 2, media_resolution: 'default' });
+      } else if (att.type === 'text') {
+        content.push({ type: 'text', text: `📄 ${att.name}:\n${att.data}` });
       }
     }
     messagePayload = content;
@@ -3014,7 +3218,7 @@ async function processAssistantSSE(response, thinkingId) {
 
         case 'tool_result': {
           const resultStr = JSON.stringify(data.result, null, 2);
-          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error });
+          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null });
           break;
         }
 
@@ -3123,15 +3327,22 @@ function addAssistantMessage(role, content, backendMsgId = null) {
     // content 已经是 HTML 字符串
     div.innerHTML = `<div class="tool-calls-header">调用工具</div>${content}`;
   } else if (role === 'tool-result') {
-    // content 是 {name, result, tool_call_id, is_error}
+    // content 是 {name, result, tool_call_id, is_error, images}
     const toolData = typeof content === 'object' ? content : { name: 'unknown', result: content };
     const resultId = 'result-' + id;
     if (toolData.is_error) div.classList.add('tool-error');
+    let imagesHtml = '';
+    if (toolData.images && toolData.images.length > 0) {
+      imagesHtml = '<div class="tool-result-images">' +
+        toolData.images.map(img => `<img class="msg-media" src="data:image/png;base64,${escapeHtml(img.base64_data)}" alt="${escapeHtml(img.name)}">`).join('') +
+        '</div>';
+    }
     div.innerHTML = `
       <div class="tool-result-header" onclick="document.getElementById('${resultId}').classList.toggle('expanded')">
         <span class="tool-result-name">${toolData.is_error ? '⚠ ' : ''}${escapeHtml(toolData.name)}</span>
         <span class="tool-result-toggle">${toolData.is_error ? '错误详情 ▾' : '展开结果 ▾'}</span>
       </div>
+      ${imagesHtml}
       <div class="tool-result-body" id="${resultId}">
         <pre>${escapeHtml(toolData.result)}</pre>
       </div>`;
@@ -3161,6 +3372,9 @@ function addAssistantMessage(role, content, backendMsgId = null) {
       } else if (part.type === 'input_audio' && part.input_audio?.data) {
         const format = part.input_audio.format || 'mp3';
         html += `<audio controls src="data:audio/${escapeHtml(format)};base64,${escapeHtml(part.input_audio.data)}"></audio>`;
+      } else if (part.type === 'video_url' && part.video_url?.url) {
+        const src = escapeHtml(part.video_url.url);
+        html += `<video class="msg-video" controls src="${src}"></video>`;
       }
     }
     div.innerHTML = html;
