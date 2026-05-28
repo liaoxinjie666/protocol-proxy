@@ -39,6 +39,11 @@
           <span>供应商管理</span>
           <span class="nav-badge" id="nav-provider-count">0</span>
         </a>
+        <a href="#" class="nav-item" data-page="multimodal">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          <span>多模态服务</span>
+          <span class="nav-badge" id="nav-multimodal-count">0</span>
+        </a>
         <a href="#" class="nav-item" data-page="stats">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
           <span>用量统计</span>
@@ -243,6 +248,79 @@
             <p>还没有配置供应商</p>
             <button class="btn btn-primary" onclick="openProviderModal()">创建第一个供应商</button>
           </div>
+        </div>
+      </div>
+
+      <!-- ==================== Multimodal Services Page ==================== -->
+      <div class="page" id="page-multimodal">
+        <div class="page-toolbar">
+          <div class="search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" placeholder="搜索服务..." id="mm-search" oninput="renderMultimodal()">
+          </div>
+          <button class="btn btn-primary" onclick="openMultimodalModal()">+ 添加服务</button>
+        </div>
+        <div id="multimodal-grid" class="provider-grid"></div>
+      </div>
+
+      <!-- Multimodal Service Modal -->
+      <div class="modal-overlay" id="mm-modal">
+        <div class="modal">
+          <div class="modal-header">
+            <h3 id="mm-modal-title">添加多模态服务</h3>
+            <button class="modal-close" onclick="closeMultimodalModal()">×</button>
+          </div>
+          <form onsubmit="handleMultimodalSubmit(event)">
+            <input type="hidden" id="mm-edit-id">
+            <div class="form-row">
+              <div class="form-group">
+                <label>服务名称</label>
+                <input type="text" id="mm-name" placeholder="如 DALL-E 3" required>
+              </div>
+              <div class="form-group">
+                <label>服务类型</label>
+                <select id="mm-type" onchange="onBrandChange()">
+                  <option value="image">图片生成</option>
+                  <option value="video">视频生成</option>
+                  <option value="tts">语音合成</option>
+                  <option value="music">音乐生成</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>服务商</label>
+                <select id="mm-brand" onchange="onBrandChange()">
+                  <option value="openai">OpenAI 兼容</option>
+                  <option value="mimo">MiMo（小米）</option>
+                  <option value="minimax">MiniMax</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>模型列表</label>
+                <div class="tag-input" id="mm-models-input">
+                  <div class="tag-list" id="mm-models-list"></div>
+                  <input type="text" id="mm-model-input" placeholder="输入模型名称按回车添加..." onkeydown="handleMmModelTagInput(event)">
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>API 地址</label>
+              <input type="url" id="mm-url" placeholder="https://api.openai.com">
+            </div>
+            <div class="form-group">
+              <label>API Key</label>
+              <input type="password" id="mm-apikey" placeholder="sk-...">
+            </div>
+            <div class="form-group">
+              <label><input type="checkbox" id="mm-enabled" checked> 启用此服务</label>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn" onclick="closeMultimodalModal()">取消</button>
+              <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+          </form>
         </div>
       </div>
 
@@ -1133,6 +1211,9 @@
                 <option value="minimax">MiniMax</option>
               </select>
             </div>
+          </div>
+          <div class="form-group">
+            <label><input type="checkbox" id="provider-enabled" checked> 启用此供应商</label>
           </div>
           <div class="form-group">
             <label>能力</label>

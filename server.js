@@ -422,7 +422,7 @@ async function init() {
   }
 
   app.use(cors());
-  app.use(express.json({ limit: '10mb' }));
+  app.use(express.json({ limit: '100mb' }));
 
   // 访问日志
   app.use((req, res, next) => {
@@ -449,25 +449,27 @@ async function init() {
     const pool = [];
     const seen = new Set();
 
-    // Primary provider (no model override)
-    const primaryKey = `${primaryProvider.id}\0`;
-    seen.add(primaryKey);
-    pool.push({
-      providerId: primaryProvider.id,
-      providerName: primaryProvider.name,
-      providerUrl: primaryProvider.url,
-      protocol: primaryProvider.protocol,
-      apiKeys: primaryProvider.apiKeys || [],
-      models: primaryProvider.models,
-      azureDeployment: primaryProvider.azureDeployment || '',
-      azureApiVersion: primaryProvider.azureApiVersion || '',
-      adapter: primaryProvider.adapter || '',
-      capabilities: Array.isArray(primaryProvider.capabilities) ? primaryProvider.capabilities : [],
-      model: '',
-      weight: Math.max(1, parseInt(proxy.providerWeight, 10) || 1),
-    });
+    // Primary provider (no model override) — 跳过已禁用的供应商
+    if (primaryProvider.enabled !== false) {
+      const primaryKey = `${primaryProvider.id}\0`;
+      seen.add(primaryKey);
+      pool.push({
+        providerId: primaryProvider.id,
+        providerName: primaryProvider.name,
+        providerUrl: primaryProvider.url,
+        protocol: primaryProvider.protocol,
+        apiKeys: primaryProvider.apiKeys || [],
+        models: primaryProvider.models,
+        azureDeployment: primaryProvider.azureDeployment || '',
+        azureApiVersion: primaryProvider.azureApiVersion || '',
+        adapter: primaryProvider.adapter || '',
+        capabilities: Array.isArray(primaryProvider.capabilities) ? primaryProvider.capabilities : [],
+        model: '',
+        weight: Math.max(1, parseInt(proxy.providerWeight, 10) || 1),
+      });
+    }
 
-    // Pool entries (may include model override)
+    // Pool entries (may include model override) — 跳过已禁用的供应商
     for (const entry of (proxy.providerPool || [])) {
       if (!entry || !entry.providerId) continue;
       const model = typeof entry.model === 'string' ? entry.model.trim() : '';
@@ -475,7 +477,7 @@ async function init() {
       if (seen.has(key)) continue;
       seen.add(key);
       const provider = configStore.getProviderById(entry.providerId);
-      if (!provider) continue;
+      if (!provider || provider.enabled === false) continue;
       pool.push({
         providerId: provider.id,
         providerName: provider.name,
@@ -887,6 +889,380 @@ async function init() {
       .map(f => ({ name: f, base64: fs.readFileSync(path.join(dir, f)).toString('base64') }));
   }
 
+  // ==================== 多模态服务工具自动生成 ====================
+
+  const MULTIMODAL_TEMPLATES = {
+    image: {
+      toolName: 'generate_image',
+      description: '生成图片。根据文字描述生成图片。',
+      paramName: 'prompt',
+      paramDesc: '图片描述（英文效果更佳）',
+      extraParams: { size: { type: 'string', description: '图片尺寸/比例，如 1024x1024、16:9、1:1', default: '1024x1024' } },
+      buildRequest: (provider, args) => {
+        const base = provider.url.replace(/\/$/, '');
+        const key = provider.apiKeys?.[0]?.key || provider.apiKey || '';
+        // MiniMax 图片生成
+        if (provider.brand === 'minimax') {
+          const ratioMap = { '1:1': '1:1', '16:9': '16:9', '4:3': '4:3', '3:2': '3:2', '2:3': '2:3', '3:4': '3:4', '9:16': '9:16', '21:9': '21:9' };
+          const aspectRatio = ratioMap[args.size] || '1:1';
+          return {
+            url: base + (base.includes('/v1') ? '/image_generation' : '/v1/image_generation'),
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+              body: JSON.stringify({ model: provider.models?.[0]?.name || 'image-01', prompt: args.prompt, aspect_ratio: aspectRatio }),
+            },
+            parseResponse: async (res) => {
+              const data = await res.json();
+              const urls = data.data?.image_urls || data.image_urls || [];
+              if (urls.length === 0) return { error: '图片生成失败: ' + (data.base_resp?.status_msg || JSON.stringify(data).slice(0, 200)) };
+              // 下载第一张图片转 base64
+              try {
+                const imgRes = await fetch(urls[0]);
+                const buf = await imgRes.arrayBuffer();
+                const base64 = Buffer.from(buf).toString('base64');
+                return { images: [{ name: 'generated.png', base64_data: base64 }] };
+              } catch { return { url: urls[0], message: `图片已生成: ${urls[0]}` }; }
+            },
+          };
+        }
+        // OpenAI 兼容
+        return {
+          url: base + (base.includes('/v1') ? '/images/generations' : '/v1/images/generations'),
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+            body: JSON.stringify({ model: provider.models?.[0]?.name || 'dall-e-3', prompt: args.prompt, size: args.size || '1024x1024', n: 1 }),
+          },
+          parseResponse: async (res) => {
+            const data = await res.json();
+            const url = data.data?.[0]?.url;
+            if (!url) return { error: '图片生成失败: 无返回数据' };
+            if (url.startsWith('data:')) {
+              const match = url.match(/^data:([^;]+);base64,(.+)$/);
+              return match ? { images: [{ name: 'generated.png', base64_data: match[2] }] } : { url };
+            }
+            return { url, message: `图片已生成: ${url}` };
+          },
+        };
+      },
+    },
+    video: {
+      toolName: 'generate_video',
+      description: '生成视频。根据文字描述生成短视频。可在 prompt 中用 [Push in] [Truck left] 等控制镜头。',
+      paramName: 'prompt',
+      paramDesc: '视频内容描述',
+      extraParams: { duration: { type: 'number', description: '视频时长（秒），默认 6', default: 6 } },
+      buildRequest: (provider, args) => {
+        const base = provider.url.replace(/\/$/, '');
+        const key = provider.apiKeys?.[0]?.key || provider.apiKey || '';
+        // MiniMax 视频（异步：创建任务 → 轮询 → 下载）
+        if (provider.brand === 'minimax') {
+          return {
+            url: base + (base.includes('/v1') ? '/video_generation' : '/v1/video_generation'),
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+              body: JSON.stringify({ model: provider.models?.[0]?.name || 'MiniMax-Hailuo-2.3', prompt: args.prompt, duration: String(args.duration || 6) }),
+            },
+            parseResponse: async (res, convId) => {
+              const data = await res.json();
+              const taskId = data.task_id;
+              if (!taskId) return { error: '视频任务创建失败: ' + (data.base_resp?.status_msg || JSON.stringify(data).slice(0, 200)) };
+              // 轮询等待完成
+              const pollUrl = base + (base.includes('/v1') ? '/query/video_generation' : '/v1/query/video_generation');
+              const maxWait = 600000, interval = 10000;
+              const start = Date.now();
+              while (Date.now() - start < maxWait) {
+                await new Promise(r => setTimeout(r, interval));
+                try {
+                  const pollRes = await fetch(`${pollUrl}?task_id=${taskId}`, { headers: { 'Authorization': `Bearer ${key}` } });
+                  const pollData = await pollRes.json();
+                  const status = pollData.status;
+                  if (status === 'Success') {
+                    const fileId = pollData.file_id;
+                    if (!fileId) return { task_id: taskId, message: '视频生成完成但无法获取文件ID' };
+                    // 下载视频
+                    const fileUrl = base + (base.includes('/v1') ? '/files/retrieve' : '/v1/files/retrieve');
+                    const fileRes = await fetch(`${fileUrl}?file_id=${fileId}`, { headers: { 'Authorization': `Bearer ${key}` } });
+                    const fileData = await fileRes.json();
+                    const downloadUrl = fileData.file?.download_url || fileData.download_url;
+                    if (downloadUrl && convId) {
+                      const videoRes = await fetch(downloadUrl);
+                      const buf = await videoRes.arrayBuffer();
+                      const fname = `video_${Date.now()}.mp4`;
+                      const dir = getConvFilesPath(convId);
+                      fs.mkdirSync(dir, { recursive: true });
+                      fs.writeFileSync(path.join(dir, fname), Buffer.from(buf));
+                      return { video_file: fname, message: `视频已生成: ${fname}` };
+                    }
+                    return downloadUrl ? { video_url: downloadUrl, message: `视频已生成: ${downloadUrl}` } : { task_id: taskId, file_id: fileId, message: '视频已生成，请查看文件' };
+                  }
+                  if (status === 'Fail') return { error: '视频生成失败: ' + (pollData.status_msg || '未知错误') };
+                } catch (pollErr) { logger.log(`[minimax-video] 轮询异常: ${pollErr.message}`); }
+              }
+              return { task_id: taskId, message: '视频生成超时（10分钟），请稍后用 task_id 查询' };
+            },
+          };
+        }
+        // 通用
+        return {
+          url: base + '/v1/video/generations',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+            body: JSON.stringify({ model: provider.models?.[0]?.name || 'default', prompt: args.prompt, duration: args.duration || 5 }),
+          },
+          parseResponse: async (res) => {
+            const data = await res.json();
+            if (data.video_url || data.data?.[0]?.url) {
+              return { video_url: data.video_url || data.data[0].url, message: '视频生成中，请稍候通过链接查看' };
+            }
+            if (data.id) return { task_id: data.id, message: '视频生成任务已提交，请通过 task_id 查询进度' };
+            return { error: '视频生成失败: 无返回数据' };
+          },
+        };
+      },
+    },
+    tts: {
+      toolName: 'text_to_speech',
+      description: '文字转语音。将文字转换为语音音频。',
+      paramName: 'text',
+      paramDesc: '要转换为语音的文字',
+      extraParams: { voice: { type: 'string', description: '语音角色（OpenAI: alloy/echo/nova；MiMo: 冰糖/茉莉；MiniMax: male-qn-qingse/female-shaonv 等）', default: 'alloy' } },
+      buildRequest: (provider, args) => {
+        const key = provider.apiKeys?.[0]?.key || provider.apiKey || '';
+        const model = provider.models?.[0]?.name || 'tts-1';
+        const base = provider.url.replace(/\/$/, '');
+        // MiniMax TTS: /v1/t2a_v2
+        if (provider.brand === 'minimax') {
+          return {
+            url: base + (base.includes('/v1') ? '/t2a_v2' : '/v1/t2a_v2'),
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+              body: JSON.stringify({
+                model: model || 'speech-2.8-hd',
+                text: args.text,
+                voice_setting: { voice_id: args.voice || 'male-qn-qingse', speed: 1.0, vol: 1.0, pitch: 0 },
+              }),
+            },
+            parseResponse: async (res, convId) => {
+              if (!res.ok) return { error: `MiniMax TTS 失败: HTTP ${res.status}` };
+              const data = await res.json();
+              const audioHex = data.data?.audio;
+              if (!audioHex) return { error: 'MiniMax TTS 失败: ' + (data.base_resp?.status_msg || '无音频数据') };
+              const audioBuf = Buffer.from(audioHex, 'hex');
+              const fname = `tts_${Date.now()}.mp3`;
+              if (convId) {
+                const dir = getConvFilesPath(convId);
+                fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(path.join(dir, fname), audioBuf);
+              }
+              return { audio_file: fname, message: `语音已生成: ${fname}` };
+            },
+          };
+        }
+        // MiMo TTS: 使用 Chat Completions 格式
+        if (provider.brand === 'mimo') {
+          return {
+            url: base + (base.includes('/v1') ? '/chat/completions' : '/v1/chat/completions'),
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'api-key': key },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: 'user', content: '' },
+                  { role: 'assistant', content: args.text },
+                ],
+                audio: { format: 'wav', voice: args.voice || 'mimo_default' },
+              }),
+            },
+            parseResponse: async (res, convId) => {
+              if (!res.ok) return { error: `MiMo TTS 失败: HTTP ${res.status}` };
+              const data = await res.json();
+              const audioData = data.choices?.[0]?.message?.audio?.data;
+              if (!audioData) return { error: 'MiMo TTS 失败: 无音频数据' };
+              const fname = `tts_${Date.now()}.wav`;
+              if (convId) {
+                const dir = getConvFilesPath(convId);
+                fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(path.join(dir, fname), Buffer.from(audioData, 'base64'));
+              }
+              return { audio_file: fname, message: `语音已生成: ${fname}` };
+            },
+          };
+        }
+        // OpenAI 兼容 TTS
+        return {
+          url: base + (base.includes('/v1') ? '/audio/speech' : '/v1/audio/speech'),
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+            body: JSON.stringify({ model, input: args.text, voice: args.voice || 'alloy' }),
+          },
+          parseResponse: async (res, convId) => {
+            if (!res.ok) return { error: `语音合成失败: HTTP ${res.status}` };
+            const buffer = await res.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString('base64');
+            const fname = `tts_${Date.now()}.mp3`;
+            if (convId) {
+              const dir = getConvFilesPath(convId);
+              fs.mkdirSync(dir, { recursive: true });
+              fs.writeFileSync(path.join(dir, fname), Buffer.from(base64, 'base64'));
+            }
+            return { audio_file: fname, message: `语音已生成: ${fname}` };
+          },
+        };
+      },
+    },
+    music: {
+      toolName: 'generate_music',
+      description: '生成音乐。根据文字描述生成音乐。可用 lyrics 参数提供歌词，加 instrumental 参数生成纯音乐。',
+      paramName: 'prompt',
+      paramDesc: '音乐风格和内容描述（如 "Jazz piano, smooth, relaxing"）',
+      extraParams: {
+        lyrics: { type: 'string', description: '歌词（含结构标签如 [Verse] [Chorus]），不填则自动生成' },
+        instrumental: { type: 'boolean', description: '是否纯音乐（无人声），默认 false' },
+      },
+      buildRequest: (provider, args) => {
+        const base = provider.url.replace(/\/$/, '');
+        const key = provider.apiKeys?.[0]?.key || provider.apiKey || '';
+        // MiniMax 音乐
+        if (provider.brand === 'minimax') {
+          const body = {
+            model: provider.models?.[0]?.name || 'music-2.5+',
+            prompt: args.prompt || '',
+          };
+          if (args.instrumental) body.instrumental = true;
+          else if (args.lyrics) body.lyrics = args.lyrics;
+          else body.lyrics_optimizer = true;
+          return {
+            url: base + (base.includes('/v1') ? '/music_generation' : '/v1/music_generation'),
+            options: {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+              body: JSON.stringify(body),
+            },
+            parseResponse: async (res, convId) => {
+              if (!res.ok) return { error: `MiniMax 音乐生成失败: HTTP ${res.status}` };
+              const data = await res.json();
+              const audioHex = data.data?.audio;
+              if (!audioHex) return { error: 'MiniMax 音乐生成失败: ' + (data.base_resp?.status_msg || '无音频数据') };
+              const audioBuf = Buffer.from(audioHex, 'hex');
+              const fname = `music_${Date.now()}.mp3`;
+              if (convId) {
+                const dir = getConvFilesPath(convId);
+                fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(path.join(dir, fname), audioBuf);
+              }
+              return { audio_file: fname, duration: data.data?.duration, message: `音乐已生成: ${fname}` };
+            },
+          };
+        }
+        // 通用
+        return {
+          url: base + '/v1/music/generations',
+          options: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+            body: JSON.stringify({ model: provider.models?.[0]?.name || 'default', prompt: args.prompt, duration: args.duration || 30 }),
+          },
+          parseResponse: async (res, convId) => {
+            if (!res.ok) return { error: `音乐生成失败: HTTP ${res.status}` };
+            const buffer = await res.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString('base64');
+            const fname = `music_${Date.now()}.mp3`;
+            if (convId) {
+              const dir = getConvFilesPath(convId);
+              fs.mkdirSync(dir, { recursive: true });
+              fs.writeFileSync(path.join(dir, fname), Buffer.from(base64, 'base64'));
+            }
+            return { audio_file: fname, message: `音乐已生成: ${fname}` };
+          },
+        };
+      },
+    },
+  };
+
+  function getMultimodalTools() {
+    const definitions = [];
+    const handlers = {};
+    const allServices = configStore.getMultimodalServices();
+    for (const [serviceType, template] of Object.entries(MULTIMODAL_TEMPLATES)) {
+      const services = allServices.filter(s => s.serviceType === serviceType && s.enabled !== false);
+      if (services.length === 0) continue;
+      // 收集所有可用模型
+      const availableModels = [];
+      for (const svc of services) {
+        const models = (svc.models && svc.models.length > 0) ? svc.models : (svc.model ? [{ name: svc.model }] : []);
+        for (const m of models) availableModels.push({ name: typeof m === 'string' ? m : m.name, service: svc.name });
+      }
+      const serviceNames = services.map(s => s.name).join('/');
+      const modelHint = availableModels.length > 0
+        ? ` 可用模型: ${availableModels.map(m => m.name).join('、')}` : '';
+      const props = { [template.paramName]: { type: 'string', description: template.paramDesc } };
+      if (availableModels.length > 0) {
+        props.model = { type: 'string', description: `指定使用的模型名称。${modelHint}` };
+      }
+      for (const [k, v] of Object.entries(template.extraParams || {})) {
+        props[k] = { type: v.type, description: v.description + `（默认: ${v.default}）` };
+      }
+      definitions.push({
+        type: 'function',
+        function: {
+          name: template.toolName,
+          description: `${template.description} 服务: ${serviceNames}.${modelHint}`,
+          parameters: { type: 'object', properties: props, required: [template.paramName] },
+        },
+      });
+      handlers[template.toolName] = async (args) => {
+        // 根据 args.model 选择对应的服务和模型
+        let svc = services[0];
+        let modelName = args.model;
+        if (modelName) {
+          let found = false;
+          for (const s of services) {
+            const models = (s.models && s.models.length > 0) ? s.models : (s.model ? [{ name: s.model }] : []);
+            if (models.some(m => (typeof m === 'string' ? m : m.name) === modelName)) {
+              svc = s;
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            const available = services.flatMap(s => {
+              const ms = (s.models && s.models.length > 0) ? s.models : (s.model ? [{ name: s.model }] : []);
+              return ms.map(m => (typeof m === 'string' ? m : m.name));
+            });
+            return { error: `模型 "${modelName}" 不可用。可用模型: ${available.join('、') || '无'}` };
+          }
+        }
+        const svcModels = (svc.models && svc.models.length > 0) ? svc.models : (svc.model ? [{ name: svc.model }] : []);
+        if (!modelName && svcModels.length > 0) modelName = (typeof svcModels[0] === 'string' ? svcModels[0] : svcModels[0].name);
+        const provider = { url: svc.url, apiKey: svc.apiKey, apiKeys: svc.apiKey ? [{ key: svc.apiKey }] : [], models: svcModels.map(m => typeof m === 'string' ? { name: m } : m), brand: svc.brand };
+        // 如果指定了 model，覆盖 buildRequest 中的默认选择
+        if (modelName) provider._selectedModel = modelName;
+        const { url, options, parseResponse } = template.buildRequest(provider, args);
+        // 替换 body 中的 model 为用户指定的模型
+        if (modelName && options.body) {
+          try {
+            const bodyObj = JSON.parse(options.body);
+            if (bodyObj.model) { bodyObj.model = modelName; options.body = JSON.stringify(bodyObj); }
+          } catch {}
+        }
+        try {
+          const res = await fetch(url, { ...options, signal: AbortSignal.timeout(120000) });
+          return await parseResponse(res, args._convId);
+        } catch (err) {
+          return { error: `${template.toolName} 失败: ${err.message}` };
+        }
+      };
+    }
+    return { definitions, handlers };
+  }
+
   function truncateOutput(obj) {
     const str = typeof obj === 'string' ? obj : JSON.stringify(obj);
     if (str.length <= MAX_TOOL_OUTPUT) return obj;
@@ -1181,6 +1557,7 @@ async function init() {
             name: { type: 'string', description: '供应商名称' },
             url: { type: 'string', description: '供应商 API 地址' },
             protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini', 'responses'], description: '协议类型，默认自动检测' },
+            enabled: { type: 'boolean', description: '是否启用，默认 true' },
             apiKey: { type: 'string', description: 'API Key（单个）' },
             apiKeys: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, alias: { type: 'string' } } }, description: '多个 API Key 数组' },
             models: { type: 'array', items: { type: 'string' }, description: '可用模型列表' },
@@ -1205,6 +1582,7 @@ async function init() {
             name: { type: 'string', description: '新的名称' },
             url: { type: 'string', description: '新的 URL' },
             protocol: { type: 'string', enum: ['openai', 'anthropic', 'gemini', 'responses'], description: '新的协议' },
+            enabled: { type: 'boolean', description: '是否启用' },
             apiKey: { type: 'string', description: '新的 API Key' },
             models: { type: 'array', items: { type: 'string' }, description: '新的模型列表' },
             adapter: { type: 'string', enum: ['qwen', 'deepseek', 'kimi', 'doubao', 'zhipu', 'minimax', 'mimo'], description: '新的供应商适配器' },
@@ -2253,7 +2631,7 @@ async function init() {
             h.status === 'partial' ? `部分异常 (${ok}/${total})` :
             h.status === 'unhealthy' ? `异常 (${ok}/${total})` : '未检测';
         }
-        return { id: p.id, name: p.name, url: p.url, protocol: p.protocol, keyCount: (p.apiKeys || []).length, health: healthStatus };
+        return { id: p.id, name: p.name, url: p.url, protocol: p.protocol, enabled: p.enabled !== false, keyCount: (p.apiKeys || []).length, health: healthStatus };
       });
     },
 
@@ -2261,7 +2639,7 @@ async function init() {
       const p = configStore.getProviderById(args.providerId);
       if (!p) return { error: `供应商 ${args.providerId} 不存在` };
       const h = keyHealth.get(p.id);
-      return { id: p.id, name: p.name, url: p.url, protocol: p.protocol, apiKeys: (p.apiKeys || []).map((k, i) => ({ index: i, alias: k.alias || '', enabled: k.enabled !== false })), health: h || null };
+      return { id: p.id, name: p.name, url: p.url, protocol: p.protocol, enabled: p.enabled !== false, apiKeys: (p.apiKeys || []).map((k, i) => ({ index: i, alias: k.alias || '', enabled: k.enabled !== false })), health: h || null };
     },
 
     get_proxies: async () => {
@@ -2714,6 +3092,7 @@ async function init() {
         name: args.name,
         url: args.url,
         protocol: args.protocol || (/anthropic/i.test(args.url) ? 'anthropic' : 'openai'),
+        enabled: args.enabled !== false,
         apiKey: args.apiKey || '',
         apiKeys: Array.isArray(args.apiKeys) ? args.apiKeys.filter(k => k && k.key && k.key.trim()) : [],
         models: args.models || [],
@@ -2732,6 +3111,7 @@ async function init() {
       if (args.name !== undefined) updates.name = args.name;
       if (args.url !== undefined) updates.url = args.url;
       if (args.protocol !== undefined) updates.protocol = args.protocol;
+      if (args.enabled !== undefined) updates.enabled = args.enabled;
       if (args.apiKey !== undefined && args.apiKey !== '') updates.apiKey = args.apiKey;
       if (args.apiKeys !== undefined) {
         updates.apiKeys = Array.isArray(args.apiKeys) ? args.apiKeys.filter(k => k && k.key && k.key.trim()) : [];
@@ -3280,8 +3660,8 @@ async function init() {
           proxyUrl: _chatProxy.url,
           proxyHeaders: _chatProxy.headers,
           defaultModel: args.model || _chatProxy.defaultModel,
-          toolDefinitions: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
-          toolHandlers: TOOL_HANDLERS,
+          toolDefinitions: [...TOOL_DEFINITIONS, ...getMultimodalTools().definitions, ...mcpClient.getToolDefinitions()],
+          toolHandlers: { ...TOOL_HANDLERS, ...getMultimodalTools().handlers },
           systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore }),
           parentTaskId: null,
           maxRounds: args.maxRounds,
@@ -3357,8 +3737,8 @@ async function init() {
           proxyUrl: _chatProxy.url,
           proxyHeaders: _chatProxy.headers,
           defaultModel: _chatProxy.defaultModel,
-          toolDefinitions: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
-          toolHandlers: TOOL_HANDLERS,
+          toolDefinitions: [...TOOL_DEFINITIONS, ...getMultimodalTools().definitions, ...mcpClient.getToolDefinitions()],
+          toolHandlers: { ...TOOL_HANDLERS, ...getMultimodalTools().handlers },
           systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore }),
           maxRounds: args.maxRounds,
           config: getAgentConfig(configStore.getSettings()),
@@ -3541,6 +3921,8 @@ async function init() {
       return presets.map(p => ({ ...p, added: !!existing[p.name] }));
     },
   };
+
+  // 多模态工具在请求时动态获取，不在此处静态合并
 
   async function startProxyWithProvider(proxy) {
     const target = resolveTarget(proxy);
@@ -4788,6 +5170,52 @@ async function init() {
     res.json({ providers, defaultModel: proxy.defaultModel || '' });
   });
 
+  // ==================== 多模态服务 API ====================
+  app.get('/api/multimodal', (req, res) => {
+    res.json(configStore.getMultimodalServices());
+  });
+
+  app.post('/api/multimodal', (req, res) => {
+    const { name, serviceType, brand, url, apiKey, models, model, enabled } = req.body;
+    if (!name || !serviceType || !brand) return res.status(400).json({ error: 'name、serviceType、brand 必填' });
+    const modelsList = (models && models.length > 0) ? models : (model ? [{ name: model }] : []);
+    const service = configStore.addMultimodalService({ name, serviceType, brand, url: url || '', apiKey: apiKey || '', models: modelsList, enabled: enabled !== false });
+    res.json(service);
+  });
+
+  app.put('/api/multimodal/:id', (req, res) => {
+    const existing = configStore.getMultimodalServiceById(req.params.id);
+    if (!existing) return res.status(404).json({ error: '服务不存在' });
+    const updates = {};
+    for (const k of ['name', 'serviceType', 'brand', 'url', 'apiKey', 'enabled']) {
+      if (req.body[k] !== undefined) updates[k] = req.body[k];
+    }
+    if (req.body.models !== undefined) updates.models = req.body.models;
+    else if (req.body.model !== undefined) updates.models = req.body.model ? [{ name: req.body.model }] : [];
+    const updated = configStore.updateMultimodalService(req.params.id, updates);
+    res.json(updated);
+  });
+
+  app.delete('/api/multimodal/:id', (req, res) => {
+    configStore.removeMultimodalService(req.params.id);
+    res.json({ success: true });
+  });
+
+  // 对话文件服务（多模态工具生成的音频/视频/图片）
+  app.get('/api/conv-files/:convId/:filename', (req, res) => {
+    const { convId, filename } = req.params;
+    const dir = getConvFilesPath(convId);
+    const filePath = path.resolve(dir, filename);
+    if (!filePath.startsWith(path.resolve(dir))) {
+      return res.status(400).json({ error: 'invalid path' });
+    }
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
+    const ext = path.extname(filename).toLowerCase();
+    const mimeMap = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+    res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+    res.sendFile(filePath);
+  });
+
   // ========== Skill API ==========
   app.get('/api/skills', (req, res) => {
     res.json({ skills: skillStore.list() });
@@ -5110,7 +5538,7 @@ async function init() {
 
   // 所有可用工具列表（内置 + MCP），供前端子智能体配置使用
   app.get('/api/assistant/tools', (req, res) => {
-    const allDefs = [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()];
+    const allDefs = [...TOOL_DEFINITIONS, ...getMultimodalTools().definitions, ...mcpClient.getToolDefinitions()];
     const tools = allDefs.map(d => {
       const name = d.function?.name || d.name;
       const desc = d.function?.description || d.description || '';
@@ -5141,6 +5569,9 @@ async function init() {
     const proxy = configStore.getProxyById(proxyId);
     if (!proxy) return res.status(404).json({ error: '代理不存在' });
     if (!resolveTarget(proxy)) return res.status(500).json({ error: '代理目标未配置' });
+
+    // 缓存多模态工具，避免每次 tool call 都重新生成
+    const _mmTools = getMultimodalTools();
 
     // 查找或创建对话
     const settings = configStore.getSettings();
@@ -5318,11 +5749,31 @@ async function init() {
           systemParts.push(`[长对话模式] 当前为长对话模式，只提供了最近的 ${ws} 条消息。更早的历史消息未包含在上下文中，如用户需要回顾之前的内容，请提示用户查看历史会话或切换到专业模式。`);
         }
         const msgs = [{ role: 'system', content: systemParts.join('\n\n---\n\n') }];
+        // 构建发给 API 的消息：assistant 消息附带图片时转为 vision content blocks
+        const buildApiMessage = (m) => {
+          if (m.role !== 'assistant' || !m._images || m._images.length === 0) return m;
+          const dir = getConvFilesPath(convId);
+          const parts = [];
+          // 文本部分（剥离媒体标记）
+          const text = (m.content || '').replace(/\[MEDIA:[^\]]+\]/g, '').trim();
+          if (text) parts.push({ type: 'text', text });
+          // 图片部分
+          for (const fname of m._images) {
+            try {
+              const filePath = path.join(dir, fname);
+              if (fs.existsSync(filePath)) {
+                const base64 = fs.readFileSync(filePath).toString('base64');
+                parts.push({ type: 'image_url', image_url: { url: `data:image/png;base64,${base64}` } });
+              }
+            } catch {}
+          }
+          return parts.length > 0 ? { role: 'assistant', content: parts } : m;
+        };
         if (conv.mode === 'sliding') {
           const ws = conv.windowSize || 20;
-          msgs.push(...conv.messages.slice(-ws));
+          msgs.push(...conv.messages.slice(-ws).map(buildApiMessage));
         } else {
-          msgs.push(...conv.messages);
+          msgs.push(...conv.messages.map(buildApiMessage));
         }
         return msgs;
       };
@@ -5371,7 +5822,7 @@ async function init() {
               model: proxy.defaultModel || 'gpt-4o',
               messages: cleanMessages,
               stream: true,
-              tools: [...TOOL_DEFINITIONS, ...mcpClient.getToolDefinitions()],
+              tools: [...TOOL_DEFINITIONS, ..._mmTools.definitions, ...mcpClient.getToolDefinitions()],
               tool_choice: 'auto',
               ...thinkingParams,
             }),
@@ -5415,6 +5866,7 @@ async function init() {
         let fullContent = '';
         let reasoningContent = '';
         const toolCallAccumulator = {};
+        const visionImages = []; // 工具生成的图片文件名，附到最终回复供 vision API
 
         while (true) {
           const { done, value } = await reader.read();
@@ -5456,6 +5908,7 @@ async function init() {
             lastAssistantMsgId = generateMsgId();
             const assistantMsg = { id: lastAssistantMsgId, role: 'assistant', content: fullContent || null };
             if (reasoningContent) assistantMsg.reasoning_content = reasoningContent;
+            if (visionImages.length > 0) assistantMsg._images = [...visionImages];
             conv.messages.push(assistantMsg);
           }
           currentTokens = estimateConversationTokens(buildMessages());
@@ -5566,8 +6019,10 @@ async function init() {
                   const parts = tc.name.split('__');
                   mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
                 } else {
-                  if (tc.name === 'execute_code' || tc.name === 'parse_document') args._convId = convId;
-                  result = await TOOL_HANDLERS[tc.name]?.(args) || { error: `未知工具: ${tc.name}` };
+                  if (['execute_code', 'parse_document', 'text_to_speech', 'generate_music', 'generate_video', 'generate_image'].includes(tc.name)) args._convId = convId;
+                  const mmHandler = _mmTools.handlers[tc.name];
+                  const handler = TOOL_HANDLERS[tc.name] || mmHandler;
+                  result = handler ? await handler(args) : { error: `未知工具: ${tc.name}` };
                 }
                 if (result && result.error) isError = true;
                 // 缓存成功的只读结果
@@ -5579,16 +6034,50 @@ async function init() {
             result = { error: err.message };
             isError = true;
           }
-          // execute_code 图片提取：图片发给前端，不发给 LLM（base64 占上下文但模型无法解析）
+          // 媒体提取：图片/音频/视频发给前端展示，同时保存图片到 conv-files 供 vision API 使用
           let toolImages = null;
           if (result && result.images) {
+            // 保存图片到 conv-files 目录，转为文件名引用
+            if (convId && result.images.length > 0) {
+              const dir = getConvFilesPath(convId);
+              fs.mkdirSync(dir, { recursive: true });
+              for (const img of result.images) {
+                const fname = `img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.png`;
+                fs.writeFileSync(path.join(dir, fname), Buffer.from(img.base64_data, 'base64'));
+                img._file = fname; // 记录保存的文件名
+              }
+            }
             toolImages = result.images;
+            for (const img of result.images) {
+              if (img._file) visionImages.push(img._file);
+            }
+            // 构造文件名列表告诉 LLM，使其能在回复中引用展示
+            const fileNames = toolImages.filter(i => i._file).map(i => i._file);
             delete result.images;
+            if (!result.message) result.message = `${tc.name} 成功，已生成 ${toolImages.length} 张图片`;
+            if (fileNames.length > 0) result.files = fileNames;
+          }
+          let toolMedia = null;
+          if (result) {
+            const media = {};
+            if (result.audio_file) { media.audio_file = result.audio_file; delete result.audio_file; }
+            if (result.video_file) { media.video_file = result.video_file; delete result.video_file; }
+            if (result.video_url) { media.video_url = result.video_url; delete result.video_url; }
+            if (Object.keys(media).length > 0) {
+              toolMedia = media;
+              if (!result.message) result.message = `${tc.name} 成功`;
+              // 把文件名/URL 告诉 LLM，使其能在回复中引用展示
+              const files = [];
+              if (media.audio_file) files.push(media.audio_file);
+              if (media.video_file) files.push(media.video_file);
+              if (media.video_url) files.push(media.video_url);
+              if (files.length > 0) result.files = files;
+            }
           }
           result = truncateOutput(result);
           const resultStr = JSON.stringify(result);
-          logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}${toolImages ? `, ${toolImages.length} images` : ''}`);
-          safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError, images: toolImages });
+          logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}${toolImages ? `, ${toolImages.length} images` : ''}${toolMedia ? `, media` : ''}`);
+          safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError, images: toolImages, media: toolMedia });
           conv.messages.push({ id: generateMsgId(), role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
         }
 
@@ -5682,7 +6171,7 @@ async function init() {
             proxyUrl: _chatProxy.url,
             proxyHeaders: _chatProxy.headers,
             defaultModel: _chatProxy.defaultModel,
-            toolHandlers: TOOL_HANDLERS,
+            toolHandlers: { ...TOOL_HANDLERS, ..._mmTools.handlers },
             messages: conv.messages,
             config: _getAgentCfg(configStore.getSettings()),
           }).catch(err => logger.warn('[memory] 后台审查调度失败:', err.message));

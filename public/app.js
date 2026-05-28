@@ -179,6 +179,7 @@ function navigateTo(page) {
     dashboard: '\u603b\u89c8',
     proxies: '\u4ee3\u7406\u7ba1\u7406',
     providers: '\u4f9b\u5e94\u5546\u7ba1\u7406',
+    multimodal: '\u591a\u6a21\u6001\u670d\u52a1',
     stats: '\u7528\u91cf\u7edf\u8ba1',
     'request-logs': '\u8bf7\u6c42\u65e5\u5fd7',
     'system-logs': '\u7cfb\u7edf\u65e5\u5fd7',
@@ -1029,7 +1030,7 @@ function renderProviders() {
       statusDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-left:8px;"></span>`;
     }
     return `
-      <div class="provider-card">
+      <div class="provider-card${p.enabled === false ? ' provider-disabled' : ''}">
         <div class="provider-card-header">
           <div class="provider-card-name">${escapeHtml(p.name)}${statusDot}</div>
           <span class="provider-card-protocol">${escapeHtml(p.protocol)}</span>
@@ -1043,6 +1044,10 @@ function renderProviders() {
         </div>
         <div class="provider-card-keys">${(p.apiKeys || []).length} \u4e2a API Key</div>
         <div class="provider-card-actions">
+          <label class="toggle-switch" title="${p.enabled === false ? '\u5df2\u7981\u7528' : '\u5df2\u542f\u7528'}">
+            <input type="checkbox" ${p.enabled !== false ? 'checked' : ''} onchange="toggleProviderEnabled('${p.id}', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
           <button class="btn btn-sm" onclick="editProvider('${p.id}')">\u7f16\u8f91</button>
           <button class="btn btn-sm" onclick="testProviderConnection('${p.id}')">\u6d4b\u8bd5</button>
           <button class="btn btn-sm" style="color:var(--error)" onclick="deleteProvider('${p.id}')">\u5220\u9664</button>
@@ -1056,6 +1061,20 @@ function filterProviders() {
   renderProviders();
 }
 
+async function toggleProviderEnabled(id, enabled) {
+  try {
+    await fetch(`/api/providers/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    await loadProviders();
+    showToast(enabled ? '供应商已启用' : '供应商已禁用');
+  } catch (err) {
+    showToast('操作失败: ' + err.message, true);
+  }
+}
+
 function openProviderModal() {
   editingProviderId = null;
   document.getElementById('provider-modal-title').textContent = '\u65b0\u5efa\u4f9b\u5e94\u5546';
@@ -1063,6 +1082,7 @@ function openProviderModal() {
   document.getElementById('provider-name').value = '';
   document.getElementById('provider-protocol').value = 'openai';
   document.getElementById('provider-adapter').value = '';
+  document.getElementById('provider-enabled').checked = true;
   setProviderCapabilities(['chat']);
   document.getElementById('provider-url').value = '';
   providerModelTags = [];
@@ -1084,6 +1104,7 @@ function editProvider(id) {
   document.getElementById('provider-name').value = p.name;
   document.getElementById('provider-protocol').value = p.protocol || 'openai';
   document.getElementById('provider-adapter').value = p.adapter || '';
+  document.getElementById('provider-enabled').checked = p.enabled !== false;
   setProviderCapabilities(p.capabilities || ['chat']);
   document.getElementById('provider-url').value = p.url;
   providerModelTags = [...(p.models || [])];
@@ -1290,6 +1311,7 @@ async function handleProviderSubmit(e) {
     name: document.getElementById('provider-name').value.trim(),
     protocol: document.getElementById('provider-protocol').value,
     adapter: document.getElementById('provider-adapter').value,
+    enabled: document.getElementById('provider-enabled').checked,
     capabilities: collectProviderCapabilities(),
     url: document.getElementById('provider-url').value.trim(),
     models: providerModelTags,
@@ -1495,6 +1517,212 @@ function showTestResult(ok, summary, results) {
 function closeTestModal() {
   hideModal('test-modal');
 }
+
+// ==================== 多模态服务管理 ====================
+
+let multimodalServices = [];
+let editingMmId = null;
+let mmModelTags = [];
+let _lastAutoUrl = ''; // 记录上次自动填充的 URL，避免覆盖用户手动输入
+
+function renderMmModelTags() {
+  const list = document.getElementById('mm-models-list');
+  if (!list) return;
+  list.innerHTML = mmModelTags.map((tag, i) => `
+    <span class="tag">${escapeHtml(tag.name)}<button type="button" class="tag-remove" onclick="removeMmModelTag(${i})">&times;</button></span>
+  `).join('');
+}
+
+function handleMmModelTagInput(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const val = e.target.value.trim();
+    if (val && !mmModelTags.some(m => m.name === val)) {
+      mmModelTags.push({ name: val });
+      renderMmModelTags();
+      e.target.value = '';
+    }
+  }
+}
+
+function removeMmModelTag(index) {
+  mmModelTags.splice(index, 1);
+  renderMmModelTags();
+}
+
+async function loadMultimodal() {
+  try {
+    const res = await fetch('/api/multimodal');
+    multimodalServices = await res.json();
+    renderMultimodal();
+    const badge = document.getElementById('nav-multimodal-count');
+    if (badge) badge.textContent = multimodalServices.length || '';
+  } catch {}
+}
+
+function renderMultimodal() {
+  const grid = document.getElementById('multimodal-grid');
+  if (!grid) return;
+  const search = (document.getElementById('mm-search')?.value || '').toLowerCase();
+  const filtered = multimodalServices.filter(s =>
+    !search || s.name.toLowerCase().includes(search) || (s.brand || '').toLowerCase().includes(search)
+  );
+  const typeLabel = { image: '图片生成', video: '视频生成', tts: '语音合成', music: '音乐生成' };
+  const typeIcon = { image: '🖼️', video: '🎬', tts: '🔊', music: '🎵' };
+  const brandLabel = { openai: 'OpenAI', mimo: 'MiMo', minimax: 'MiniMax', custom: '自定义' };
+
+  if (filtered.length === 0) {
+    grid.innerHTML = `<div class="empty-state"><p>还没有配置多模态服务</p><button class="btn btn-primary" onclick="openMultimodalModal()">添加第一个服务</button></div>`;
+    return;
+  }
+  grid.innerHTML = filtered.map(s => `
+    <div class="provider-card${s.enabled === false ? ' provider-disabled' : ''}">
+      <div class="provider-card-header">
+        <div class="provider-card-name">${typeIcon[s.serviceType] || ''} ${escapeHtml(s.name)}</div>
+        <span class="provider-card-category">${escapeHtml(typeLabel[s.serviceType] || s.serviceType)}</span>
+        <span class="provider-card-protocol">${escapeHtml(brandLabel[s.brand] || s.brand)}</span>
+      </div>
+      <div class="provider-card-url">${escapeHtml(s.url || '(默认)')}</div>
+      ${(s.models && s.models.length > 0) ? `<div class="provider-card-models">${s.models.map(m => `<span class="provider-card-model">${escapeHtml(typeof m === 'string' ? m : m.name)}</span>`).join('')}</div>` : (s.model ? `<div class="provider-card-models"><span class="provider-card-model">${escapeHtml(s.model)}</span></div>` : '')}
+      <div class="provider-card-actions">
+        <button class="btn btn-sm" onclick="editMultimodal('${s.id}')">编辑</button>
+        <button class="btn btn-sm" style="color:var(--error)" onclick="deleteMultimodal('${s.id}')">删除</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openMultimodalModal() {
+  editingMmId = null;
+  document.getElementById('mm-modal-title').textContent = '添加多模态服务';
+  document.getElementById('mm-edit-id').value = '';
+  document.getElementById('mm-name').value = '';
+  document.getElementById('mm-type').value = 'image';
+  document.getElementById('mm-brand').value = 'openai';
+  document.getElementById('mm-url').value = '';
+  document.getElementById('mm-apikey').value = '';
+  document.getElementById('mm-enabled').checked = true;
+  mmModelTags = [];
+  _lastAutoUrl = '';
+  renderMmModelTags();
+  onBrandChange();
+  showModal('mm-modal');
+}
+
+function editMultimodal(id) {
+  const s = multimodalServices.find(x => x.id === id);
+  if (!s) return;
+  editingMmId = id;
+  document.getElementById('mm-modal-title').textContent = '编辑多模态服务';
+  document.getElementById('mm-edit-id').value = s.id;
+  document.getElementById('mm-name').value = s.name;
+  document.getElementById('mm-type').value = s.serviceType;
+  document.getElementById('mm-brand').value = s.brand;
+  document.getElementById('mm-url').value = s.url || '';
+  document.getElementById('mm-apikey').value = s.apiKey || '';
+  document.getElementById('mm-enabled').checked = s.enabled !== false;
+  onBrandChange();
+  // 兼容旧数据：model 字符串 → models 数组（覆盖 onBrandChange 填充的预设）
+  mmModelTags = (s.models && s.models.length > 0)
+    ? s.models.map(m => typeof m === 'string' ? { name: m } : m)
+    : (s.model ? [{ name: s.model }] : []);
+  renderMmModelTags();
+  showModal('mm-modal');
+}
+
+function closeMultimodalModal() {
+  hideModal('mm-modal');
+  editingMmId = null;
+}
+
+async function handleMultimodalSubmit(e) {
+  e.preventDefault();
+  const payload = {
+    name: document.getElementById('mm-name').value.trim(),
+    serviceType: document.getElementById('mm-type').value,
+    brand: document.getElementById('mm-brand').value,
+    models: mmModelTags.map(t => ({ name: t.name })),
+    url: document.getElementById('mm-url').value.trim(),
+    apiKey: document.getElementById('mm-apikey').value,
+    enabled: document.getElementById('mm-enabled').checked,
+  };
+  if (!payload.name) { showToast('请填写服务名称', true); return; }
+  try {
+    if (editingMmId) {
+      await fetch(`/api/multimodal/${editingMmId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      showToast('服务已更新');
+    } else {
+      await fetch('/api/multimodal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      showToast('服务已创建');
+    }
+    closeMultimodalModal();
+    await loadMultimodal();
+  } catch (err) {
+    showToast('保存失败: ' + err.message, true);
+  }
+}
+
+async function deleteMultimodal(id) {
+  const s = multimodalServices.find(x => x.id === id);
+  if (!s) return;
+  const ok = await showConfirm(`确定删除多模态服务 <strong>${escapeHtml(s.name)}</strong>？`);
+  if (!ok) return;
+  try {
+    await fetch(`/api/multimodal/${id}`, { method: 'DELETE' });
+    await loadMultimodal();
+    showToast('服务已删除');
+  } catch (err) {
+    showToast('删除失败: ' + err.message, true);
+  }
+}
+
+function onBrandChange() {
+  const serviceType = document.getElementById('mm-type').value;
+  const brandSelect = document.getElementById('mm-brand');
+  const urlField = document.getElementById('mm-url');
+  // 每个服务类型可用的品牌
+  const brandsByType = {
+    image: [
+      { value: 'openai', label: 'OpenAI 兼容' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'custom', label: '自定义' },
+    ],
+    video: [
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'custom', label: '自定义' },
+    ],
+    tts: [
+      { value: 'openai', label: 'OpenAI 兼容' },
+      { value: 'mimo', label: 'MiMo（小米）' },
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'custom', label: '自定义' },
+    ],
+    music: [
+      { value: 'minimax', label: 'MiniMax' },
+      { value: 'custom', label: '自定义' },
+    ],
+  };
+  // 更新品牌下拉（保留当前选中值）
+  const prevBrand = brandSelect.value;
+  const brands = brandsByType[serviceType] || brandsByType.custom;
+  brandSelect.innerHTML = brands.map(b => `<option value="${b.value}">${b.label}</option>`).join('');
+  if (brands.some(b => b.value === prevBrand)) {
+    brandSelect.value = prevBrand;
+  }
+  const brand = brandSelect.value;
+  const defaults = {
+    openai: { url: 'https://api.openai.com' },
+    mimo: { url: 'https://api.xiaomimimo.com' },
+    minimax: { url: 'https://api.minimaxi.com' },
+    custom: { url: '' },
+  };
+  const d = defaults[brand] || defaults.custom;
+  if (!urlField.value || urlField.value === _lastAutoUrl) {
+    urlField.value = d.url;
+    _lastAutoUrl = d.url;
+  }
+}
+
 // ---------- Stats Page ----------
 function changeStatsRange(range) {
   statsRange = range;
@@ -2396,7 +2624,7 @@ async function init() {
     if (el && d.version) el.textContent = 'v' + d.version;
   }).catch(() => {});
 
-  await Promise.all([loadProxies(), loadProviders(), loadKeyHealth()]);
+  await Promise.all([loadProxies(), loadProviders(), loadKeyHealth(), loadMultimodal()]);
   loadStats();
   loadLogs();
   loadRequestLogHistory();
@@ -2793,7 +3021,7 @@ function isDocumentFile(file) {
 
 function handleAssistantFileSelect(files) {
   if (!files || files.length === 0) return;
-  const MAX_BASE64_SIZE = 50 * 1024 * 1024;
+  const MAX_BASE64_SIZE = 37 * 1024 * 1024; // 原始文件上限，base64 编码后约 50MB
   for (const file of files) {
     if (file.type.startsWith('image/')) {
       // 图片：读取 base64
@@ -3055,6 +3283,7 @@ async function processAssistantSSE(response, thinkingId) {
   let currentEvent = '';
   let msgId = null;
   let thinkingRemoved = false;
+  const collectedMedia = [];
 
   while (true) {
     const { done, value } = await reader.read();
@@ -3134,7 +3363,18 @@ async function processAssistantSSE(response, thinkingId) {
 
         case 'tool_result': {
           const resultStr = JSON.stringify(data.result, null, 2);
-          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null });
+          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null, media: data.media || null });
+          // 收集媒体用于附加到助手回复中
+          if (data.images && data.images.length > 0) {
+            for (const img of data.images) {
+              collectedMedia.push({ type: 'image', file: img._file || null, base64: img.base64_data || null });
+            }
+          }
+          if (data.media) {
+            if (data.media.audio_file) collectedMedia.push({ type: 'audio', file: data.media.audio_file });
+            if (data.media.video_file) collectedMedia.push({ type: 'video', file: data.media.video_file });
+            if (data.media.video_url) collectedMedia.push({ type: 'video_url', url: data.media.video_url });
+          }
           break;
         }
 
@@ -3145,6 +3385,17 @@ async function processAssistantSSE(response, thinkingId) {
             if (msgObj) {
               if (data.reasoning_content && !fullContent.includes('<think>')) {
                 fullContent = `<think>${data.reasoning_content}</think>` + fullContent;
+              }
+              // 附加工具生成的媒体标记到消息内容中（持久化到对话历史）
+              if (collectedMedia.length > 0) {
+                const mediaMarkers = collectedMedia.map(m => {
+                  if (m.type === 'image') return m.file ? `[MEDIA:image:${m.file}]` : '';
+                  if (m.type === 'audio') return `[MEDIA:audio:${m.file}]`;
+                  if (m.type === 'video') return `[MEDIA:video:${m.file}]`;
+                  if (m.type === 'video_url') return `[MEDIA:video_url:${m.url}]`;
+                  return '';
+                }).filter(Boolean).join('\n');
+                if (mediaMarkers) fullContent += '\n' + mediaMarkers;
               }
               msgObj.content = fullContent;
               updateAssistantMessage(msgId, fullContent);
@@ -3253,12 +3504,27 @@ function addAssistantMessage(role, content, backendMsgId = null) {
         toolData.images.map(img => `<img class="msg-media" src="data:image/png;base64,${escapeHtml(img.base64_data)}" alt="${escapeHtml(img.name)}">`).join('') +
         '</div>';
     }
+    let mediaHtml = '';
+    if (toolData.media) {
+      const m = toolData.media;
+      const convId = assistantConversationId;
+      if (m.audio_file && convId) {
+        mediaHtml += `<div class="tool-result-media"><audio controls src="/api/conv-files/${convId}/${encodeURIComponent(m.audio_file)}"></audio><span class="tool-media-name">${escapeHtml(m.audio_file)}</span></div>`;
+      }
+      if (m.video_file && convId) {
+        mediaHtml += `<div class="tool-result-media"><video controls class="msg-media" src="/api/conv-files/${convId}/${encodeURIComponent(m.video_file)}"></video><span class="tool-media-name">${escapeHtml(m.video_file)}</span></div>`;
+      }
+      if (m.video_url) {
+        mediaHtml += `<div class="tool-result-media"><video controls class="msg-media" src="${escapeHtml(m.video_url)}"></video></div>`;
+      }
+    }
     div.innerHTML = `
       <div class="tool-result-header" onclick="document.getElementById('${resultId}').classList.toggle('expanded')">
         <span class="tool-result-name">${toolData.is_error ? '⚠ ' : ''}${escapeHtml(toolData.name)}</span>
         <span class="tool-result-toggle">${toolData.is_error ? '错误详情 ▾' : '展开结果 ▾'}</span>
       </div>
       ${imagesHtml}
+      ${mediaHtml}
       <div class="tool-result-body" id="${resultId}">
         <pre>${escapeHtml(toolData.result)}</pre>
       </div>`;
@@ -3506,26 +3772,47 @@ if (typeof marked !== 'undefined') {
 
 function formatAssistantContent(text) {
   if (!text) return '';
-  // 提取 <think> 块（marked 不支持此标签，需在渲染前提取、渲染后还原）
+  const MEDIA_PH = '█MEDIA_'; // 用全角字符避免被清理
+  const THINK_PH = '█THINK_';
+  const SUFFIX = '█';
+  // 提取媒体标记
+  const mediaBlocks = [];
+  let processed = text.replace(/\[MEDIA:(image|audio|video|video_url):([^\]]+)\]/g, (_, type, data) => {
+    const idx = mediaBlocks.length;
+    mediaBlocks.push({ type, data });
+    return MEDIA_PH + idx + SUFFIX;
+  });
+  // 提取 <think> 块
   const thinkBlocks = [];
-  let processed = text.replace(/<think>([\s\S]*?)<\/think>/g, (_, think) => {
+  processed = processed.replace(/<think>([\s\S]*?)<\/think>/g, (_, think) => {
     const idx = thinkBlocks.length;
     thinkBlocks.push(think.trim());
-    return `\x00THINK_${idx}\x00`;
+    return THINK_PH + idx + SUFFIX;
   });
-  // marked.js 渲染完整 Markdown（表格、标题、引用、列表等）
+  // marked.js 渲染 Markdown
   let html = typeof marked !== 'undefined'
     ? marked.parse(processed)
     : escapeHtml(processed).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>');
-  // 还原思考块为可折叠 details
-  html = html.replace(/\x00THINK_(\d+)\x00/g, (_, idx) => {
+  // DOMPurify 消毒（在还原之前，确保安全）
+  if (typeof DOMPurify !== 'undefined') {
+    html = DOMPurify.sanitize(html, { ADD_TAGS: ['details', 'summary'] });
+  }
+  // 还原思考块
+  html = html.replace(new RegExp(THINK_PH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)' + SUFFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), (_, idx) => {
     const thinkId = 'think-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     return `<details class="think-block"><summary>思考过程</summary><div class="think-content" id="${thinkId}">${escapeHtml(thinkBlocks[parseInt(idx)])}</div></details>`;
   });
-  // DOMPurify 消毒（防止 marked 输出的 HTML 含 XSS）
-  if (typeof DOMPurify !== 'undefined') {
-    html = DOMPurify.sanitize(html);
-  }
+  // 还原媒体块
+  const convId = assistantConversationId;
+  html = html.replace(new RegExp(MEDIA_PH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)' + SUFFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), (_, idx) => {
+    const m = mediaBlocks[parseInt(idx)];
+    if (!m) return '';
+    if (m.type === 'image' && convId) return `<img class="msg-media" src="/api/conv-files/${convId}/${encodeURIComponent(m.data)}" alt="generated image">`;
+    if (m.type === 'audio' && convId) return `<div class="tool-result-media"><audio controls src="/api/conv-files/${convId}/${encodeURIComponent(m.data)}"></audio></div>`;
+    if (m.type === 'video' && convId) return `<div class="tool-result-media"><video controls class="msg-media" src="/api/conv-files/${convId}/${encodeURIComponent(m.data)}"></video></div>`;
+    if (m.type === 'video_url') return `<div class="tool-result-media"><video controls class="msg-media" src="${escapeHtml(m.data)}"></video></div>`;
+    return '';
+  });
   return html;
 }
 
