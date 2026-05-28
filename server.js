@@ -2550,6 +2550,71 @@ async function init() {
         parameters: { type: 'object', properties: {} },
       },
     },
+
+    // ==================== 多模态服务管理 ====================
+    {
+      type: 'function',
+      function: {
+        name: 'list_multimodal_services',
+        description: '获取所有多模态服务（图片生成、视频生成、语音合成、音乐生成）的配置列表。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_multimodal_service',
+        description: '创建一个新的多模态服务。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '服务名称' },
+            serviceType: { type: 'string', enum: ['image', 'video', 'tts', 'music'], description: '服务类型' },
+            brand: { type: 'string', enum: ['openai', 'mimo', 'minimax', 'custom'], description: '服务商' },
+            url: { type: 'string', description: 'API 地址' },
+            apiKey: { type: 'string', description: 'API Key（custom 类型可不填）' },
+            models: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' } } }, description: '模型列表' },
+            enabled: { type: 'boolean', description: '是否启用，默认 true' },
+          },
+          required: ['name', 'serviceType', 'brand', 'url'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_multimodal_service',
+        description: '更新多模态服务配置。',
+        parameters: {
+          type: 'object',
+          properties: {
+            serviceId: { type: 'string', description: '服务 ID' },
+            name: { type: 'string', description: '新的名称' },
+            serviceType: { type: 'string', enum: ['image', 'video', 'tts', 'music'], description: '新的服务类型' },
+            brand: { type: 'string', enum: ['openai', 'mimo', 'minimax', 'custom'], description: '新的服务商' },
+            url: { type: 'string', description: '新的 API 地址' },
+            apiKey: { type: 'string', description: '新的 API Key' },
+            models: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' } } }, description: '新的模型列表' },
+            enabled: { type: 'boolean', description: '是否启用' },
+          },
+          required: ['serviceId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_multimodal_service',
+        description: '删除一个已配置的多模态服务。',
+        parameters: {
+          type: 'object',
+          properties: {
+            serviceId: { type: 'string', description: '服务 ID' },
+          },
+          required: ['serviceId'],
+        },
+      },
+    },
   ];
 
   // ==================== 工具权限分级 ====================
@@ -2588,13 +2653,18 @@ async function init() {
     create_agent: 2, update_agent: 2, delete_agent: 2, reload_agents: 2,
     // 1: MCP 预设
     get_mcp_presets: 1,
+    // 1-2: 多模态服务管理
+    list_multimodal_services: 1, create_multimodal_service: 2, update_multimodal_service: 2, delete_multimodal_service: 2,
     // 3: 危险操作（需确认）
     execute_command: 3, execute_code: 3, write_file: 3, edit_file: 3,
     parse_document: 1,
+    // 1: 多模态内容生成
+    generate_image: 1, generate_video: 1, text_to_speech: 1, generate_music: 1,
   };
 
   // 工具审批等待机制
   const pendingApprovals = new Map();
+  const TOOL_APPROVAL_TIMEOUT_MS = 60000;
 
   function requestToolApproval(id, name, args) {
     return new Promise((resolve) => {
@@ -2604,13 +2674,17 @@ async function init() {
           pendingApprovals.get(id).resolve(false);
           pendingApprovals.delete(id);
         }
-      }, 60000);
+      }, TOOL_APPROVAL_TIMEOUT_MS);
     });
   }
 
   // 多 Agent 委派共享的代理上下文（chat handler 中更新，delegate_task handler 中读取）
   const _chatProxy = { url: null, headers: null, defaultModel: null, safeSSE: null, currentBatchId: null };
 
+  // 工具处理器：所有 handler 签名为 async (args) => {...}
+  // 约定：args._abortSignal（AbortSignal | undefined）由 chat handler 在调用前注入，
+  // 用于 execute_code / execute_command 等子进程工具在客户端断开时终止子进程。
+  // 其他工具可忽略此字段。
   const TOOL_HANDLERS = {
     get_system_status: async () => {
       const proxies = configStore.getProxies().map(p => {
@@ -2783,13 +2857,21 @@ async function init() {
     execute_command: async (args) => {
       const timeout = Math.min(Math.max(1000, parseInt(args.timeout) || 30000), 120000);
       return new Promise((resolve) => {
-        exec(args.command, { cwd: args.cwd || process.cwd(), timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        const child = exec(args.command, { cwd: args.cwd || process.cwd(), timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
           if (err) {
             resolve({ exitCode: err.code || 1, stdout: stdout || '', stderr: stderr || err.message });
           } else {
             resolve({ exitCode: 0, stdout: stdout || '', stderr: stderr || '' });
           }
         });
+        // 客户端断开时终止子进程（SIGTERM → 5s 后 SIGKILL 兜底）
+        if (args._abortSignal) {
+          const onAbort = () => {
+            try { child.kill('SIGTERM'); } catch {}
+            setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+          };
+          args._abortSignal.addEventListener('abort', onAbort, { once: true });
+        }
       });
     },
 
@@ -2862,6 +2944,14 @@ async function init() {
             env: { ...process.env, MPLBACKEND: 'Agg', MPLCONFIGDIR: tmpDir },
             stdio: ['pipe', 'pipe', 'pipe'],
           });
+          // 客户端断开时终止子进程（SIGTERM → 5s 后 SIGKILL 兜底）
+          if (args._abortSignal) {
+            const onAbort = () => {
+              try { child.kill('SIGTERM'); } catch {}
+              setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+            };
+            args._abortSignal.addEventListener('abort', onAbort, { once: true });
+          }
           child.stdout.on('data', d => { stdout += d.toString(); });
           child.stderr.on('data', d => { stderr += d.toString(); });
           child.on('error', (err) => {
@@ -3654,15 +3744,17 @@ async function init() {
         const agentConfig = getAgentConfig(configStore.getSettings());
         if (args.role) agentConfig.role = args.role;
         if (args.agent) agentConfig.agent = args.agent;
+        // 子代理不提供 delegate_task，防止递归委派
+        const _mmSub = getMultimodalTools();
         const result = await delegateTask({
           goals,
           registry,
           proxyUrl: _chatProxy.url,
           proxyHeaders: _chatProxy.headers,
           defaultModel: args.model || _chatProxy.defaultModel,
-          toolDefinitions: [...TOOL_DEFINITIONS, ...getMultimodalTools().definitions, ...mcpClient.getToolDefinitions()],
-          toolHandlers: { ...TOOL_HANDLERS, ...getMultimodalTools().handlers },
-          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore }),
+          toolDefinitions: [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => (d.function?.name || d.name) !== 'delegate_task'),
+          toolHandlers: Object.fromEntries(Object.entries({ ...TOOL_HANDLERS, ..._mmSub.handlers }).filter(([k]) => k !== 'delegate_task')),
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name) }),
           parentTaskId: null,
           maxRounds: args.maxRounds,
           sendSSE: _chatProxy.safeSSE,
@@ -3730,6 +3822,8 @@ async function init() {
       }
       try {
         const { continueTask, registry, getAgentConfig } = require('./lib/multi-agent');
+        // 子代理不提供 delegate_task，防止递归委派
+        const _mmSub = getMultimodalTools();
         return await continueTask({
           taskId: args.taskId,
           message: args.message,
@@ -3737,9 +3831,9 @@ async function init() {
           proxyUrl: _chatProxy.url,
           proxyHeaders: _chatProxy.headers,
           defaultModel: _chatProxy.defaultModel,
-          toolDefinitions: [...TOOL_DEFINITIONS, ...getMultimodalTools().definitions, ...mcpClient.getToolDefinitions()],
-          toolHandlers: { ...TOOL_HANDLERS, ...getMultimodalTools().handlers },
-          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore }),
+          toolDefinitions: [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => (d.function?.name || d.name) !== 'delegate_task'),
+          toolHandlers: Object.fromEntries(Object.entries({ ...TOOL_HANDLERS, ..._mmSub.handlers }).filter(([k]) => k !== 'delegate_task')),
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name) }),
           maxRounds: args.maxRounds,
           config: getAgentConfig(configStore.getSettings()),
         });
@@ -3919,6 +4013,49 @@ async function init() {
       const presets = configStore.getMcpPresets();
       const existing = configStore.getMcpServers();
       return presets.map(p => ({ ...p, added: !!existing[p.name] }));
+    },
+
+    // ==================== 多模态服务管理 ====================
+    list_multimodal_services: async () => {
+      const services = configStore.getMultimodalServices();
+      return services.map(s => ({
+        id: s.id, name: s.name, serviceType: s.serviceType, brand: s.brand,
+        url: s.url, models: s.models || [], enabled: s.enabled !== false,
+      }));
+    },
+
+    create_multimodal_service: async (args) => {
+      const { name, serviceType, brand, url, apiKey, models, enabled } = args;
+      if (!name || !serviceType || !brand || !url) return { error: 'name、serviceType、brand、url 必填' };
+      const modelsList = Array.isArray(models) ? models : [];
+      const service = configStore.addMultimodalService({
+        name, serviceType, brand, url: url || '', apiKey: apiKey || '',
+        models: modelsList, enabled: enabled !== false,
+      });
+      return { id: service.id, name: service.name, serviceType: service.serviceType, brand: service.brand, message: '多模态服务已创建' };
+    },
+
+    update_multimodal_service: async (args) => {
+      const { serviceId } = args;
+      if (!serviceId) return { error: 'serviceId 必填' };
+      const existing = configStore.getMultimodalServiceById(serviceId);
+      if (!existing) return { error: `服务 ${serviceId} 不存在` };
+      const updates = {};
+      for (const k of ['name', 'serviceType', 'brand', 'url', 'apiKey', 'enabled']) {
+        if (args[k] !== undefined) updates[k] = args[k];
+      }
+      if (args.models !== undefined) updates.models = args.models;
+      configStore.updateMultimodalService(serviceId, updates);
+      return { id: serviceId, message: '多模态服务已更新' };
+    },
+
+    delete_multimodal_service: async (args) => {
+      const { serviceId } = args;
+      if (!serviceId) return { error: 'serviceId 必填' };
+      const existing = configStore.getMultimodalServiceById(serviceId);
+      if (!existing) return { error: `服务 ${serviceId} 不存在` };
+      configStore.removeMultimodalService(serviceId);
+      return { message: '多模态服务已删除' };
     },
   };
 
@@ -5177,7 +5314,7 @@ async function init() {
 
   app.post('/api/multimodal', (req, res) => {
     const { name, serviceType, brand, url, apiKey, models, model, enabled } = req.body;
-    if (!name || !serviceType || !brand) return res.status(400).json({ error: 'name、serviceType、brand 必填' });
+    if (!name || !serviceType || !brand || !url) return res.status(400).json({ error: 'name、serviceType、brand、url 必填' });
     const modelsList = (models && models.length > 0) ? models : (model ? [{ name: model }] : []);
     const service = configStore.addMultimodalService({ name, serviceType, brand, url: url || '', apiKey: apiKey || '', models: modelsList, enabled: enabled !== false });
     res.json(service);
@@ -5538,7 +5675,8 @@ async function init() {
 
   // 所有可用工具列表（内置 + MCP），供前端子智能体配置使用
   app.get('/api/assistant/tools', (req, res) => {
-    const allDefs = [...TOOL_DEFINITIONS, ...getMultimodalTools().definitions, ...mcpClient.getToolDefinitions()];
+    const _mmToolsLocal = getMultimodalTools();
+    const allDefs = [...TOOL_DEFINITIONS, ..._mmToolsLocal.definitions, ...mcpClient.getToolDefinitions()];
     const tools = allDefs.map(d => {
       const name = d.function?.name || d.name;
       const desc = d.function?.description || d.description || '';
@@ -5561,6 +5699,7 @@ async function init() {
   });
 
   app.post('/api/assistant/chat', async (req, res) => {
+    logger.log(`[assistant] chat request received: conv=${req.body.conversationId}, httpVersion=${req.httpVersion}, connection=${req.headers.connection || 'keep-alive'}`);
     const { proxyId, conversationId, message, compress, providerId, model, thinkingEffort, mode, windowSize } = req.body;
     if (!proxyId || (!compress && !message)) {
       return res.status(400).json({ error: '需要 proxyId 和 message' });
@@ -5599,9 +5738,24 @@ async function init() {
     if (windowSize && windowSize > 0) conv.windowSize = Math.min(200, Math.max(1, parseInt(windowSize)));
     conversationStore.touch(conv);
 
-    // 客户端断开时，停止当前批次的所有子任务，并释放并发锁
+    // 请求级 AbortController：客户端断开时 abort，用于终止工具循环和子进程
+    const requestAbort = new AbortController();
+
+    // req.on('close')：请求体消费后触发，用于清理并发锁和待审批工具
     req.on('close', () => {
       activeStreams.delete(convId);
+      for (const [id, entry] of pendingApprovals) {
+        if (entry.timestamp > Date.now() - TOOL_APPROVAL_TIMEOUT_MS * 2) {
+          entry.resolve(false);
+          pendingApprovals.delete(id);
+        }
+      }
+    });
+
+    // res.on('close')：响应结束或连接断开时触发，用于 abort 工具循环和子进程
+    res.on('close', () => {
+      if (res.writableEnded) return; // 正常完成，不需要 abort
+      requestAbort.abort();
       if (_chatProxy.currentBatchId) {
         const { registry: taskRegistry } = require('./lib/multi-agent');
         const stopped = taskRegistry.stopBatch(_chatProxy.currentBatchId);
@@ -5731,7 +5885,7 @@ async function init() {
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
       const convFilesList = (() => { try { return fs.readdirSync(getConvFilesPath(convId)).filter(f => fs.statSync(path.join(getConvFilesPath(convId), f)).isFile()); } catch { return []; } })();
-      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, convFiles: convFilesList });
+      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, convFiles: convFilesList, multimodalToolNames: _mmTools.definitions.map(d => d.function?.name || d.name) });
       const buildMessages = () => {
         // 将所有 system 内容合并为一条消息，避免某些模型（如 MiniMax）不支持多条 system 消息
         const systemParts = [systemPrompt];
@@ -5792,6 +5946,7 @@ async function init() {
 
       let loopCompleted = false;
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        if (requestAbort.signal.aborted) { logger.log(`[assistant] 客户端已断开，终止工具循环`); break; }
         const messages = buildMessages();
         logger.log(`[assistant] round ${round} — ${messages.length} messages, ~${currentTokens} tokens`);
 
@@ -5817,7 +5972,7 @@ async function init() {
           fetchRes = await fetch(proxyUrl, {
             method: 'POST',
             headers: proxyHeaders,
-            signal: AbortSignal.timeout(300000),
+            signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(300000)]),
             body: JSON.stringify({
               model: proxy.defaultModel || 'gpt-4o',
               messages: cleanMessages,
@@ -5828,7 +5983,8 @@ async function init() {
             }),
           });
         } catch (fetchErr) {
-          logger.log(`[assistant] round ${round} fetch error: ${fetchErr.message}`);
+          const abortReason = requestAbort.signal.aborted ? 'client_disconnect' : 'timeout_or_network';
+          logger.log(`[assistant] round ${round} fetch error: ${fetchErr.message} (reason: ${abortReason}, reqClosed: ${req.destroyed})`);
           safeSSE('error', { message: `代理请求失败: ${fetchErr.message}` });
           break;
         }
@@ -5953,10 +6109,15 @@ async function init() {
           logger.log(`[assistant] EXEC tool: ${tc.name}`);
           let result;
           let isError = false;
-          if (argsParseError) {
+          if (requestAbort.signal.aborted) {
+            result = { error: '用户已取消操作' };
+            isError = true;
+          } else if (argsParseError) {
             result = { error: `工具 ${tc.name} 的参数 JSON 解析失败，原始内容: ${(tc.arguments || '').slice(0, 200)}` };
             isError = true;
           } else try {
+            // 传递 abort signal 给子进程工具
+            args._abortSignal = requestAbort.signal;
             // 执行策略检查（execute_command 专用）
             if (tc.name === 'execute_command') {
               const { execPolicy } = require('./lib/exec-policy');
@@ -6107,7 +6268,7 @@ async function init() {
           const summaryRes = await fetch(proxyUrl, {
             method: 'POST',
             headers: proxyHeaders,
-            signal: AbortSignal.timeout(120000),
+            signal: AbortSignal.any([requestAbort.signal, AbortSignal.timeout(120000)]),
             body: JSON.stringify({
               model: proxy.defaultModel || 'gpt-4o',
               messages: [
