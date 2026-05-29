@@ -3406,18 +3406,34 @@ async function processAssistantSSE(response, thinkingId, convId) {
         }
 
         case 'tool_result': {
-          const resultStr = JSON.stringify(data.result, null, 2);
-          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null, media: data.media || null }, null, convId);
-          // 收集媒体用于附加到助手回复中
-          if (data.images && data.images.length > 0) {
-            for (const img of data.images) {
-              collectedMedia.push({ type: 'image', file: img._file || null, base64: img.base64_data || null });
+          // _multimodal 信封：从 content 数组提取媒体
+          if (data.result && data.result._multimodal && Array.isArray(data.result.content)) {
+            const mmContent = data.result.content;
+            const textParts = mmContent.filter(p => p.type === 'text').map(p => p.text).join('\n');
+            addAssistantMessage('tool-result', { name: data.name, result: textParts || '已加载多模态内容', tool_call_id: data.tool_call_id, is_error: false, images: null, media: null }, null, convId);
+            for (const part of mmContent) {
+              if (part.type === 'image_url' && part.image_url?.url) {
+                collectedMedia.push({ type: 'image', base64: part.image_url.url });
+              } else if (part.type === 'input_audio' && part.input_audio?.data) {
+                collectedMedia.push({ type: 'audio', base64: part.input_audio.data, format: part.input_audio.format });
+              } else if (part.type === 'video_url' && part.video_url?.url) {
+                collectedMedia.push({ type: 'video_url', url: part.video_url.url });
+              }
             }
-          }
-          if (data.media) {
-            if (data.media.audio_file) collectedMedia.push({ type: 'audio', file: data.media.audio_file });
-            if (data.media.video_file) collectedMedia.push({ type: 'video', file: data.media.video_file });
-            if (data.media.video_url) collectedMedia.push({ type: 'video_url', url: data.media.video_url });
+          } else {
+            const resultStr = JSON.stringify(data.result, null, 2);
+            addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null, media: data.media || null }, null, convId);
+            // 收集媒体用于附加到助手回复中
+            if (data.images && data.images.length > 0) {
+              for (const img of data.images) {
+                collectedMedia.push({ type: 'image', file: img._file || null, base64: img.base64_data || null });
+              }
+            }
+            if (data.media) {
+              if (data.media.audio_file) collectedMedia.push({ type: 'audio', file: data.media.audio_file });
+              if (data.media.video_file) collectedMedia.push({ type: 'video', file: data.media.video_file });
+              if (data.media.video_url) collectedMedia.push({ type: 'video_url', url: data.media.video_url });
+            }
           }
           break;
         }
@@ -3744,12 +3760,14 @@ async function deleteMessagePair(backendMsgId) {
       throw new Error((await res.json().catch(() => ({}))).error || '删除失败');
     }
     loadConversations();
+    attachRetryButtonToLast();
   } catch (err) {
     // 回滚：恢复本地消息和 DOM
     msgs.splice(startIdx, 0, ...removedMessages);
     for (const { el, ref, parent } of removedDivs) {
       if (parent) parent.insertBefore(el, ref);
     }
+    attachRetryButtonToLast();
     showToast('删除失败: ' + err.message, true);
   }
 }

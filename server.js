@@ -2638,6 +2638,36 @@ async function init() {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'access_file',
+        description: '读取本地文件。图片/音频/视频会以多模态内容注入对话，模型可直接"看/听/读"。支持绝对路径、相对路径、文件名（会在会话目录中查找）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            file_path: { type: 'string', description: '文件路径或文件名' },
+            question: { type: 'string', description: '可选。对该文件的具体问题或分析要求' },
+          },
+          required: ['file_path'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'audio_analyze',
+        description: '分析或转写音频文件。支持 mp3/wav/m4a/ogg/flac 格式。transcribe 模式调用 ASR API 转为文字，analyze 模式返回音频元数据。',
+        parameters: {
+          type: 'object',
+          properties: {
+            file_path: { type: 'string', description: '音频文件路径或文件名' },
+            task: { type: 'string', enum: ['transcribe', 'analyze'], description: '任务类型', default: 'transcribe' },
+          },
+          required: ['file_path'],
+        },
+      },
+    },
   ];
 
   // ==================== 工具权限分级 ====================
@@ -2648,6 +2678,7 @@ async function init() {
     get_usage_stats: 1, get_recent_requests: 1, get_system_logs: 1, get_key_health: 1,
     get_settings: 1, get_config_history: 1, read_file: 1, list_directory: 1,
     search_files: 1, grep_search: 1, get_mcp_servers: 1, get_mcp_tools: 1,
+    access_file: 1, audio_analyze: 1,
     get_skills: 1, export_config: 1, check_health: 1, invoke_skill: 1,
     test_provider_keys: 1, get_provider_models: 1,
     // 2: 配置写入
@@ -2708,6 +2739,18 @@ async function init() {
   // 约定：args._abortSignal（AbortSignal | undefined）由 chat handler 在调用前注入，
   // 用于 execute_code / execute_command 等子进程工具在客户端断开时终止子进程。
   // 其他工具可忽略此字段。
+  function resolveFilePath(file_path, convId) {
+    const candidates = [
+      path.resolve(file_path),
+      convId ? path.join(getConvFilesPath(convId), file_path) : null,
+      path.join(process.cwd(), file_path),
+    ].filter(Boolean);
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+    }
+    return null;
+  }
+
   const TOOL_HANDLERS = {
     get_system_status: async () => {
       const proxies = configStore.getProxies().map(p => {
@@ -3775,7 +3818,7 @@ async function init() {
           proxyUrl: _chatProxy.url,
           proxyHeaders: _chatProxy.headers,
           defaultModel: args.model || _chatProxy.defaultModel,
-          toolDefinitions: [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => (d.function?.name || d.name) !== 'delegate_task'),
+          toolDefinitions: (() => { const s = new Set(['delegate_task']); return [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => { const n = d.function?.name || d.name; if (s.has(n)) return false; s.add(n); return true; }); })(),
           toolHandlers: Object.fromEntries(Object.entries({ ...TOOL_HANDLERS, ..._mmSub.handlers }).filter(([k]) => k !== 'delegate_task')),
           systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name) }),
           parentTaskId: null,
@@ -3854,7 +3897,7 @@ async function init() {
           proxyUrl: _chatProxy.url,
           proxyHeaders: _chatProxy.headers,
           defaultModel: _chatProxy.defaultModel,
-          toolDefinitions: [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => (d.function?.name || d.name) !== 'delegate_task'),
+          toolDefinitions: (() => { const s = new Set(['delegate_task']); return [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => { const n = d.function?.name || d.name; if (s.has(n)) return false; s.add(n); return true; }); })(),
           toolHandlers: Object.fromEntries(Object.entries({ ...TOOL_HANDLERS, ..._mmSub.handlers }).filter(([k]) => k !== 'delegate_task')),
           systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name) }),
           maxRounds: args.maxRounds,
@@ -4079,6 +4122,129 @@ async function init() {
       if (!existing) return { error: `服务 ${serviceId} 不存在` };
       configStore.removeMultimodalService(serviceId);
       return { message: '多模态服务已删除' };
+    },
+
+    // ==================== 多模态文件访问 ====================
+    access_file: async (args) => {
+      const { file_path, question } = args;
+      if (!file_path) return { error: 'file_path 必填' };
+
+      // 路径解析：绝对路径 → conv-files 目录 → 当前工作目录
+      const convId = args._convId;
+      const resolved = resolveFilePath(file_path, convId);
+      if (!resolved) return { error: `文件不存在: ${file_path}` };
+
+      const stat = fs.statSync(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'];
+      const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac'];
+      const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
+      const DOC_EXTS = ['.pdf', '.docx', '.pptx', '.xlsx'];
+
+      // 图片
+      if (IMAGE_EXTS.includes(ext)) {
+        if (stat.size > 20 * 1024 * 1024) return { error: `图片过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB)，限制 20MB` };
+        const mimeMap = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml' };
+        const mime = mimeMap[ext] || 'image/png';
+        const b64 = fs.readFileSync(resolved).toString('base64');
+        const textPart = question ? { type: 'text', text: `用户要求: ${question}` } : { type: 'text', text: `已加载图片: ${path.basename(resolved)} (${(stat.size / 1024).toFixed(0)}KB)` };
+        return { _multimodal: true, content: [textPart, { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } }] };
+      }
+
+      // 音频
+      if (AUDIO_EXTS.includes(ext)) {
+        if (stat.size > 25 * 1024 * 1024) return { error: `音频过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB)，限制 25MB` };
+        const mimeMap = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.aac': 'audio/aac' };
+        const mime = mimeMap[ext] || 'audio/mpeg';
+        const format = ext.slice(1);
+        const b64 = fs.readFileSync(resolved).toString('base64');
+        const textPart = question ? { type: 'text', text: `用户要求: ${question}` } : { type: 'text', text: `已加载音频: ${path.basename(resolved)} (${(stat.size / 1024).toFixed(0)}KB)` };
+        return { _multimodal: true, content: [textPart, { type: 'input_audio', input_audio: { data: b64, format } }] };
+      }
+
+      // 视频
+      if (VIDEO_EXTS.includes(ext)) {
+        if (stat.size > 50 * 1024 * 1024) return { error: `视频过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB)，限制 50MB` };
+        const b64 = fs.readFileSync(resolved).toString('base64');
+        const textPart = question ? { type: 'text', text: `用户要求: ${question}` } : { type: 'text', text: `已加载视频: ${path.basename(resolved)} (${(stat.size / 1024 / 1024).toFixed(1)}MB)` };
+        return { _multimodal: true, content: [textPart, { type: 'video_url', video_url: { url: `data:video/mp4;base64,${b64}` } }] };
+      }
+
+      // 文档
+      if (DOC_EXTS.includes(ext)) {
+        const result = await TOOL_HANDLERS.parse_document({ filename: path.basename(resolved), _convId: convId });
+        return result;
+      }
+
+      // 文本/代码
+      if (stat.size > 10 * 1024 * 1024) return { error: `文件过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB)，限制 10MB` };
+      const text = fs.readFileSync(resolved, 'utf8');
+      const lineCount = text.split('\n').length;
+      return { text, line_count: lineCount, file: path.basename(resolved), size: stat.size };
+    },
+
+    audio_analyze: async (args) => {
+      const { file_path, task } = args;
+      if (!file_path) return { error: 'file_path 必填' };
+
+      const convId = args._convId;
+      const resolved = resolveFilePath(file_path, convId);
+      if (!resolved) return { error: `音频文件不存在: ${file_path}` };
+
+      const stat = fs.statSync(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac'];
+      if (!AUDIO_EXTS.includes(ext)) return { error: `不支持的音频格式: ${ext}，支持: ${AUDIO_EXTS.join(', ')}` };
+
+      // analyze 模式：返回元数据
+      if (task === 'analyze') {
+        return {
+          file: path.basename(resolved),
+          format: ext.slice(1),
+          size_bytes: stat.size,
+          size_human: `${(stat.size / 1024 / 1024).toFixed(1)} MB`,
+          modified: stat.mtime.toISOString(),
+          hint: '详细音频特征分析（BPM、音高、频谱等）需要通过 execute_code 使用 librosa 库',
+        };
+      }
+
+      // transcribe 模式：尝试 ASR
+      // 检查是否有可用的 ASR 服务（MiniMax 语音识别或 OpenAI Whisper）
+      const allServices = configStore.getMultimodalServices();
+      const asrServices = allServices.filter(s => s.serviceType === 'asr' && s.enabled !== false);
+
+      if (asrServices.length === 0) {
+        return {
+          file: path.basename(resolved),
+          format: ext.slice(1),
+          size: `${(stat.size / 1024 / 1024).toFixed(1)} MB`,
+          hint: '当前未配置 ASR（语音识别）服务。可通过多模态服务管理添加 MiniMax 或 OpenAI Whisper 服务来启用音频转写。也可通过 execute_code 使用 Python 进行本地转写。',
+        };
+      }
+
+      // 使用第一个可用的 ASR 服务
+      const svc = asrServices[0];
+      try {
+        const key = svc.apiKey || (svc.apiKeys && svc.apiKeys[0]?.key) || '';
+        const base = (svc.url || '').replace(/\/$/, '');
+        const audioBuffer = fs.readFileSync(resolved);
+        const form = new FormData();
+        form.append('file', new Blob([audioBuffer], { type: `audio/${ext.slice(1)}` }), path.basename(resolved));
+        form.append('model', svc.model || 'whisper-1');
+        form.append('language', 'zh');
+
+        const res = await fetch(`${base}/v1/audio/transcriptions`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${key}` },
+          body: form,
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!res.ok) return { error: `ASR 请求失败: HTTP ${res.status}` };
+        const data = await res.json();
+        return { text: data.text || '', file: path.basename(resolved), provider: svc.name };
+      } catch (err) {
+        return { error: `ASR 转写失败: ${err.message}` };
+      }
     },
   };
 
@@ -5699,7 +5865,8 @@ async function init() {
   // 所有可用工具列表（内置 + MCP），供前端子智能体配置使用
   app.get('/api/assistant/tools', (req, res) => {
     const _mmToolsLocal = getMultimodalTools();
-    const allDefs = [...TOOL_DEFINITIONS, ..._mmToolsLocal.definitions, ...mcpClient.getToolDefinitions()];
+    const _seenTools = new Set();
+    const allDefs = [...TOOL_DEFINITIONS, ..._mmToolsLocal.definitions, ...mcpClient.getToolDefinitions()].filter(d => { const n = d.function?.name || d.name; if (_seenTools.has(n)) return false; _seenTools.add(n); return true; });
     const tools = allDefs.map(d => {
       const name = d.function?.name || d.name;
       const desc = d.function?.description || d.description || '';
@@ -5928,6 +6095,10 @@ async function init() {
         const msgs = [{ role: 'system', content: systemParts.join('\n\n---\n\n') }];
         // 构建发给 API 的消息：assistant 消息附带图片时转为 vision content blocks
         const buildApiMessage = (m) => {
+          // _multimodal 工具消息：保持 content 数组，由协议转换器处理格式
+          if (m.role === 'tool' && m._multimodal && Array.isArray(m.content)) {
+            return m; // 保持原样，o2a 转换器会处理 tool message + content array
+          }
           if (m.role !== 'assistant' || !m._images || m._images.length === 0) return m;
           const dir = getConvFilesPath(convId);
           const parts = [];
@@ -6000,7 +6171,15 @@ async function init() {
               model: proxy.defaultModel || 'gpt-4o',
               messages: cleanMessages,
               stream: true,
-              tools: [...TOOL_DEFINITIONS, ..._mmTools.definitions, ...mcpClient.getToolDefinitions()],
+              tools: (() => {
+                const seen = new Set();
+                return [...TOOL_DEFINITIONS, ..._mmTools.definitions, ...mcpClient.getToolDefinitions()].filter(d => {
+                  const name = d.function?.name || d.name;
+                  if (seen.has(name)) return false;
+                  seen.add(name);
+                  return true;
+                });
+              })(),
               tool_choice: 'auto',
               ...thinkingParams,
             }),
@@ -6203,7 +6382,7 @@ async function init() {
                   const parts = tc.name.split('__');
                   mcpToolStats.record(parts[1], parts[2], latencyMs, !(result && result.error));
                 } else {
-                  if (['execute_code', 'parse_document', 'text_to_speech', 'generate_music', 'generate_video', 'generate_image'].includes(tc.name)) args._convId = convId;
+                  if (['execute_code', 'parse_document', 'text_to_speech', 'generate_music', 'generate_video', 'generate_image', 'access_file', 'audio_analyze'].includes(tc.name)) args._convId = convId;
                   const mmHandler = _mmTools.handlers[tc.name];
                   const handler = TOOL_HANDLERS[tc.name] || mmHandler;
                   result = handler ? await handler(args) : { error: `未知工具: ${tc.name}` };
@@ -6262,7 +6441,12 @@ async function init() {
           const resultStr = JSON.stringify(result);
           logger.log(`[assistant] tool ${tc.name} done: ${resultStr.length} chars${isError ? ' (error)' : ''}${toolImages ? `, ${toolImages.length} images` : ''}${toolMedia ? `, media` : ''}`);
           safeSSE('tool_result', { tool_call_id: tc.id, name: tc.name, result, is_error: isError, images: toolImages, media: toolMedia });
-          conv.messages.push({ id: generateMsgId(), role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
+          // _multimodal 信封：存储多模态 content 数组而非字符串
+          if (result && result._multimodal && Array.isArray(result.content)) {
+            conv.messages.push({ id: generateMsgId(), role: 'tool', tool_call_id: tc.id, content: result.content, _multimodal: true });
+          } else {
+            conv.messages.push({ id: generateMsgId(), role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
+          }
         }
 
         // token 检查 + 压缩
