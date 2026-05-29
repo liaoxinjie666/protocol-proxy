@@ -17,7 +17,14 @@ let currentPage = 'dashboard';
 let providerPoolItems = [];
 let providerModelTags = [];
 let providerKeys = [];
-let assistantMessages = []; // 仅用于 UI 渲染
+const assistantConvMessages = new Map();   // convId → [{id, role, content, backendMsgId}]
+const assistantConvControllers = new Map(); // convId → AbortController
+const assistantConvContext = new Map();     // convId → {tokens, maxTokens, percent, messages}
+const assistantPendingApprovals = new Map(); // convId → [{data, resolve}]
+const assistantConvCompleted = new Set();   // 后台会话已完成任务的 convId 集合
+const assistantStreamingConvs = new Set();  // 正在流式输出的会话 realId 集合
+let assistantDisplayedConvId = '';          // 当前显示在 DOM 中的会话 ID
+let loadConvoGeneration = 0;               // loadConversations 防过期计数器
 const delegateCards = new Map(); // createdId → { msgId, tasks: Map<taskId, {objective, status}> }
 let assistantAttachments = []; // 待上传的多模态附件 [{type, data, mimeType, name}]
 let assistantProxyId = '';
@@ -26,7 +33,6 @@ let proxyProviders = []; // 当前代理的候选供应商列表
 let savedAssistantProxyId = ''; // 从设置恢复的上次选择
 let savedAssistantProviderId = '';
 let savedAssistantModel = '';
-let assistantAbortController = null;
 let assistantConversationId = '';
 let assistantChatMode = 'full';
 let assistantWindowSize = 20;
@@ -34,6 +40,17 @@ let contextTokens = 0;
 let contextMaxTokens = 200000;
 let contextPercent = 0;
 let contextMessages = 0;
+
+// Per-conversation message accessors
+function getCurrentConvMessages() {
+  if (!assistantDisplayedConvId) return [];
+  return getConvMessages(assistantDisplayedConvId);
+}
+function getConvMessages(convId) {
+  let msgs = assistantConvMessages.get(convId);
+  if (!msgs) { msgs = []; assistantConvMessages.set(convId, msgs); }
+  return msgs;
+}
 let assistantMaxRounds = 10;
 let skillAcIndex = -1; // 自动补全高亮索引
 
@@ -204,9 +221,12 @@ function navigateTo(page) {
     populateAssistantProxySelect();
     loadConversations();
     loadAssistantSkills();
-    // 恢复上次会话（等代理列表加载完成后再切换）
-    if (assistantConversationId) {
+    // 恢复上次会话（仅当需要切换显示目标时）
+    if (assistantConversationId && assistantConversationId !== assistantDisplayedConvId) {
       setTimeout(() => switchConversation(assistantConversationId), 300);
+    } else if (assistantConversationId) {
+      // 已在显示中，更新 send button 状态
+      setSendBtnState(assistantConvControllers.has(assistantDisplayedConvId));
     }
   }
   if (page === 'skills') loadSkills();
@@ -2687,8 +2707,8 @@ async function init() {
         if (isOpen) {
           ac.style.display = 'none';
           skillAcIndex = -1;
-        } else if (assistantAbortController) {
-          assistantAbortController.abort();
+        } else if (assistantDisplayedConvId && assistantConvControllers.has(assistantDisplayedConvId)) {
+          assistantConvControllers.get(assistantDisplayedConvId).abort();
         }
       }
     });
@@ -3159,7 +3179,7 @@ function setSendBtnState(running) {
   if (running) {
     btn.textContent = '停止';
     btn.classList.add('btn-stop');
-    btn.onclick = () => { if (assistantAbortController) assistantAbortController.abort(); };
+    btn.onclick = () => { const ac = assistantConvControllers.get(assistantDisplayedConvId); if (ac) ac.abort(); };
   } else {
     btn.textContent = '发送';
     btn.classList.remove('btn-stop');
@@ -3168,8 +3188,13 @@ function setSendBtnState(running) {
 }
 
 async function sendAssistantMessage() {
-  if (assistantAbortController) return; // 已有请求进行中，防连点
+  if (assistantConvControllers.has(assistantDisplayedConvId)) return; // 已有请求进行中，防连点
   if (isVoiceRecording) { stopVoiceRecording(true); return; } // 录音中：停止后自动发送
+  // 新会话：分配临时 ID，确保消息有正确的 convId 目标
+  if (!assistantDisplayedConvId) {
+    assistantDisplayedConvId = 'new-' + Date.now();
+    assistantConversationId = assistantDisplayedConvId;
+  }
   const input = document.getElementById('assistant-input');
   const text = input.value.trim();
   const hasAttachments = assistantAttachments.length > 0;
@@ -3190,6 +3215,8 @@ async function sendAssistantMessage() {
   }
 
   if (!assistantProxyId) return;
+
+  const convId = assistantDisplayedConvId;
 
   // 构建多模态消息内容
   let messagePayload = text;
@@ -3217,21 +3244,28 @@ async function sendAssistantMessage() {
     messagePayload = content;
   }
 
-  addAssistantMessage('user', messagePayload);
+  addAssistantMessage('user', messagePayload, null, convId);
   input.value = '';
   input.style.height = 'auto';
   clearAttachments();
 
   const proxy = proxies.find(p => p.id === assistantProxyId);
   if (!proxy) {
-    addAssistantMessage('assistant', '所选代理不存在或已停止，请重新选择。');
+    addAssistantMessage('assistant', '所选代理不存在或已停止，请重新选择。', null, convId);
     return;
   }
 
-  const thinkingId = addAssistantMessage('thinking', '');
+  const thinkingId = addAssistantMessage('thinking', '', null, convId);
   const myController = new AbortController();
-  assistantAbortController = myController;
+  assistantConvControllers.set(convId, myController);
+  assistantStreamingConvs.add(convId);
   setSendBtnState(true);
+  // 同步更新 badge（不依赖异步 fetch）
+  updateSidebarBadges();
+  // 新会话仍需等 conversation 事件后刷新侧边栏结构
+  if (convId.startsWith('new-')) {
+    setTimeout(loadConversations, 500);
+  }
 
   try {
     const providerVal = document.getElementById('assistant-provider-select')?.value || '';
@@ -3248,34 +3282,36 @@ async function sendAssistantMessage() {
         mode: assistantChatMode,
         ...(assistantChatMode === 'sliding' && { windowSize: assistantWindowSize }),
       }),
-      signal: assistantAbortController.signal,
+      signal: myController.signal,
     });
 
     if (!res.ok) {
       const err = await res.text().catch(() => 'Unknown error');
       removeAssistantMessage(thinkingId);
-      addAssistantMessage('assistant', `请求失败: HTTP ${res.status}\n\n${err}`);
+      addAssistantMessage('assistant', `请求失败: HTTP ${res.status}\n\n${err}`, null, convId);
       attachRetryButtonToLast();
       return;
     }
 
-    await processAssistantSSE(res, thinkingId);
+    await processAssistantSSE(res, thinkingId, convId);
 
   } catch (err) {
     removeAssistantMessage(thinkingId);
     if (err.name === 'AbortError') {
-      addAssistantMessage('assistant', '已取消');
+      addAssistantMessage('assistant', '已取消', null, convId);
     } else {
-      addAssistantMessage('assistant', `请求出错: ${err.message}`);
+      addAssistantMessage('assistant', `请求出错: ${err.message}`, null, convId);
     }
     attachRetryButtonToLast();
   } finally {
-    if (assistantAbortController === myController) assistantAbortController = null;
+    if (assistantConvControllers.get(convId) === myController) assistantConvControllers.delete(convId);
+    assistantStreamingConvs.delete(convId);
     setSendBtnState(false);
+    updateSidebarBadges(); // 同步移除 badge
   }
 }
 
-async function processAssistantSSE(response, thinkingId) {
+async function processAssistantSSE(response, thinkingId, convId) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -3310,7 +3346,7 @@ async function processAssistantSSE(response, thinkingId) {
         case 'content': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
           if (!msgId) {
-            msgId = addAssistantMessage('assistant', '');
+            msgId = addAssistantMessage('assistant', '', null, convId);
           }
           fullContent += data.delta;
           updateAssistantMessage(msgId, fullContent);
@@ -3327,12 +3363,20 @@ async function processAssistantSSE(response, thinkingId) {
               : '';
             return `<div class="tool-call-item"><span class="tool-call-name">${escapeHtml(tc.name)}</span>${argsStr}</div>`;
           }).join('');
-          addAssistantMessage('tool-calls', callHtml);
+          addAssistantMessage('tool-calls', callHtml, null, convId);
           break;
         }
 
         case 'tool_approval': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
+          // 后台会话：存入待审批队列，切换时再渲染
+          if (convId !== assistantDisplayedConvId) {
+            if (!assistantPendingApprovals.has(convId)) assistantPendingApprovals.set(convId, []);
+            assistantPendingApprovals.get(convId).push({ data, resolve: null });
+            // 通知侧边栏有新审批
+            highlightConversationUpdate(convId);
+            break;
+          }
           const argsDisplay = data.arguments ? JSON.stringify(data.arguments, null, 2) : '{}';
           const ep = data.execPolicy;
           let actionsHtml;
@@ -3357,13 +3401,13 @@ async function processAssistantSSE(response, thinkingId) {
             <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
             <div class="tool-approval-actions">${actionsHtml}</div>
           </div>`;
-          addAssistantMessage('tool-approval', approvalHtml);
+          addAssistantMessage('tool-approval', approvalHtml, null, convId);
           break;
         }
 
         case 'tool_result': {
           const resultStr = JSON.stringify(data.result, null, 2);
-          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null, media: data.media || null });
+          addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null, media: data.media || null }, null, convId);
           // 收集媒体用于附加到助手回复中
           if (data.images && data.images.length > 0) {
             for (const img of data.images) {
@@ -3381,7 +3425,7 @@ async function processAssistantSSE(response, thinkingId) {
         case 'done': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
           if (msgId) {
-            const msgObj = assistantMessages.find(m => m.id === msgId);
+            const msgObj = getConvMessages(convId).find(m => m.id === msgId);
             if (msgObj) {
               if (data.reasoning_content && !fullContent.includes('<think>')) {
                 fullContent = `<think>${data.reasoning_content}</think>` + fullContent;
@@ -3410,26 +3454,28 @@ async function processAssistantSSE(response, thinkingId) {
 
         case 'error': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
-          addAssistantMessage('assistant', `错误: ${data.message}`);
+          addAssistantMessage('assistant', `错误: ${data.message}`, null, convId);
           break;
         }
 
         case 'context': {
-          contextTokens = data.tokens;
-          contextMaxTokens = data.maxTokens || contextMaxTokens;
-          contextPercent = data.percent;
-          contextMessages = data.messages;
-          if (data.mode) {
-            assistantChatMode = data.mode;
-            const modeSel = document.getElementById('assistant-mode-select');
-            if (modeSel) modeSel.value = data.mode;
+          // 保存到 per-conversation context
+          assistantConvContext.set(convId, {
+            tokens: data.tokens,
+            maxTokens: data.maxTokens || contextMaxTokens,
+            percent: data.percent,
+            messages: data.messages,
+          });
+          // 仅当会话可见时更新 UI
+          if (convId === assistantDisplayedConvId) {
+            contextTokens = data.tokens;
+            contextMaxTokens = data.maxTokens || contextMaxTokens;
+            contextPercent = data.percent;
+            contextMessages = data.messages;
+            updateContextBar();
           }
-          if (data.windowSize) {
-            assistantWindowSize = data.windowSize;
-            const wsInput = document.getElementById('settings-window-size');
-            if (wsInput) wsInput.value = data.windowSize;
-          }
-          updateContextBar();
+          if (data.mode) assistantChatMode = data.mode;
+          if (data.windowSize) assistantWindowSize = data.windowSize;
           break;
         }
 
@@ -3448,11 +3494,34 @@ async function processAssistantSSE(response, thinkingId) {
         }
 
         case 'conversation': {
-          assistantConversationId = data.id;
-          saveAssistantSelection();
+          // 新会话：将临时 ID 的数据迁移到服务端分配的真实 ID
+          if (assistantDisplayedConvId !== data.id && assistantConvMessages.has(assistantDisplayedConvId)) {
+            assistantConvMessages.set(data.id, assistantConvMessages.get(assistantDisplayedConvId));
+            assistantConvMessages.delete(assistantDisplayedConvId);
+            if (assistantConvContext.has(assistantDisplayedConvId)) {
+              assistantConvContext.set(data.id, assistantConvContext.get(assistantDisplayedConvId));
+              assistantConvContext.delete(assistantDisplayedConvId);
+            }
+            if (assistantConvControllers.has(assistantDisplayedConvId)) {
+              assistantConvControllers.set(data.id, assistantConvControllers.get(assistantDisplayedConvId));
+              assistantConvControllers.delete(assistantDisplayedConvId);
+            }
+            if (assistantStreamingConvs.has(assistantDisplayedConvId)) {
+              assistantStreamingConvs.delete(assistantDisplayedConvId);
+              assistantStreamingConvs.add(data.id);
+            }
+            assistantDisplayedConvId = data.id;
+          }
+          // 更新用户选中的会话 ID（仅当前会话或新会话的 temp→real 迁移时）
+          if (data.id === assistantDisplayedConvId || data.id === assistantConversationId
+            || (assistantConversationId && assistantConversationId.startsWith('new-'))) {
+            assistantConversationId = data.id;
+            saveAssistantSelection();
+          }
+          // 刷新侧边栏结构（新会话需要出现在列表中）
           loadConversations();
           if (data.userMessageId) {
-            const lastUserMsg = [...assistantMessages].reverse().find(m => m.role === 'user');
+            const lastUserMsg = [...getConvMessages(data.id)].reverse().find(m => m.role === 'user');
             if (lastUserMsg) {
               lastUserMsg.backendMsgId = data.userMessageId;
               attachDeleteButton(lastUserMsg.id, data.userMessageId);
@@ -3464,24 +3533,41 @@ async function processAssistantSSE(response, thinkingId) {
     }
   }
 
-  if (!thinkingRemoved) removeAssistantMessage(thinkingId);
+  if (!thinkingRemoved && assistantConvMessages.has(convId)) removeAssistantMessage(thinkingId);
+  // 会话可能在流式输出期间被删除，跳过后续操作
+  if (!assistantConvMessages.has(convId)) return;
   if (msgId && fullContent) {
-    const msgObj = assistantMessages.find(m => m.id === msgId);
+    const msgObj = getConvMessages(convId).find(m => m.id === msgId);
     if (msgObj && !msgObj.content) msgObj.content = fullContent;
+  }
+  // 后台会话任务完成：标记完成状态
+  if (convId !== assistantDisplayedConvId) {
+    assistantConvCompleted.add(convId);
+    updateSidebarBadges(); // 同步更新
   }
   attachRetryButtonToLast();
 }
 
-function addAssistantMessage(role, content, backendMsgId = null) {
+function addAssistantMessage(role, content, backendMsgId = null, convId, renderOnly) {
+  const targetConv = convId || assistantDisplayedConvId;
+  if (!targetConv) return null;
+
   const id = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-  assistantMessages.push({ id, role, content, backendMsgId });
+  const msgs = renderOnly ? null : getConvMessages(targetConv);
+  if (msgs) msgs.push({ id, role, content, backendMsgId });
+
+  // 后台会话：仅存储数据，不操作 DOM
+  if (targetConv !== assistantDisplayedConvId) return id;
 
   const chat = document.getElementById('assistant-chat');
   if (!chat) return id;
 
-  const displayRoles = ['user', 'assistant', 'tool', 'tool-calls', 'tool-result', 'tool-approval'];
-  if (assistantMessages.filter(m => displayRoles.includes(m.role)).length === 1 && role === 'user') {
-    chat.innerHTML = '';
+  // 首条用户消息时清空 chat（仅非 renderOnly 模式）
+  if (msgs) {
+    const displayRoles = ['user', 'assistant', 'tool', 'tool-calls', 'tool-result', 'tool-approval'];
+    if (msgs.filter(m => displayRoles.includes(m.role)).length === 1 && role === 'user') {
+      chat.innerHTML = '';
+    }
   }
 
   const div = document.createElement('div');
@@ -3507,12 +3593,11 @@ function addAssistantMessage(role, content, backendMsgId = null) {
     let mediaHtml = '';
     if (toolData.media) {
       const m = toolData.media;
-      const convId = assistantConversationId;
-      if (m.audio_file && convId) {
-        mediaHtml += `<div class="tool-result-media"><audio controls src="/api/conv-files/${convId}/${encodeURIComponent(m.audio_file)}"></audio><span class="tool-media-name">${escapeHtml(m.audio_file)}</span></div>`;
+      if (m.audio_file && targetConv) {
+        mediaHtml += `<div class="tool-result-media"><audio controls src="/api/conv-files/${targetConv}/${encodeURIComponent(m.audio_file)}"></audio><span class="tool-media-name">${escapeHtml(m.audio_file)}</span></div>`;
       }
-      if (m.video_file && convId) {
-        mediaHtml += `<div class="tool-result-media"><video controls class="msg-media" src="/api/conv-files/${convId}/${encodeURIComponent(m.video_file)}"></video><span class="tool-media-name">${escapeHtml(m.video_file)}</span></div>`;
+      if (m.video_file && targetConv) {
+        mediaHtml += `<div class="tool-result-media"><video controls class="msg-media" src="/api/conv-files/${targetConv}/${encodeURIComponent(m.video_file)}"></video><span class="tool-media-name">${escapeHtml(m.video_file)}</span></div>`;
       }
       if (m.video_url) {
         mediaHtml += `<div class="tool-result-media"><video controls class="msg-media" src="${escapeHtml(m.video_url)}"></video></div>`;
@@ -3529,7 +3614,7 @@ function addAssistantMessage(role, content, backendMsgId = null) {
         <pre>${escapeHtml(toolData.result)}</pre>
       </div>`;
     // 保存 tool_call_id 到消息对象
-    const msgObj = assistantMessages.find(m => m.id === id);
+    const msgObj = msgs && msgs.find(m => m.id === id);
     if (msgObj) {
       msgObj.tool_call_id = toolData.tool_call_id;
       msgObj.tool_name = toolData.name;
@@ -3590,12 +3675,16 @@ function updateAssistantMessage(id, content) {
     const chat = document.getElementById('assistant-chat');
     if (chat) chat.scrollTop = chat.scrollHeight;
   }
+  const msgObj = getCurrentConvMessages().find(m => m.id === id);
+  if (msgObj) msgObj.content = content;
 }
 
 function removeAssistantMessage(id) {
   const div = document.getElementById(id);
   if (div) div.remove();
-  assistantMessages = assistantMessages.filter(m => m.id !== id);
+  const msgs = getCurrentConvMessages();
+  const idx = msgs.findIndex(m => m.id === id);
+  if (idx !== -1) msgs.splice(idx, 1);
 }
 
 function attachDeleteButton(msgId, backendMsgId) {
@@ -3622,42 +3711,42 @@ async function deleteMessagePair(backendMsgId) {
   const ok = await showConfirm('确定删除该问答对吗？');
   if (!ok) return;
 
-  const clickIdx = assistantMessages.findIndex(m => m.backendMsgId === backendMsgId);
+  const msgs = getCurrentConvMessages();
+  const clickIdx = msgs.findIndex(m => m.backendMsgId === backendMsgId);
   if (clickIdx === -1) {
     showToast('消息未找到', true);
     return;
   }
 
   let startIdx = clickIdx;
-  while (startIdx > 0 && assistantMessages[startIdx].role !== 'user') startIdx--;
-  if (assistantMessages[startIdx].role !== 'user') startIdx = clickIdx;
+  while (startIdx > 0 && msgs[startIdx].role !== 'user') startIdx--;
+  if (msgs[startIdx].role !== 'user') startIdx = clickIdx;
 
   let endIdx = startIdx;
-  while (endIdx + 1 < assistantMessages.length && assistantMessages[endIdx + 1].role !== 'user') endIdx++;
+  while (endIdx + 1 < msgs.length && msgs[endIdx + 1].role !== 'user') endIdx++;
 
   // 保存被删除的消息快照，用于失败回滚
-  const removedMessages = assistantMessages.slice(startIdx, endIdx + 1);
+  const removedMessages = msgs.slice(startIdx, endIdx + 1);
   const removedDivs = [];
   for (let i = startIdx; i <= endIdx; i++) {
-    const div = document.getElementById(assistantMessages[i].id);
+    const div = document.getElementById(msgs[i].id);
     if (div) {
       removedDivs.push({ el: div, ref: div.nextSibling, parent: div.parentNode });
       div.remove();
     }
   }
 
-  assistantMessages.splice(startIdx, endIdx - startIdx + 1);
+  msgs.splice(startIdx, endIdx - startIdx + 1);
 
   try {
     const res = await fetch(`/api/assistant/conversations/${assistantConversationId}/messages/${backendMsgId}`, { method: 'DELETE' });
     if (!res.ok) {
       throw new Error((await res.json().catch(() => ({}))).error || '删除失败');
     }
-    // 删除成功，刷新侧边栏会话列表
     loadConversations();
   } catch (err) {
     // 回滚：恢复本地消息和 DOM
-    assistantMessages.splice(startIdx, 0, ...removedMessages);
+    msgs.splice(startIdx, 0, ...removedMessages);
     for (const { el, ref, parent } of removedDivs) {
       if (parent) parent.insertBefore(el, ref);
     }
@@ -3667,9 +3756,9 @@ async function deleteMessagePair(backendMsgId) {
 
 function attachRetryButtonToLast() {
   document.querySelectorAll('.msg-retry-btn').forEach(b => b.remove());
-  // 只在最后一条 user 消息上添加重试按钮
-  for (let i = assistantMessages.length - 1; i >= 0; i--) {
-    const m = assistantMessages[i];
+  const msgs = getCurrentConvMessages();
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
     if (m.role === 'user') {
       const div = document.getElementById(m.id);
       if (div) {
@@ -3686,28 +3775,30 @@ function attachRetryButtonToLast() {
 }
 
 async function retryLastMessage() {
-  if (assistantAbortController) return;
+  const convId = assistantDisplayedConvId;
+  if (assistantConvControllers.has(convId)) return;
 
+  const msgs = getCurrentConvMessages();
   let lastUserIdx = -1;
-  for (let i = assistantMessages.length - 1; i >= 0; i--) {
-    if (assistantMessages[i].role === 'user') { lastUserIdx = i; break; }
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'user') { lastUserIdx = i; break; }
   }
   if (lastUserIdx === -1) return;
 
-  const userContent = assistantMessages[lastUserIdx].content;
+  const userContent = msgs[lastUserIdx].content;
 
   // 移除 user 消息之后的所有消息（DOM + 数组）
-  const toRemove = assistantMessages.slice(lastUserIdx + 1);
+  const toRemove = msgs.slice(lastUserIdx + 1);
   for (const m of toRemove) {
     const div = document.getElementById(m.id);
     if (div) div.remove();
   }
-  assistantMessages.splice(lastUserIdx + 1);
+  msgs.splice(lastUserIdx + 1);
 
   // 清理服务端历史
   const lastWithBackend = [...toRemove].reverse().find(m => m.backendMsgId);
   if (assistantConversationId) {
-    const deleteId = lastWithBackend?.backendMsgId || assistantMessages[lastUserIdx]?.backendMsgId;
+    const deleteId = lastWithBackend?.backendMsgId || msgs[lastUserIdx]?.backendMsgId;
     if (deleteId) {
       try {
         await fetch(`/api/assistant/conversations/${assistantConversationId}/messages/${deleteId}`, { method: 'DELETE' });
@@ -3721,10 +3812,12 @@ async function retryLastMessage() {
   const proxy = proxies.find(p => p.id === assistantProxyId);
   if (!proxy) return;
 
-  const thinkingId = addAssistantMessage('thinking', '');
+  const thinkingId = addAssistantMessage('thinking', '', null, convId);
   const myController = new AbortController();
-  assistantAbortController = myController;
+  assistantConvControllers.set(convId, myController);
+  assistantStreamingConvs.add(convId);
   setSendBtnState(true);
+  updateSidebarBadges(); // 同步更新 badge
 
   try {
     const providerVal = document.getElementById('assistant-provider-select')?.value || '';
@@ -3739,29 +3832,31 @@ async function retryLastMessage() {
         permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
         thinkingEffort: document.getElementById('assistant-thinking-select')?.value || '',
       }),
-      signal: assistantAbortController.signal,
+      signal: myController.signal,
     });
 
     if (!res.ok) {
       const err = await res.text().catch(() => 'Unknown error');
       removeAssistantMessage(thinkingId);
-      addAssistantMessage('assistant', `请求失败: HTTP ${res.status}\n\n${err}`);
+      addAssistantMessage('assistant', `请求失败: HTTP ${res.status}\n\n${err}`, null, convId);
       attachRetryButtonToLast();
       return;
     }
 
-    await processAssistantSSE(res, thinkingId);
+    await processAssistantSSE(res, thinkingId, convId);
   } catch (err) {
     removeAssistantMessage(thinkingId);
     if (err.name === 'AbortError') {
-      addAssistantMessage('assistant', '已取消');
+      addAssistantMessage('assistant', '已取消', null, convId);
     } else {
-      addAssistantMessage('assistant', `请求出错: ${err.message}`);
+      addAssistantMessage('assistant', `请求出错: ${err.message}`, null, convId);
     }
     attachRetryButtonToLast();
   } finally {
-    if (assistantAbortController === myController) assistantAbortController = null;
+    if (assistantConvControllers.get(convId) === myController) assistantConvControllers.delete(convId);
+    assistantStreamingConvs.delete(convId);
     setSendBtnState(false);
+    updateSidebarBadges(); // 同步移除 badge
   }
 }
 
@@ -3894,6 +3989,16 @@ async function approveTool(id, approved, btn) {
     if (res.ok) {
       const labels = { true: '✅ 已批准', session: '🔒 会话已批准', false: '❌ 已拒绝' };
       if (statusEl) statusEl.textContent = labels[String(approved)] || '✅ 已批准';
+      // 清除该会话的 pending approval 记录，刷新侧边栏高亮
+      for (const [convId, list] of assistantPendingApprovals) {
+        const idx = list.findIndex(p => p.data.id === id);
+        if (idx !== -1) {
+          list.splice(idx, 1);
+          if (list.length === 0) assistantPendingApprovals.delete(convId);
+          loadConversations();
+          break;
+        }
+      }
     } else {
       const err = await res.json().catch(() => ({}));
       if (statusEl) statusEl.textContent = `⚠️ ${err.error || '操作失败'}`;
@@ -3909,7 +4014,14 @@ async function approveTool(id, approved, btn) {
 }
 
 function clearAssistantChat() {
-  assistantMessages = [];
+  // 清理当前显示会话的数据
+  if (assistantDisplayedConvId) {
+    assistantConvMessages.delete(assistantDisplayedConvId);
+    assistantConvContext.delete(assistantDisplayedConvId);
+    assistantPendingApprovals.delete(assistantDisplayedConvId);
+    assistantConvCompleted.delete(assistantDisplayedConvId);
+  }
+  assistantDisplayedConvId = '';
   assistantConversationId = '';
   saveAssistantSelection();
   highlightActiveConversation();
@@ -4098,8 +4210,50 @@ function toggleAssistantSidebar() {
 
 function highlightActiveConversation() {
   document.querySelectorAll('.sidebar-conv-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.id === assistantConversationId);
+    el.classList.toggle('active', el.dataset.id === assistantConversationId || el.dataset.id === assistantDisplayedConvId);
   });
+}
+
+function highlightConversationUpdate(convId) {
+  if (convId === assistantDisplayedConvId) return;
+  const item = document.querySelector(`.sidebar-conv-item[data-id="${convId}"]`);
+  if (item) item.classList.add('has-update');
+}
+
+// 后台会话的 tool_approval 自动批准（通过 SSE 发回 approve 消息）
+// 当用户切换到有 pending approval 的会话时渲染审批 UI
+function renderPendingApprovals(convId) {
+  const pending = assistantPendingApprovals.get(convId);
+  if (!pending || !pending.length) return;
+  assistantPendingApprovals.delete(convId);
+  for (const { data } of pending) {
+    // 复用 processAssistantSSE 中的 tool_approval 渲染逻辑
+    const argsDisplay = data.arguments ? JSON.stringify(data.arguments, null, 2) : '{}';
+    const ep = data.execPolicy;
+    let actionsHtml;
+    if (ep && ep.decision === 'prompt') {
+      const policyInfo = ep.matchedRule
+        ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">匹配规则: <code>${escapeHtml(ep.matchedRule)}</code> · ${escapeHtml(ep.description || '')}</div>`
+        : `<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">${escapeHtml(ep.description || '未知命令')}</div>`;
+      actionsHtml = `${policyInfo}
+        <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 本次批准</button>
+        <button class="btn btn-approve" style="background:var(--accent);color:#fff" onclick="approveTool('${escapeHtml(data.id)}', 'session', this)">🔒 本次会话批准</button>
+        <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
+        <span class="approval-status"></span>`;
+    } else {
+      actionsHtml = `
+        <button class="btn btn-approve" onclick="approveTool('${escapeHtml(data.id)}', true, this)">✅ 批准执行</button>
+        <button class="btn btn-deny" onclick="approveTool('${escapeHtml(data.id)}', false, this)">❌ 拒绝</button>
+        <span class="approval-status"></span>`;
+    }
+    const approvalHtml = `<div class="tool-approval-card" id="approval-${escapeHtml(data.id)}">
+      <div class="tool-approval-header">${ep ? '🛡️ 命令需要确认' : '⚠️ 需要确认执行'}</div>
+      <div class="tool-approval-name">${escapeHtml(data.name)}</div>
+      <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
+      <div class="tool-approval-actions">${actionsHtml}</div>
+    </div>`;
+    addAssistantMessage('tool-approval', approvalHtml, null, convId);
+  }
 }
 
 async function deleteConversationById(convId, event) {
@@ -4108,6 +4262,15 @@ async function deleteConversationById(convId, event) {
   if (!ok) return;
   try {
     await fetch(`/api/assistant/conversations/${convId}`, { method: 'DELETE' });
+    // 停止该会话的流式输出
+    const ac = assistantConvControllers.get(convId);
+    if (ac) { ac.abort(); assistantConvControllers.delete(convId); }
+    assistantStreamingConvs.delete(convId);
+    // 清理 per-conversation 数据
+    assistantConvMessages.delete(convId);
+    assistantConvContext.delete(convId);
+    assistantPendingApprovals.delete(convId);
+    assistantConvCompleted.delete(convId);
     if (assistantConversationId === convId) clearAssistantChat();
     await loadConversations();
     showToast('会话已删除');
@@ -4122,6 +4285,15 @@ async function clearAllConversations() {
   try {
     const res = await fetch('/api/assistant/conversations', { method: 'DELETE' });
     const data = await res.json();
+    // 停止所有流式输出
+    for (const [, ac] of assistantConvControllers) ac.abort();
+    assistantConvControllers.clear();
+    assistantStreamingConvs.clear();
+    // 清理所有 per-conversation 数据
+    assistantConvMessages.clear();
+    assistantConvContext.clear();
+    assistantPendingApprovals.clear();
+    assistantConvCompleted.clear();
     clearAssistantChat();
     await loadConversations();
     showToast(`已清空 ${data.count || 0} 个会话`);
@@ -4130,42 +4302,103 @@ async function clearAllConversations() {
   }
 }
 
+/**
+ * 同步更新侧边栏 badge（流式输出/完成），不 fetch 服务端，不受 generation counter 影响
+ */
+function updateSidebarBadges() {
+  document.querySelectorAll('.sidebar-conv-item').forEach(el => {
+    const id = el.dataset.id;
+    // 流式输出 badge
+    const existing = el.querySelector('.streaming-badge');
+    if (assistantStreamingConvs.has(id)) {
+      if (!existing) {
+        const badge = document.createElement('span');
+        badge.className = 'streaming-badge';
+        badge.title = '正在流式输出';
+        badge.textContent = '●';
+        el.insertBefore(badge, el.firstChild);
+      }
+    } else if (existing) {
+      existing.remove();
+    }
+    // 完成 badge
+    const existingComplete = el.querySelector('.completed-badge');
+    const hasPending = assistantPendingApprovals.has(id);
+    if (assistantConvCompleted.has(id) && !hasPending) {
+      if (!existingComplete) {
+        const badge = document.createElement('span');
+        badge.className = 'completed-badge';
+        badge.title = '任务已完成';
+        badge.textContent = '✓';
+        el.insertBefore(badge, el.firstChild);
+      }
+    } else if (existingComplete) {
+      existingComplete.remove();
+    }
+  });
+}
+
 async function loadConversations() {
+  const gen = ++loadConvoGeneration;
   try {
     const res = await fetch('/api/assistant/conversations');
+    if (gen !== loadConvoGeneration) return; // 有更新的调用，丢弃过期结果
     const data = await res.json();
     const list = document.getElementById('conversation-list');
     if (!list) return;
     const sorted = (data.conversations || []).slice().reverse();
     list.innerHTML = '';
+    const activeId = assistantConversationId || assistantDisplayedConvId;
     for (const c of sorted) {
       const date = new Date(c.lastActivity).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
       const label = (c.preview || '空会话').slice(0, 30) + ' — ' + date;
+      const isActive = c.id === activeId;
+      const isStreaming = assistantStreamingConvs.has(c.id);
+      const hasPending = assistantPendingApprovals.has(c.id);
+      const isCompleted = assistantConvCompleted.has(c.id);
+      const classes = ['sidebar-conv-item'];
+      if (isActive) classes.push('active');
+      if (hasPending) classes.push('has-update');
+      if (isCompleted && !hasPending) classes.push('has-completed');
       const item = document.createElement('div');
-      item.className = 'sidebar-conv-item' + (c.id === assistantConversationId ? ' active' : '');
+      item.className = classes.join(' ');
       item.dataset.id = c.id;
-      item.innerHTML = `<span class="sidebar-conv-item-label">${escapeHtml(label)}</span><button class="sidebar-conv-item-delete" title="删除">×</button>`;
+      const streamBadge = isStreaming ? '<span class="streaming-badge" title="正在流式输出">●</span>' : '';
+      const completeBadge = isCompleted && !hasPending ? '<span class="completed-badge" title="任务已完成">✓</span>' : '';
+      item.innerHTML = `${streamBadge}${completeBadge}<span class="sidebar-conv-item-label">${escapeHtml(label)}</span><button class="sidebar-conv-item-delete" title="删除">×</button>`;
       item.querySelector('.sidebar-conv-item-label').onclick = () => switchConversation(c.id, c);
       item.querySelector('.sidebar-conv-item-delete').onclick = (e) => deleteConversationById(c.id, e);
       list.appendChild(item);
     }
+    // 安全兜底：确保当前会话的选中状态正确
+    if (activeId) {
+      const activeEl = list.querySelector(`.sidebar-conv-item[data-id="${activeId}"]`);
+      if (activeEl && !activeEl.classList.contains('active')) {
+        activeEl.classList.add('active');
+      }
+    }
+    // 兜底：确保 badge 在侧边栏重建后仍然正确（防止异步竞争丢失 badge）
+    updateSidebarBadges();
   } catch (err) {
     showToast('加载会话列表失败: ' + err.message, true);
   }
 }
 
 async function switchConversation(convId, convData) {
-  // 中断进行中的请求，避免旧流的 DOM 更新与新会话冲突
-  if (assistantAbortController) {
-    assistantAbortController.abort();
-    assistantAbortController = null;
-  }
   if (!convId) {
     // 选择"新会话"
+    assistantDisplayedConvId = '';
+    assistantConversationId = '';
     clearAssistantChat();
     return;
   }
+
+  // 切换显示目标（不中断流式输出）
+  assistantDisplayedConvId = convId;
   assistantConversationId = convId;
+  saveAssistantSelection();
+  assistantConvCompleted.delete(convId); // 清除完成标记
+
   // Restore conversation mode
   if (convData) {
     assistantChatMode = convData.mode || 'full';
@@ -4175,21 +4408,45 @@ async function switchConversation(convId, convData) {
     const wsInput = document.getElementById('settings-window-size');
     if (wsInput) wsInput.value = assistantWindowSize;
   }
-  assistantMessages = [];
+
   const chat = document.getElementById('assistant-chat');
   if (chat) chat.innerHTML = '';
 
-  // 重置上下文栏，避免显示前一个会话的 token 统计
-  contextTokens = 0;
-  contextPercent = 0;
-  contextMessages = 0;
+  // 恢复 per-conversation 上下文栏
+  const saved = assistantConvContext.get(convId);
+  if (saved) {
+    contextTokens = saved.tokens;
+    contextMaxTokens = saved.maxTokens;
+    contextPercent = saved.percent;
+    contextMessages = saved.messages;
+  } else {
+    contextTokens = 0;
+    contextPercent = 0;
+    contextMessages = 0;
+  }
   updateContextBar();
 
+  // 如果内存中有消息（正在流式输出或之前加载过），直接渲染（不重复存储）
+  const cached = assistantConvMessages.get(convId);
+  if (cached && cached.length > 0) {
+    for (const m of cached) {
+      if (m.role === 'user') addAssistantMessage('user', m.content, m.backendMsgId, convId, true);
+      else if (m.role === 'assistant' && m.content && String(m.content).trim()) addAssistantMessage('assistant', m.content, m.backendMsgId, convId, true);
+      else if (['tool-calls', 'tool-result', 'tool-approval', 'delegate-card'].includes(m.role)) addAssistantMessage(m.role, m.content, m.backendMsgId, convId, true);
+    }
+    attachRetryButtonToLast();
+    setSendBtnState(assistantConvControllers.has(convId));
+    highlightActiveConversation();
+    // 渲染后台期间积累的待审批
+    renderPendingApprovals(convId);
+    return;
+  }
+
+  // 首次加载：从服务端拉取历史
   try {
     const res = await fetch(`/api/assistant/conversations/${convId}/messages`);
     const data = await res.json();
     if (data.proxyId) {
-      // 自动选中对应的代理
       const select = document.getElementById('assistant-proxy-select');
       if (select && select.querySelector(`option[value="${data.proxyId}"]`)) {
         if (select.value !== data.proxyId) {
@@ -4200,7 +4457,6 @@ async function switchConversation(convId, convData) {
         }
       }
     }
-    // 渲染压缩摘要（如果有）
     if (data.compressionSummary) {
       const chatEl = document.getElementById('assistant-chat');
       if (chatEl) {
@@ -4210,18 +4466,20 @@ async function switchConversation(convId, convData) {
         chatEl.appendChild(details);
       }
     }
-    // 渲染历史消息
     for (const m of (data.messages || [])) {
       if (m.role === 'user') {
-        addAssistantMessage('user', m.content, m.id);
+        addAssistantMessage('user', m.content, m.id, convId);
       } else if (m.role === 'assistant') {
-        // 跳过内容为空的 assistant 消息（通常是 tool_calls 占位，避免显示空白聊天框）
         if (m.content && String(m.content).trim()) {
-          addAssistantMessage('assistant', m.content, m.id);
+          addAssistantMessage('assistant', m.content, m.id, convId);
         }
       }
     }
     attachRetryButtonToLast();
+    setSendBtnState(assistantConvControllers.has(convId));
+    highlightActiveConversation();
+    // 渲染后台期间积累的待审批
+    renderPendingApprovals(convId);
   } catch (err) {
     showToast('加载会话失败: ' + err.message, true);
   }

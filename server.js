@@ -1193,72 +1193,95 @@ async function init() {
     for (const [serviceType, template] of Object.entries(MULTIMODAL_TEMPLATES)) {
       const services = allServices.filter(s => s.serviceType === serviceType && s.enabled !== false);
       if (services.length === 0) continue;
-      // 收集所有可用模型
-      const availableModels = [];
+      // 按 brand 分组，每个品牌独立工具定义
+      const brandGroups = {};
       for (const svc of services) {
-        const models = (svc.models && svc.models.length > 0) ? svc.models : (svc.model ? [{ name: svc.model }] : []);
-        for (const m of models) availableModels.push({ name: typeof m === 'string' ? m : m.name, service: svc.name });
+        const brand = svc.brand || svc.name;
+        if (!brandGroups[brand]) brandGroups[brand] = [];
+        brandGroups[brand].push(svc);
       }
-      const serviceNames = services.map(s => s.name).join('/');
-      const modelHint = availableModels.length > 0
-        ? ` 可用模型: ${availableModels.map(m => m.name).join('、')}` : '';
-      const props = { [template.paramName]: { type: 'string', description: template.paramDesc } };
-      if (availableModels.length > 0) {
-        props.model = { type: 'string', description: `指定使用的模型名称。${modelHint}` };
-      }
-      for (const [k, v] of Object.entries(template.extraParams || {})) {
-        props[k] = { type: v.type, description: v.description + `（默认: ${v.default}）` };
-      }
-      definitions.push({
-        type: 'function',
-        function: {
-          name: template.toolName,
-          description: `${template.description} 服务: ${serviceNames}.${modelHint}`,
-          parameters: { type: 'object', properties: props, required: [template.paramName] },
-        },
-      });
-      handlers[template.toolName] = async (args) => {
-        // 根据 args.model 选择对应的服务和模型
-        let svc = services[0];
-        let modelName = args.model;
-        if (modelName) {
-          let found = false;
-          for (const s of services) {
-            const models = (s.models && s.models.length > 0) ? s.models : (s.model ? [{ name: s.model }] : []);
-            if (models.some(m => (typeof m === 'string' ? m : m.name) === modelName)) {
-              svc = s;
-              found = true;
-              break;
+      const multiBrand = Object.keys(brandGroups).length > 1;
+      for (const [brand, brandServices] of Object.entries(brandGroups)) {
+        const brandCfg = (template.brandConfig && template.brandConfig[brand]) || {};
+        let toolName = brandServices.length === 1 && brandServices[0].toolName
+          ? brandServices[0].toolName : template.toolName;
+        // 多品牌时加后缀避免工具名重复
+        if (multiBrand && !brandCfg.toolName) {
+          toolName = toolName + '_' + brand;
+        }
+        const availableModels = [];
+        for (const svc of brandServices) {
+          const models = (svc.models && svc.models.length > 0) ? svc.models : (svc.model ? [{ name: svc.model }] : []);
+          for (const m of models) availableModels.push({ name: typeof m === 'string' ? m : m.name, service: svc.name });
+        }
+        const serviceNames = brandServices.map(s => s.name).join('/');
+        const modelHint = availableModels.length > 0
+          ? ` 可用模型: ${availableModels.map(m => m.name).join('、')}` : '';
+        const description = brandCfg.description || template.description;
+        const extraParams = { ...template.extraParams, ...(brandCfg.extraParams || {}) };
+        const props = { [template.paramName]: { type: 'string', description: brandCfg.paramDesc || template.paramDesc } };
+        if (availableModels.length > 0) {
+          props.model = { type: 'string', description: `指定使用的模型名称。${modelHint}` };
+        }
+        for (const [k, v] of Object.entries(extraParams)) {
+          props[k] = { type: v.type, description: v.description + (v.default !== undefined ? `（默认: ${v.default}）` : '') };
+        }
+        const required = [template.paramName];
+        for (const [k, v] of Object.entries(extraParams)) {
+          if (v.required) required.push(k);
+        }
+        definitions.push({
+          type: 'function',
+          function: {
+            name: toolName,
+            description: `${description} 服务: ${serviceNames}.${modelHint}`,
+            parameters: { type: 'object', properties: props, required },
+          },
+        });
+        handlers[toolName] = async (args) => {
+          // 根据 args.model 选择对应的服务和模型
+          let svc = brandServices[0];
+          let modelName = args.model;
+          if (modelName) {
+            let found = false;
+            for (const s of brandServices) {
+              const models = (s.models && s.models.length > 0) ? s.models : (s.model ? [{ name: s.model }] : []);
+              if (models.some(m => (typeof m === 'string' ? m : m.name) === modelName)) {
+                svc = s;
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              const available = brandServices.flatMap(s => {
+                const ms = (s.models && s.models.length > 0) ? s.models : (s.model ? [{ name: s.model }] : []);
+                return ms.map(m => (typeof m === 'string' ? m : m.name));
+              });
+              return { error: `模型 "${modelName}" 不可用。可用模型: ${available.join('、') || '无'}` };
             }
           }
-          if (!found) {
-            const available = services.flatMap(s => {
-              const ms = (s.models && s.models.length > 0) ? s.models : (s.model ? [{ name: s.model }] : []);
-              return ms.map(m => (typeof m === 'string' ? m : m.name));
-            });
-            return { error: `模型 "${modelName}" 不可用。可用模型: ${available.join('、') || '无'}` };
+          const svcModels = (svc.models && svc.models.length > 0) ? svc.models : (svc.model ? [{ name: svc.model }] : []);
+          if (!modelName && svcModels.length > 0) modelName = (typeof svcModels[0] === 'string' ? svcModels[0] : svcModels[0].name);
+          const provider = { url: svc.url, apiKey: svc.apiKey, apiKeys: svc.apiKey ? [{ key: svc.apiKey }] : [], models: svcModels.map(m => typeof m === 'string' ? { name: m } : m), brand: svc.brand };
+          if (modelName) provider._selectedModel = modelName;
+          const { url, options, parseResponse } = template.buildRequest(provider, args);
+          // 替换 body 中的 model 为用户指定的模型
+          if (modelName && options.body) {
+            try {
+              const bodyObj = JSON.parse(options.body);
+              if (bodyObj.model) { bodyObj.model = modelName; options.body = JSON.stringify(bodyObj); }
+            } catch {}
           }
-        }
-        const svcModels = (svc.models && svc.models.length > 0) ? svc.models : (svc.model ? [{ name: svc.model }] : []);
-        if (!modelName && svcModels.length > 0) modelName = (typeof svcModels[0] === 'string' ? svcModels[0] : svcModels[0].name);
-        const provider = { url: svc.url, apiKey: svc.apiKey, apiKeys: svc.apiKey ? [{ key: svc.apiKey }] : [], models: svcModels.map(m => typeof m === 'string' ? { name: m } : m), brand: svc.brand };
-        // 如果指定了 model，覆盖 buildRequest 中的默认选择
-        if (modelName) provider._selectedModel = modelName;
-        const { url, options, parseResponse } = template.buildRequest(provider, args);
-        // 替换 body 中的 model 为用户指定的模型
-        if (modelName && options.body) {
           try {
-            const bodyObj = JSON.parse(options.body);
-            if (bodyObj.model) { bodyObj.model = modelName; options.body = JSON.stringify(bodyObj); }
-          } catch {}
-        }
-        try {
-          const res = await fetch(url, { ...options, signal: AbortSignal.timeout(120000) });
-          return await parseResponse(res, args._convId);
-        } catch (err) {
-          return { error: `${template.toolName} 失败: ${err.message}` };
-        }
+            const signals = [AbortSignal.timeout(120000)];
+            if (args._abortSignal) signals.push(args._abortSignal);
+            const res = await fetch(url, { ...options, signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0] });
+            return await parseResponse(res, args._convId);
+          } catch (err) {
+            return { error: `${toolName} 失败: ${err.message}` };
+          }
       };
+      }
     }
     return { definitions, handlers };
   }
@@ -5818,7 +5841,7 @@ async function init() {
         if (provider.adapter) proxyHeaders['x-pp-provider-adapter'] = provider.adapter;
         if (Array.isArray(provider.capabilities)) proxyHeaders['x-pp-provider-capabilities'] = JSON.stringify(provider.capabilities);
         const enabledKeys = (provider.apiKeys || []).filter(k => k.enabled !== false);
-        if (enabledKeys.length > 0) proxyHeaders['x-pp-provider-keys'] = JSON.stringify(enabledKeys);
+        if (enabledKeys.length > 0) proxyHeaders['x-pp-provider-keys'] = JSON.stringify(enabledKeys.map(k => ({ key: k.key, enabled: k.enabled, alias: encodeURIComponent(k.alias || '') })));
         proxyHeaders['x-pp-provider-name'] = encodeURIComponent(provider.name);
       }
     }
