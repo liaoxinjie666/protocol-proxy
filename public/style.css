@@ -2827,6 +2827,12 @@ body {
   40% { transform: scale(1); }
 }
 
+.progress-text {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
 /* 工具调用块 */
 .assistant-message.tool-calls {
   align-self: flex-start;

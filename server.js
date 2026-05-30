@@ -2642,7 +2642,7 @@ async function init() {
       type: 'function',
       function: {
         name: 'access_file',
-        description: '读取本地文件。图片/音频/视频会以多模态内容注入对话，模型可直接"看/听/读"。支持绝对路径、相对路径、文件名（会在会话目录中查找）。',
+        description: '读取本地文件。图片/音频/视频会以多模态内容注入对话，模型可直接"看/听/读"。支持绝对路径、相对路径、文件名（会在会话目录中查找）。如果模型不支持某种格式，API 会返回错误，届时可用 execute_code 等替代方案分析。',
         parameters: {
           type: 'object',
           properties: {
@@ -2657,7 +2657,7 @@ async function init() {
       type: 'function',
       function: {
         name: 'audio_analyze',
-        description: '分析或转写音频文件。支持 mp3/wav/m4a/ogg/flac 格式。transcribe 模式调用 ASR API 转为文字，analyze 模式返回音频元数据。',
+        description: '分析或转写音频文件（返回文字信息）。支持 mp3/wav/m4a/ogg/flac 格式。如果需要模型直接"听"音频内容，请使用 access_file 工具加载音频。',
         parameters: {
           type: 'object',
           properties: {
@@ -6072,6 +6072,21 @@ async function init() {
     // 发送 conversationId 给前端
     safeSSE('conversation', { id: convId, ...(lastUserMsgId && { userMessageId: lastUserMsgId }) });
 
+    // 进度心跳：每 3s 向前端报告当前阶段，防止用户以为系统卡死
+    let _progressInterval = null;
+    let _progressStart = 0;
+    function startProgress(stage, extra = {}) {
+      stopProgress();
+      _progressStart = Date.now();
+      _progressInterval = setInterval(() => {
+        safeSSE('progress', { stage, elapsed: Math.round((Date.now() - _progressStart) / 1000), ...extra });
+      }, 3000);
+      safeSSE('progress', { stage, elapsed: 0, ...extra });
+    }
+    function stopProgress() {
+      if (_progressInterval) { clearInterval(_progressInterval); _progressInterval = null; }
+    }
+
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
       const convFilesList = (() => { try { return fs.readdirSync(getConvFilesPath(convId)).filter(f => fs.statSync(path.join(getConvFilesPath(convId), f)).isFile()); } catch { return []; } })();
@@ -6095,9 +6110,9 @@ async function init() {
         const msgs = [{ role: 'system', content: systemParts.join('\n\n---\n\n') }];
         // 构建发给 API 的消息：assistant 消息附带图片时转为 vision content blocks
         const buildApiMessage = (m) => {
-          // _multimodal 工具消息：保持 content 数组，由协议转换器处理格式
+          // _multimodal 工具消息：始终发送多模态内容，由 API 判断模型是否支持
           if (m.role === 'tool' && m._multimodal && Array.isArray(m.content)) {
-            return m; // 保持原样，o2a 转换器会处理 tool message + content array
+            return m;
           }
           if (m.role !== 'assistant' || !m._images || m._images.length === 0) return m;
           const dir = getConvFilesPath(convId);
@@ -6163,6 +6178,7 @@ async function init() {
             }).join(' ');
             logger.log(`[assistant] 请求消息结构 (${cleanMessages.length}): ${reqStruct}`);
           }
+          startProgress('llm', { round });
           fetchRes = await fetch(proxyUrl, {
             method: 'POST',
             headers: proxyHeaders,
@@ -6301,6 +6317,7 @@ async function init() {
         conv.messages.push(assistantMsg);
 
         // 执行工具
+        stopProgress();
         for (const tc of toolCalls) {
           let args = {};
           let argsParseError = false;
@@ -6374,6 +6391,7 @@ async function init() {
                 result = cached;
                 logger.log(`[assistant] tool ${tc.name} cache hit`);
               } else {
+                startProgress('tool', { name: tc.name, round });
                 const mcpHandler = tc.name.startsWith('mcp__') ? mcpClient.getToolHandlerMap()[tc.name] : null;
                 if (mcpHandler) {
                   const toolStart = Date.now();
@@ -6448,6 +6466,7 @@ async function init() {
             conv.messages.push({ id: generateMsgId(), role: 'tool', tool_call_id: tc.id, content: isError ? `[ERROR] ${resultStr}` : resultStr });
           }
         }
+        stopProgress();
 
         // token 检查 + 压缩
         currentTokens = estimateConversationTokens(buildMessages());
@@ -6455,7 +6474,9 @@ async function init() {
         if (currentTokens >= MAX_CONTEXT * 0.8) {
           logger.log(`[assistant] 上下文 ${Math.round(currentTokens / MAX_CONTEXT * 100)}%，自动压缩`);
           safeSSE('compressing', {});
+          startProgress('compressing');
           const compResult = await compressConversation(conv, MAX_CONTEXT, proxyUrl, proxyHeaders, proxy.defaultModel);
+          stopProgress();
           if (compResult) {
             conv.messages = compResult.messages;
             conv.compressionSummary = compResult.summary;
@@ -6529,6 +6550,7 @@ async function init() {
         safeSSE('error', { message: err.message });
       }
     } finally {
+      stopProgress();
       activeStreams.delete(convId);
 
       try {

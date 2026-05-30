@@ -3438,6 +3438,17 @@ async function processAssistantSSE(response, thinkingId, convId) {
           break;
         }
 
+        case 'progress': {
+          const thinkingEl = document.getElementById(thinkingId);
+          if (thinkingEl && !thinkingRemoved) {
+            const labels = { llm: '模型思考中', tool: `执行 ${data.name || '工具'}`, compressing: '压缩上下文' };
+            const label = labels[data.stage] || '处理中';
+            const elapsed = data.elapsed > 0 ? ` (${data.elapsed}s)` : '';
+            thinkingEl.innerHTML = `<span class="progress-text">${label}${elapsed}</span>`;
+          }
+          break;
+        }
+
         case 'done': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
           if (msgId) {
