@@ -466,23 +466,19 @@
           <div class="assistant-main">
             <div class="assistant-toolbar">
               <button class="sidebar-toggle-btn" id="sidebar-toggle-btn" onclick="toggleAssistantSidebar()" title="会话历史">☰</button>
-              <div class="assistant-model-select">
-                <label>后端代理</label>
-                <select id="assistant-proxy-select">
-                  <option value="">选择后端代理...</option>
-                </select>
+              <div class="model-tree-wrapper" id="model-tree-wrapper">
+                <button class="model-tree-trigger" id="model-tree-trigger" type="button">
+                  <span class="model-tree-label" id="model-tree-label">选择模型...</span>
+                  <span class="model-tree-arrow">▾</span>
+                </button>
+                <div class="model-tree-dropdown" id="model-tree-dropdown"></div>
               </div>
-              <div class="assistant-model-select">
-                <label>供应商</label>
-                <select id="assistant-provider-select" onchange="onAssistantProviderChange(this.value)">
-                  <option value="">自动（跟随代理）</option>
-                </select>
-              </div>
-              <div class="assistant-model-select">
-                <label>模型</label>
-                <select id="assistant-model-select">
-                  <option value="">自动（跟随代理）</option>
-                </select>
+              <div class="mode-toggle" id="assistant-mode-toggle" onclick="toggleAssistantPureMode()" title="切换助手/纯净模式">
+                <span class="mode-toggle-label mode-toggle-left" id="mode-label-assistant">助手</span>
+                <div class="mode-toggle-track" id="mode-toggle-track">
+                  <div class="mode-toggle-thumb"></div>
+                </div>
+                <span class="mode-toggle-label mode-toggle-right" id="mode-label-pure">纯净</span>
               </div>
               <div class="assistant-model-select">
                 <label>工具权限</label>
@@ -511,19 +507,19 @@
               </div>
             </div>
             <div class="assistant-chat" id="assistant-chat">
-              <div class="assistant-welcome">
+              <div class="assistant-welcome" id="assistant-welcome">
                 <div class="assistant-welcome-icon">
                   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
                 </div>
-                <h3>智控助手</h3>
-                <p>我是你的 Protocol Proxy 智能助手，可以帮你：</p>
-                <ul>
+                <h3 id="assistant-welcome-title">智控助手</h3>
+                <p id="assistant-welcome-desc">我是你的 Protocol Proxy 智能助手，可以帮你：</p>
+                <ul id="assistant-welcome-features">
                   <li>查询代理和供应商运行状态</li>
                   <li>分析日志，定位异常原因</li>
                   <li>解读配置并给出优化建议</li>
                   <li>自然语言排障与问答</li>
                 </ul>
-                <p class="assistant-hint">请先选择一个运行中的代理作为对话后端</p>
+                <p class="assistant-hint" id="assistant-welcome-hint">请先选择一个运行中的代理作为对话后端</p>
               </div>
             </div>
             <div class="assistant-context-bar" id="assistant-context-bar" style="display:none">

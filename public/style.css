@@ -2367,7 +2367,188 @@ body {
   cursor: pointer;
 }
 
+/* ---- Model tree selector ---- */
 
+.model-tree-wrapper {
+  position: relative;
+}
+
+.model-tree-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  max-width: 360px;
+  white-space: nowrap;
+}
+
+.model-tree-trigger:hover {
+  border-color: var(--text-muted);
+}
+
+.model-tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-tree-arrow {
+  font-size: 10px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.model-tree-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  min-width: 280px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--bg-elevated, #1e1e1e);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  padding: 4px 0;
+}
+
+.model-tree-dropdown.open {
+  display: block;
+}
+
+/* Tree node rows */
+.mt-node {
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  border-radius: 3px;
+  margin: 0 4px;
+}
+
+.mt-node:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.mt-node.selected {
+  background: rgba(99,179,237,0.15);
+  color: #63b3ed;
+}
+
+.mt-indent-1 { padding-left: 24px; }
+.mt-indent-2 { padding-left: 44px; }
+.mt-indent-3 { padding-left: 64px; }
+
+.mt-arrow {
+  width: 14px;
+  font-size: 10px;
+  opacity: 0.5;
+  flex-shrink: 0;
+  text-align: center;
+  transition: transform 0.15s;
+}
+
+.mt-arrow.expanded {
+  transform: rotate(90deg);
+}
+
+.mt-leaf-space {
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.mt-protocol {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.mt-auto-label {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mt-separator {
+  height: 1px;
+  background: var(--border-default);
+  margin: 4px 12px;
+}
+
+/* ---- Mode toggle (助手/纯净) ---- */
+
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.mode-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  transition: color 0.2s;
+}
+
+.mode-toggle-left {
+  color: #63b3ed;
+}
+
+.mode-toggle-right {
+  color: var(--text-muted);
+}
+
+.mode-toggle.pure .mode-toggle-left {
+  color: var(--text-muted);
+}
+
+.mode-toggle.pure .mode-toggle-right {
+  color: #68d391;
+}
+
+.mode-toggle-track {
+  width: 36px;
+  height: 20px;
+  background: #63b3ed;
+  border-radius: 10px;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.mode-toggle.pure .mode-toggle-track {
+  background: #68d391;
+}
+
+.mode-toggle-thumb {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+.mode-toggle.pure .mode-toggle-thumb {
+  transform: translateX(16px);
+}
 
 .assistant-chat {
   flex: 1;
