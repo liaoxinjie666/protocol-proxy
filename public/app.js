@@ -3320,6 +3320,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
   let msgId = null;
   let thinkingRemoved = false;
   const collectedMedia = [];
+  let currentConvId = convId;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -3346,7 +3347,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
         case 'content': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
           if (!msgId) {
-            msgId = addAssistantMessage('assistant', '', null, convId);
+            msgId = addAssistantMessage('assistant', '', null, currentConvId);
           }
           fullContent += data.delta;
           updateAssistantMessage(msgId, fullContent);
@@ -3363,18 +3364,18 @@ async function processAssistantSSE(response, thinkingId, convId) {
               : '';
             return `<div class="tool-call-item"><span class="tool-call-name">${escapeHtml(tc.name)}</span>${argsStr}</div>`;
           }).join('');
-          addAssistantMessage('tool-calls', callHtml, null, convId);
+          addAssistantMessage('tool-calls', callHtml, null, currentConvId);
           break;
         }
 
         case 'tool_approval': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
           // 后台会话：存入待审批队列，切换时再渲染
-          if (convId !== assistantDisplayedConvId) {
-            if (!assistantPendingApprovals.has(convId)) assistantPendingApprovals.set(convId, []);
-            assistantPendingApprovals.get(convId).push({ data, resolve: null });
+          if (currentConvId !== assistantDisplayedConvId) {
+            if (!assistantPendingApprovals.has(currentConvId)) assistantPendingApprovals.set(currentConvId, []);
+            assistantPendingApprovals.get(currentConvId).push({ data, resolve: null });
             // 通知侧边栏有新审批
-            highlightConversationUpdate(convId);
+            highlightConversationUpdate(currentConvId);
             break;
           }
           const argsDisplay = data.arguments ? JSON.stringify(data.arguments, null, 2) : '{}';
@@ -3401,7 +3402,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
             <pre class="tool-approval-args">${escapeHtml(argsDisplay)}</pre>
             <div class="tool-approval-actions">${actionsHtml}</div>
           </div>`;
-          addAssistantMessage('tool-approval', approvalHtml, null, convId);
+          addAssistantMessage('tool-approval', approvalHtml, null, currentConvId);
           break;
         }
 
@@ -3410,7 +3411,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
           if (data.result && data.result._multimodal && Array.isArray(data.result.content)) {
             const mmContent = data.result.content;
             const textParts = mmContent.filter(p => p.type === 'text').map(p => p.text).join('\n');
-            addAssistantMessage('tool-result', { name: data.name, result: textParts || '已加载多模态内容', tool_call_id: data.tool_call_id, is_error: false, images: null, media: null }, null, convId);
+            addAssistantMessage('tool-result', { name: data.name, result: textParts || '已加载多模态内容', tool_call_id: data.tool_call_id, is_error: false, images: null, media: null }, null, currentConvId);
             for (const part of mmContent) {
               if (part.type === 'image_url' && part.image_url?.url) {
                 collectedMedia.push({ type: 'image', base64: part.image_url.url });
@@ -3422,7 +3423,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
             }
           } else {
             const resultStr = JSON.stringify(data.result, null, 2);
-            addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null, media: data.media || null }, null, convId);
+            addAssistantMessage('tool-result', { name: data.name, result: resultStr, tool_call_id: data.tool_call_id, is_error: data.is_error, images: data.images || null, media: data.media || null }, null, currentConvId);
             // 收集媒体用于附加到助手回复中
             if (data.images && data.images.length > 0) {
               for (const img of data.images) {
@@ -3452,7 +3453,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
         case 'done': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
           if (msgId) {
-            const msgObj = getConvMessages(convId).find(m => m.id === msgId);
+            const msgObj = getConvMessages(currentConvId).find(m => m.id === msgId);
             if (msgObj) {
               if (data.reasoning_content && !fullContent.includes('<think>')) {
                 fullContent = `<think>${data.reasoning_content}</think>` + fullContent;
@@ -3481,20 +3482,20 @@ async function processAssistantSSE(response, thinkingId, convId) {
 
         case 'error': {
           if (!thinkingRemoved) { removeAssistantMessage(thinkingId); thinkingRemoved = true; }
-          addAssistantMessage('assistant', `错误: ${data.message}`, null, convId);
+          addAssistantMessage('assistant', `错误: ${data.message}`, null, currentConvId);
           break;
         }
 
         case 'context': {
           // 保存到 per-conversation context
-          assistantConvContext.set(convId, {
+          assistantConvContext.set(currentConvId, {
             tokens: data.tokens,
             maxTokens: data.maxTokens || contextMaxTokens,
             percent: data.percent,
             messages: data.messages,
           });
           // 仅当会话可见时更新 UI
-          if (convId === assistantDisplayedConvId) {
+          if (currentConvId === assistantDisplayedConvId) {
             contextTokens = data.tokens;
             contextMaxTokens = data.maxTokens || contextMaxTokens;
             contextPercent = data.percent;
@@ -3539,6 +3540,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
             }
             assistantDisplayedConvId = data.id;
           }
+          currentConvId = assistantDisplayedConvId;
           // 更新用户选中的会话 ID（仅当前会话或新会话的 temp→real 迁移时）
           if (data.id === assistantDisplayedConvId || data.id === assistantConversationId
             || (assistantConversationId && assistantConversationId.startsWith('new-'))) {
@@ -3560,16 +3562,16 @@ async function processAssistantSSE(response, thinkingId, convId) {
     }
   }
 
-  if (!thinkingRemoved && assistantConvMessages.has(convId)) removeAssistantMessage(thinkingId);
+  if (!thinkingRemoved && assistantConvMessages.has(currentConvId)) removeAssistantMessage(thinkingId);
   // 会话可能在流式输出期间被删除，跳过后续操作
-  if (!assistantConvMessages.has(convId)) return;
+  if (!assistantConvMessages.has(currentConvId)) return;
   if (msgId && fullContent) {
-    const msgObj = getConvMessages(convId).find(m => m.id === msgId);
+    const msgObj = getConvMessages(currentConvId).find(m => m.id === msgId);
     if (msgObj && !msgObj.content) msgObj.content = fullContent;
   }
   // 后台会话任务完成：标记完成状态
-  if (convId !== assistantDisplayedConvId) {
-    assistantConvCompleted.add(convId);
+  if (currentConvId !== assistantDisplayedConvId) {
+    assistantConvCompleted.add(currentConvId);
     updateSidebarBadges(); // 同步更新
   }
   attachRetryButtonToLast();
@@ -3702,7 +3704,13 @@ function updateAssistantMessage(id, content) {
     const chat = document.getElementById('assistant-chat');
     if (chat) chat.scrollTop = chat.scrollHeight;
   }
-  const msgObj = getCurrentConvMessages().find(m => m.id === id);
+  let msgObj = getCurrentConvMessages().find(m => m.id === id);
+  if (!msgObj) {
+    for (const msgs of assistantConvMessages.values()) {
+      msgObj = msgs.find(m => m.id === id);
+      if (msgObj) break;
+    }
+  }
   if (msgObj) msgObj.content = content;
 }
 

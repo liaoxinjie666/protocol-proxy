@@ -5931,9 +5931,9 @@ async function init() {
     // 请求级 AbortController：客户端断开时 abort，用于终止工具循环和子进程
     const requestAbort = new AbortController();
 
-    // req.on('close')：请求体消费后触发，用于清理并发锁和待审批工具
+    // req.on('close')：请求体消费后触发，清理待审批工具
+    // activeStreams 的清理由 finally 块统一处理
     req.on('close', () => {
-      activeStreams.delete(convId);
       for (const [id, entry] of pendingApprovals) {
         if (entry.timestamp > Date.now() - TOOL_APPROVAL_TIMEOUT_MS * 2) {
           entry.resolve(false);
