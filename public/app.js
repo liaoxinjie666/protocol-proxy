@@ -29,16 +29,13 @@ const delegateCards = new Map(); // createdId → { msgId, tasks: Map<taskId, {o
 let assistantAttachments = []; // 待上传的多模态附件 [{type, data, mimeType, name}]
 let assistantProxyId = '';
 let assistantProviderId = ''; // 用于级联选择的模型列表
-let assistantModel = ''; // 当前选中的模型名
 let proxyProviders = []; // 当前代理的候选供应商列表
 let savedAssistantProxyId = ''; // 从设置恢复的上次选择
 let savedAssistantProviderId = '';
 let savedAssistantModel = '';
 let assistantConversationId = '';
-let pureConversationId = ''; // 纯净模式独立会话 ID
 let assistantChatMode = 'full';
 let assistantWindowSize = 20;
-let assistantPureMode = false; // true = 纯净模式
 let contextTokens = 0;
 let contextMaxTokens = 200000;
 let contextPercent = 0;
@@ -161,9 +158,6 @@ function cycleTheme() {
     if (settings.assistantConversationId) {
       assistantConversationId = settings.assistantConversationId;
     }
-    if (settings.pureConversationId) {
-      pureConversationId = settings.pureConversationId;
-    }
     if (settings.assistantChatMode) {
       assistantChatMode = settings.assistantChatMode;
       const modeSel = document.getElementById('assistant-mode-select');
@@ -173,12 +167,6 @@ function cycleTheme() {
       assistantWindowSize = settings.assistantWindowSize;
       const wsInput = document.getElementById('settings-window-size');
       if (wsInput) wsInput.value = assistantWindowSize;
-    }
-    if (settings.assistantPureMode) {
-      assistantPureMode = true;
-      const toggle = document.getElementById('assistant-mode-toggle');
-      if (toggle) toggle.classList.add('pure');
-      updateWelcomeMessage();
     }
     // 恢复快捷助手配置
     if (typeof initFloatingConfigFromSettings === 'function') initFloatingConfigFromSettings(settings);
@@ -2788,20 +2776,23 @@ async function loadRequestLogHistory() {
 // ---------- Assistant ----------
 
 function populateAssistantProxySelect() {
+  const select = document.getElementById('assistant-proxy-select');
+  if (!select) return;
   const running = proxies.filter(p => p.running);
-  const preferredId = (assistantProxyId && running.find(p => p.id === assistantProxyId)) ? assistantProxyId
+  const current = select.value;
+  select.innerHTML = '<option value="">选择后端代理...</option>' +
+    running.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (:${p.port})</option>`).join('');
+  const preferredId = (current && running.find(p => p.id === current)) ? current
     : (savedAssistantProxyId && running.find(p => p.id === savedAssistantProxyId)) ? savedAssistantProxyId
     : running.length > 0 ? running[0].id : '';
   if (preferredId) {
+    select.value = preferredId;
     assistantProxyId = preferredId;
-    _treeExpandedProxies.add(preferredId);
     document.getElementById('assistant-send-btn').disabled = false;
-    buildModelTree();
     loadProxyProviders(preferredId);
   } else {
     assistantProxyId = '';
     document.getElementById('assistant-send-btn').disabled = true;
-    buildModelTree();
   }
 }
 
@@ -3202,7 +3193,7 @@ async function sendAssistantMessage() {
   // 新会话：分配临时 ID，确保消息有正确的 convId 目标
   if (!assistantDisplayedConvId) {
     assistantDisplayedConvId = 'new-' + Date.now();
-    setCurrentConvId(assistantDisplayedConvId);
+    assistantConversationId = assistantDisplayedConvId;
   }
   const input = document.getElementById('assistant-input');
   const text = input.value.trim();
@@ -3277,19 +3268,18 @@ async function sendAssistantMessage() {
   }
 
   try {
-    const providerVal = assistantProviderId;
-    const modelVal = assistantModel;
+    const providerVal = document.getElementById('assistant-provider-select')?.value || '';
+    const modelVal = document.getElementById('assistant-model-select')?.value || '';
     const res = await fetch('/api/assistant/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        proxyId: proxy.id, conversationId: getCurrentConvId(), message: messagePayload,
+        proxyId: proxy.id, conversationId: assistantConversationId, message: messagePayload,
         ...(providerVal && { providerId: providerVal }),
         ...(modelVal && { model: modelVal }),
         permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
         thinkingEffort: document.getElementById('assistant-thinking-select')?.value || '',
         mode: assistantChatMode,
-        chatMode: assistantPureMode ? 'pure' : 'assistant',
         ...(assistantChatMode === 'sliding' && { windowSize: assistantWindowSize }),
       }),
       signal: myController.signal,
@@ -3314,11 +3304,8 @@ async function sendAssistantMessage() {
     }
     attachRetryButtonToLast();
   } finally {
-    // 清理 controller（convId 可能是临时 ID，controller 可能已迁移到真实 ID）
     if (assistantConvControllers.get(convId) === myController) assistantConvControllers.delete(convId);
-    if (assistantDisplayedConvId !== convId && assistantConvControllers.get(assistantDisplayedConvId) === myController) assistantConvControllers.delete(assistantDisplayedConvId);
     assistantStreamingConvs.delete(convId);
-    assistantStreamingConvs.delete(assistantDisplayedConvId);
     setSendBtnState(false);
     updateSidebarBadges(); // 同步移除 badge
   }
@@ -3555,7 +3542,7 @@ async function processAssistantSSE(response, thinkingId, convId) {
           // 更新用户选中的会话 ID（仅当前会话或新会话的 temp→real 迁移时）
           if (data.id === assistantDisplayedConvId || data.id === assistantConversationId
             || (assistantConversationId && assistantConversationId.startsWith('new-'))) {
-            setCurrentConvId(data.id);
+            assistantConversationId = data.id;
             saveAssistantSelection();
           }
           // 刷新侧边栏结构（新会话需要出现在列表中）
@@ -3862,20 +3849,17 @@ async function retryLastMessage() {
   updateSidebarBadges(); // 同步更新 badge
 
   try {
-    const providerVal = assistantProviderId;
-    const modelVal = assistantModel;
+    const providerVal = document.getElementById('assistant-provider-select')?.value || '';
+    const modelVal = document.getElementById('assistant-model-select')?.value || '';
     const res = await fetch('/api/assistant/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        proxyId: proxy.id, conversationId: getCurrentConvId(), message: userContent,
+        proxyId: proxy.id, conversationId: assistantConversationId, message: userContent,
         ...(providerVal && { providerId: providerVal }),
         ...(modelVal && { model: modelVal }),
         permissionLevel: parseInt(document.getElementById('assistant-permission-select')?.value || '3'),
         thinkingEffort: document.getElementById('assistant-thinking-select')?.value || '',
-        mode: assistantChatMode,
-        chatMode: assistantPureMode ? 'pure' : 'assistant',
-        ...(assistantChatMode === 'sliding' && { windowSize: assistantWindowSize }),
       }),
       signal: myController.signal,
     });
@@ -3899,9 +3883,7 @@ async function retryLastMessage() {
     attachRetryButtonToLast();
   } finally {
     if (assistantConvControllers.get(convId) === myController) assistantConvControllers.delete(convId);
-    if (assistantDisplayedConvId !== convId && assistantConvControllers.get(assistantDisplayedConvId) === myController) assistantConvControllers.delete(assistantDisplayedConvId);
     assistantStreamingConvs.delete(convId);
-    assistantStreamingConvs.delete(assistantDisplayedConvId);
     setSendBtnState(false);
     updateSidebarBadges(); // 同步移除 badge
   }
@@ -4069,14 +4051,17 @@ function clearAssistantChat() {
     assistantConvCompleted.delete(assistantDisplayedConvId);
   }
   assistantDisplayedConvId = '';
-  setCurrentConvId('');
+  assistantConversationId = '';
   saveAssistantSelection();
   highlightActiveConversation();
-  const savedModel = assistantModel;
-  buildModelTree();
+  const savedModel = document.getElementById('assistant-model-select')?.value || '';
+  populateProviderSelect();
+  populateModelSelect();
   if (savedModel) {
-    assistantModel = savedModel;
-    buildModelTree();
+    const modelSelect = document.getElementById('assistant-model-select');
+    if (modelSelect && modelSelect.querySelector(`option[value="${savedModel}"]`)) {
+      modelSelect.value = savedModel;
+    }
   }
   contextTokens = 0;
   contextPercent = 0;
@@ -4084,24 +4069,22 @@ function clearAssistantChat() {
   updateContextBar();
   const chat = document.getElementById('assistant-chat');
   if (!chat) return;
-  // 重建带 ID 的 welcome 元素，供 updateWelcomeMessage 后续更新
   chat.innerHTML = `
     <div class="assistant-welcome">
       <div class="assistant-welcome-icon">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
       </div>
-      <h3 id="assistant-welcome-title">智控助手</h3>
-      <p id="assistant-welcome-desc">我是你的 Protocol Proxy 智能助手，可以帮你：</p>
-      <ul id="assistant-welcome-features">
+      <h3>智控助手</h3>
+      <p>我是你的 Protocol Proxy 智能助手，可以帮你：</p>
+      <ul>
         <li>查询代理和供应商运行状态</li>
         <li>分析日志，定位异常原因</li>
         <li>解读配置并给出优化建议</li>
         <li>自然语言排障与问答</li>
       </ul>
-      <p class="assistant-hint" id="assistant-welcome-hint">请先选择一个运行中的代理作为对话后端</p>
+      <p class="assistant-hint">请先选择一个运行中的代理作为对话后端</p>
     </div>
   `;
-  updateWelcomeMessage();
 }
 
 function formatTokenCount(n) {
@@ -4326,12 +4309,10 @@ async function deleteConversationById(convId, event) {
 }
 
 async function clearAllConversations() {
-  const modeLabel = assistantPureMode ? '纯净模式' : '助手模式';
-  const ok = await showConfirm(`确定清空${modeLabel}的所有历史会话？此操作不可恢复。`);
+  const ok = await showConfirm('确定清空所有历史会话？此操作不可恢复。');
   if (!ok) return;
   try {
-    const filterMode = assistantPureMode ? 'pure' : 'assistant';
-    const res = await fetch(`/api/assistant/conversations?chatMode=${filterMode}`, { method: 'DELETE' });
+    const res = await fetch('/api/assistant/conversations', { method: 'DELETE' });
     const data = await res.json();
     // 停止所有流式输出
     for (const [, ac] of assistantConvControllers) ac.abort();
@@ -4389,8 +4370,7 @@ function updateSidebarBadges() {
 async function loadConversations() {
   const gen = ++loadConvoGeneration;
   try {
-    const filterMode = assistantPureMode ? 'pure' : 'assistant';
-    const res = await fetch(`/api/assistant/conversations?chatMode=${filterMode}`);
+    const res = await fetch('/api/assistant/conversations');
     if (gen !== loadConvoGeneration) return; // 有更新的调用，丢弃过期结果
     const data = await res.json();
     const list = document.getElementById('conversation-list');
@@ -4437,14 +4417,14 @@ async function switchConversation(convId, convData) {
   if (!convId) {
     // 选择"新会话"
     assistantDisplayedConvId = '';
-    setCurrentConvId('');
+    assistantConversationId = '';
     clearAssistantChat();
     return;
   }
 
   // 切换显示目标（不中断流式输出）
   assistantDisplayedConvId = convId;
-  setCurrentConvId(convId);
+  assistantConversationId = convId;
   saveAssistantSelection();
   assistantConvCompleted.delete(convId); // 清除完成标记
 
@@ -4496,12 +4476,14 @@ async function switchConversation(convId, convData) {
     const res = await fetch(`/api/assistant/conversations/${convId}/messages`);
     const data = await res.json();
     if (data.proxyId) {
-      const running = proxies.filter(p => p.running);
-      if (running.find(p => p.id === data.proxyId) && assistantProxyId !== data.proxyId) {
-        assistantProxyId = data.proxyId;
-        document.getElementById('assistant-send-btn').disabled = false;
-        buildModelTree();
-        loadProxyProviders(data.proxyId);
+      const select = document.getElementById('assistant-proxy-select');
+      if (select && select.querySelector(`option[value="${data.proxyId}"]`)) {
+        if (select.value !== data.proxyId) {
+          select.value = data.proxyId;
+          assistantProxyId = data.proxyId;
+          document.getElementById('assistant-send-btn').disabled = false;
+          loadProxyProviders(data.proxyId);
+        }
       }
     }
     if (data.compressionSummary) {
@@ -4543,9 +4525,8 @@ async function compressAssistantContext() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         proxyId: assistantProxyId, conversationId: assistantConversationId, message: '', compress: true,
-        ...(assistantProviderId && { providerId: assistantProviderId }),
-        ...(assistantModel && { model: assistantModel }),
-        chatMode: assistantPureMode ? 'pure' : 'assistant',
+        ...(document.getElementById('assistant-provider-select')?.value && { providerId: document.getElementById('assistant-provider-select').value }),
+        ...(document.getElementById('assistant-model-select')?.value && { model: document.getElementById('assistant-model-select').value }),
       }),
     });
     const reader = res.body.getReader();
@@ -4642,9 +4623,8 @@ async function compactConversation() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         proxyId: assistantProxyId, conversationId: assistantConversationId, message: '', compress: true,
-        ...(assistantProviderId && { providerId: assistantProviderId }),
-        ...(assistantModel && { model: assistantModel }),
-        chatMode: assistantPureMode ? 'pure' : 'assistant',
+        ...(document.getElementById('assistant-provider-select')?.value && { providerId: document.getElementById('assistant-provider-select').value }),
+        ...(document.getElementById('assistant-model-select')?.value && { model: document.getElementById('assistant-model-select').value }),
       }),
     });
     const reader = res.body.getReader();
@@ -4693,24 +4673,25 @@ async function compactConversation() {
 }
 
 function showModelPicker() {
-  const provider = proxyProviders.find(p => p.id === assistantProviderId);
-  const models = (provider?.models || []).map(m => m.name);
-  if (models.length === 0) {
+  const select = document.getElementById('assistant-model-select');
+  if (!select || select.options.length === 0) {
     addAssistantMessage('assistant', '当前无可用模型。请先选择代理和供应商。');
     return;
   }
-  const currentVal = assistantModel;
-  const items = [{ value: '', label: '自动（跟随代理）' }, ...models.map(m => ({ value: m, label: m }))];
+  const currentVal = select.value;
+  const models = Array.from(select.options).map(o => ({
+    value: o.value, label: o.textContent, selected: o.value === currentVal,
+  }));
   const pickerId = addAssistantMessage('assistant', '');
-  const htmlItems = items.map((m, i) =>
-    `<div class="model-pick-item${m.value === currentVal ? ' selected' : ''}" data-model="${escapeHtml(m.value)}" data-index="${i}">${escapeHtml(m.label)}${m.value === currentVal ? ' (当前)' : ''}</div>`
+  const items = models.map((m, i) =>
+    `<div class="model-pick-item${m.selected ? ' selected' : ''}" data-model="${escapeHtml(m.value)}" data-index="${i}">${escapeHtml(m.label)}${m.selected ? ' (当前)' : ''}</div>`
   ).join('');
   const el = document.getElementById(pickerId);
   if (!el) return;
 
-  el.innerHTML = `<strong>选择模型</strong><div class="model-picker" tabindex="0">${htmlItems}</div>`;
+  el.innerHTML = `<strong>选择模型</strong><div class="model-picker" tabindex="0">${items}</div>`;
   const picker = el.querySelector('.model-picker');
-  let activeIdx = items.findIndex(m => m.value === currentVal);
+  let activeIdx = models.findIndex(m => m.selected);
   if (activeIdx < 0) activeIdx = 0;
 
   function highlight(idx) {
@@ -4720,12 +4701,12 @@ function showModelPicker() {
   }
 
   function choose(idx) {
-    const model = items[idx]?.value;
-    if (model === undefined) return;
-    assistantModel = model;
+    const model = models[idx]?.value;
+    if (!model) return;
+    select.value = model;
     saveAssistantSelection();
-    buildModelTree();
-    el.innerHTML = `已切换到 <strong>${escapeHtml(items[idx].label)}</strong>`;
+    const label = models[idx].label;
+    el.innerHTML = `已切换到 <strong>${escapeHtml(label)}</strong>`;
     document.getElementById('assistant-input')?.focus();
   }
 
@@ -4763,13 +4744,12 @@ async function loadProxyProviders(proxyId) {
   const requestId = ++proxyProviderRequestId;
   // 保存用户当前选择，加载后恢复
   const prevProviderId = assistantProviderId;
-  const prevModel = assistantModel;
+  const prevModel = document.getElementById('assistant-model-select')?.value || '';
 
   assistantProviderId = '';
-  assistantModel = '';
   proxyProviders = [];
-  _treeExpandedProviders.clear();
-  buildModelTree();
+  populateProviderSelect();
+  populateModelSelect();
   if (!proxyId) return;
   try {
     const res = await fetch(`/api/assistant/proxy-providers/${proxyId}`);
@@ -4785,21 +4765,17 @@ async function loadProxyProviders(proxyId) {
       // 恢复用户之前的选择
       assistantProviderId = prevProviderId;
     }
+    populateProviderSelect();
+    populateModelSelect();
     // 恢复模型选择
     const targetModel = savedAssistantModel || prevModel;
     if (targetModel) {
-      const provider = proxyProviders.find(p => p.id === assistantProviderId);
-      const models = provider?.models || [];
-      if (models.find(m => m.name === targetModel)) {
-        assistantModel = targetModel;
+      const modelSelect = document.getElementById('assistant-model-select');
+      if (modelSelect && modelSelect.querySelector(`option[value="${targetModel}"]`)) {
+        modelSelect.value = targetModel;
       }
       if (savedAssistantModel) savedAssistantModel = '';
-    } else {
-      assistantModel = prevModel || '';
     }
-    // 自动展开已选中的供应商
-    if (assistantProviderId) _treeExpandedProviders.add(assistantProviderId);
-    buildModelTree();
     saveAssistantSelection();
     updateThinkingVisibility();
   } catch (err) {
@@ -4807,16 +4783,29 @@ async function loadProxyProviders(proxyId) {
   }
 }
 
-function populateProviderSelect() { /* no-op — tree handles this now */ }
-function populateModelSelect() { /* no-op — tree handles this now */ }
+function populateProviderSelect() {
+  const select = document.getElementById('assistant-provider-select');
+  if (!select) return;
+  select.innerHTML = '<option value="">自动（跟随代理）</option>' +
+    proxyProviders.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.protocol)})</option>`).join('');
+  select.value = assistantProviderId;
+}
+
+function populateModelSelect() {
+  const select = document.getElementById('assistant-model-select');
+  if (!select) return;
+  const provider = proxyProviders.find(p => p.id === assistantProviderId);
+  const models = provider?.models || [];
+  select.innerHTML = '<option value="">自动（跟随代理）</option>' +
+    models.map(m => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)}</option>`).join('');
+}
 
 // eslint-disable-next-line no-unused-vars
 function onAssistantProviderChange(value) {
   assistantProviderId = value;
-  assistantModel = '';
+  populateModelSelect();
   updateThinkingVisibility();
   saveAssistantSelection();
-  buildModelTree();
 }
 
 function updateThinkingVisibility() {
@@ -4826,206 +4815,15 @@ function updateThinkingVisibility() {
 }
 
 function saveAssistantSelection() {
+  const modelVal = document.getElementById('assistant-model-select')?.value || '';
   const permVal = document.getElementById('assistant-permission-select')?.value || '3';
   const thinkingVal = document.getElementById('assistant-thinking-select')?.value || '';
   fetch('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel, assistantPermissionLevel: permVal, assistantThinkingEffort: thinkingVal, assistantConversationId, pureConversationId, assistantChatMode, assistantWindowSize, assistantPureMode }),
+    body: JSON.stringify({ assistantProxyId, assistantProviderId, assistantModel: modelVal, assistantPermissionLevel: permVal, assistantThinkingEffort: thinkingVal, assistantConversationId, assistantChatMode, assistantWindowSize }),
   }).catch(() => {});
 }
-
-function updateWelcomeMessage() {
-  const title = document.getElementById('assistant-welcome-title');
-  const desc = document.getElementById('assistant-welcome-desc');
-  const features = document.getElementById('assistant-welcome-features');
-  const hint = document.getElementById('assistant-welcome-hint');
-  if (!title) return;
-  if (assistantPureMode) {
-    title.textContent = '纯净模式';
-    desc.textContent = '我是你的 AI 助手，可以帮你：';
-    features.innerHTML = '<li>对话、写作、翻译、创意</li><li>数据分析、文件处理、图表</li><li>读写文件、执行代码</li><li>文档解析与内容提取</li>';
-    hint.textContent = '请先选择一个运行中的代理作为对话后端';
-  } else {
-    title.textContent = '智控助手';
-    desc.textContent = '我是你的 Protocol Proxy 智能助手，可以帮你：';
-    features.innerHTML = '<li>查询代理和供应商运行状态</li><li>分析日志，定位异常原因</li><li>解读配置并给出优化建议</li><li>自然语言排障与问答</li>';
-    hint.textContent = '请先选择一个运行中的代理作为对话后端';
-  }
-}
-
-function getCurrentConvId() {
-  return assistantPureMode ? pureConversationId : assistantConversationId;
-}
-function setCurrentConvId(id) {
-  if (assistantPureMode) pureConversationId = id;
-  else assistantConversationId = id;
-}
-
-function toggleAssistantPureMode() {
-  // 切换模式
-  assistantPureMode = !assistantPureMode;
-  const toggle = document.getElementById('assistant-mode-toggle');
-  if (toggle) toggle.classList.toggle('pure', assistantPureMode);
-
-  // 读取目标模式的会话 ID 并切换显示
-  const targetConvId = getCurrentConvId();
-  // 同步调用 switchConversation（它内部会清空 chat、加载消息、设置 convId）
-  if (targetConvId) {
-    switchConversation(targetConvId);
-  } else {
-    clearAssistantChat();
-  }
-  saveAssistantSelection();
-  loadConversations();
-}
-
-// ---- Model tree selector ----
-
-const _treeExpandedProxies = new Set(); // expanded proxy IDs
-const _treeExpandedProviders = new Set(); // expanded provider IDs
-
-function buildModelTree() {
-  const dropdown = document.getElementById('model-tree-dropdown');
-  if (!dropdown) return;
-  const running = proxies.filter(p => p.running);
-  let html = '';
-
-  running.forEach(proxy => {
-    const isExpanded = _treeExpandedProxies.has(proxy.id);
-    const isSelectedProxy = proxy.id === assistantProxyId;
-    html += `<div class="mt-node${isSelectedProxy && !assistantProviderId && !assistantModel ? ' selected' : ''}" data-action="toggle-proxy" data-proxy-id="${escapeHtml(proxy.id)}">`;
-    html += `<span class="mt-arrow${isExpanded ? ' expanded' : ''}">▶</span>`;
-    html += `${escapeHtml(proxy.name)} <span style="opacity:0.5;font-size:11px">:${proxy.port}</span>`;
-    html += `</div>`;
-
-    if (isExpanded && isSelectedProxy) {
-      // Provider auto option
-      html += `<div class="mt-node mt-indent-1${!assistantProviderId ? ' selected' : ''}" data-action="select-auto-provider" data-proxy-id="${escapeHtml(proxy.id)}">`;
-      html += `<span class="mt-leaf-space"></span><span class="mt-auto-label">自动（跟随代理）</span></div>`;
-
-      proxyProviders.forEach(provider => {
-        const isProvExpanded = _treeExpandedProviders.has(provider.id);
-        const isSelectedProv = provider.id === assistantProviderId;
-        html += `<div class="mt-node mt-indent-1${isSelectedProv && !assistantModel ? ' selected' : ''}" data-action="toggle-provider" data-provider-id="${escapeHtml(provider.id)}">`;
-        html += `<span class="mt-arrow${isProvExpanded ? ' expanded' : ''}">▶</span>`;
-        html += `${escapeHtml(provider.name)}`;
-        html += `<span class="mt-protocol">${escapeHtml(provider.protocol)}</span>`;
-        html += `</div>`;
-
-        if (isProvExpanded && isSelectedProv) {
-          // Model auto option
-          html += `<div class="mt-node mt-indent-2${!assistantModel ? ' selected' : ''}" data-action="select-model" data-proxy-id="${escapeHtml(proxy.id)}" data-provider-id="${escapeHtml(provider.id)}" data-model="">`;
-          html += `<span class="mt-leaf-space"></span><span class="mt-auto-label">自动（跟随代理）</span></div>`;
-
-          (provider.models || []).forEach(m => {
-            const isSel = assistantModel === m.name;
-            html += `<div class="mt-node mt-indent-2${isSel ? ' selected' : ''}" data-action="select-model" data-proxy-id="${escapeHtml(proxy.id)}" data-provider-id="${escapeHtml(provider.id)}" data-model="${escapeHtml(m.name)}">`;
-            html += `<span class="mt-leaf-space"></span>${escapeHtml(m.name)}</div>`;
-          });
-        }
-      });
-    }
-  });
-
-  if (!running.length) {
-    html = '<div class="mt-node" style="opacity:0.5;cursor:default">无运行中的代理</div>';
-  }
-
-  dropdown.innerHTML = html;
-  updateModelTreeLabel();
-}
-
-function updateModelTreeLabel() {
-  const label = document.getElementById('model-tree-label');
-  if (!label) return;
-  const proxy = proxies.find(p => p.id === assistantProxyId);
-  const provider = proxyProviders.find(p => p.id === assistantProviderId);
-  if (!proxy) {
-    label.textContent = '选择模型...';
-    return;
-  }
-  const parts = [proxy.name];
-  if (provider) parts.push(provider.name);
-  if (assistantModel) parts.push(assistantModel);
-  label.textContent = parts.join(' / ') || '选择模型...';
-}
-
-function toggleModelTreeDropdown() {
-  const dropdown = document.getElementById('model-tree-dropdown');
-  if (!dropdown) return;
-  dropdown.classList.toggle('open');
-}
-
-// Close tree dropdown when clicking outside
-document.addEventListener('click', (e) => {
-  const wrapper = document.getElementById('model-tree-wrapper');
-  const dropdown = document.getElementById('model-tree-dropdown');
-  if (!wrapper || !dropdown) return;
-  if (!wrapper.contains(e.target)) {
-    dropdown.classList.remove('open');
-  }
-});
-
-// Handle tree node clicks via delegation
-document.addEventListener('click', (e) => {
-  const node = e.target.closest('.mt-node');
-  if (!node) return;
-  const action = node.dataset.action;
-  const proxyId = node.dataset.proxyId;
-  const providerId = node.dataset.providerId;
-  const model = node.dataset.model;
-
-  if (action === 'toggle-proxy') {
-    if (_treeExpandedProxies.has(proxyId)) {
-      _treeExpandedProxies.delete(proxyId);
-    } else {
-      _treeExpandedProxies.add(proxyId);
-      // If switching to a different proxy, load its providers
-      if (proxyId !== assistantProxyId) {
-        assistantProxyId = proxyId;
-        assistantProviderId = '';
-        assistantModel = '';
-        _treeExpandedProviders.clear();
-        const btn = document.getElementById('assistant-send-btn');
-        if (btn) btn.disabled = false;
-        loadProxyProviders(proxyId);
-        saveAssistantSelection();
-        return; // loadProxyProviders will call buildModelTree
-      }
-    }
-    buildModelTree();
-  } else if (action === 'toggle-provider') {
-    if (_treeExpandedProviders.has(providerId)) {
-      _treeExpandedProviders.delete(providerId);
-    } else {
-      _treeExpandedProviders.add(providerId);
-    }
-    if (providerId !== assistantProviderId) {
-      assistantProviderId = providerId;
-      assistantModel = '';
-      updateThinkingVisibility();
-      saveAssistantSelection();
-    }
-    buildModelTree();
-  } else if (action === 'select-auto-provider') {
-    assistantProviderId = '';
-    assistantModel = '';
-    updateThinkingVisibility();
-    saveAssistantSelection();
-    buildModelTree();
-    document.getElementById('model-tree-dropdown')?.classList.remove('open');
-  } else if (action === 'select-model') {
-    if (providerId && providerId !== assistantProviderId) {
-      assistantProviderId = providerId;
-    }
-    assistantModel = model || '';
-    updateThinkingVisibility();
-    saveAssistantSelection();
-    buildModelTree();
-    document.getElementById('model-tree-dropdown')?.classList.remove('open');
-  }
-});
 
 async function onChatModeChange(newMode) {
   // sliding → full: estimate full conversation context usage
@@ -5057,13 +4855,23 @@ function onWindowSizeChange(val) {
   saveAssistantSelection();
 }
 
-// 树形选择器触发按钮
+// 监听代理选择
 (function() {
-  const trigger = document.getElementById('model-tree-trigger');
-  if (trigger) {
-    trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleModelTreeDropdown();
+  const select = document.getElementById('assistant-proxy-select');
+  if (select) {
+    select.addEventListener('change', function() {
+      assistantProxyId = this.value;
+      const btn = document.getElementById('assistant-send-btn');
+      if (btn) btn.disabled = !this.value;
+      loadProxyProviders(this.value);
+      saveAssistantSelection();
+    });
+  }
+  // 监听模型选择
+  const modelSelect = document.getElementById('assistant-model-select');
+  if (modelSelect) {
+    modelSelect.addEventListener('change', function() {
+      saveAssistantSelection();
     });
   }
 })();
@@ -5171,7 +4979,7 @@ function reloadSkills() {
 
 async function loadSkills() {
   try {
-    const res = await fetch('/api/skills-status');
+    const res = await fetch('/api/skills');
     const data = await res.json();
     allSkills = data.skills || [];
     renderSkills();
@@ -5179,21 +4987,6 @@ async function loadSkills() {
     if (badge) badge.textContent = allSkills.length;
   } catch (err) {
     showToast('加载技能失败: ' + err.message, true);
-  }
-}
-
-async function toggleSkillPureMode(name, enabled) {
-  try {
-    await fetch(`/api/skills/${encodeURIComponent(name)}/pure-toggle`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    });
-    // 更新本地数据
-    const skill = allSkills.find(s => s.name === name);
-    if (skill) skill.pureModeEnabled = enabled;
-  } catch (err) {
-    showToast('切换失败: ' + err.message, true);
   }
 }
 
@@ -5211,17 +5004,9 @@ function renderSkills() {
     for (const s of items) {
       const canEdit = cat === 'user';
       const canDelete = cat !== 'system';
-      const canTogglePure = cat !== 'system'; // system 技能不显示开关
-      const pureChecked = s.pureModeEnabled;
       html += `<div class="skill-card">
         <div class="skill-card-header"><strong>${escapeHtml(s.name)}</strong></div>
         <div class="skill-card-desc">${escapeHtml(s.description || '无描述')}</div>
-        ${canTogglePure ? `<div class="skill-card-pure-toggle" style="display:flex;align-items:center;gap:6px;margin:6px 0;font-size:12px;color:var(--text-muted)">
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
-            <input type="checkbox" data-action="pure-toggle" data-name="${escapeHtml(s.name)}" ${pureChecked ? 'checked' : ''} style="cursor:pointer">
-            纯净模式可用
-          </label>
-        </div>` : `<div style="margin:6px 0;font-size:11px;color:var(--text-muted);opacity:0.6">仅助手模式可用</div>`}
         <div class="skill-card-actions">
           <button class="btn btn-sm" data-action="view" data-name="${escapeHtml(s.name)}">查看</button>
           ${canEdit ? `<button class="btn btn-sm" data-action="edit" data-name="${escapeHtml(s.name)}">编辑</button>` : ''}
@@ -5240,9 +5025,6 @@ function renderSkills() {
     if (action === 'view') viewSkill(name);
     else if (action === 'edit') editSkill(name);
     else if (action === 'delete') deleteSkill(name);
-    else if (action === 'pure-toggle') {
-      toggleSkillPureMode(name, btn.checked);
-    }
   };
 }
 
@@ -6957,11 +6739,11 @@ function getFloatingProxyId() {
 }
 function getFloatingProviderId() {
   if (floatingConfig.enabled && floatingConfig.providerId) return floatingConfig.providerId;
-  return assistantProviderId || savedAssistantProviderId || '';
+  return document.getElementById('assistant-provider-select')?.value || savedAssistantProviderId || '';
 }
 function getFloatingModel() {
   if (floatingConfig.enabled && floatingConfig.model) return floatingConfig.model;
-  return assistantModel || savedAssistantModel || '';
+  return document.getElementById('assistant-model-select')?.value || savedAssistantModel || '';
 }
 function getFloatingThinkingEffort() {
   if (floatingConfig.enabled && floatingConfig.thinkingEffort) return floatingConfig.thinkingEffort;

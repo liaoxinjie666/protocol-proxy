@@ -1500,7 +1500,7 @@ async function init() {
           properties: {
             code: { type: 'string', description: '要执行的代码' },
             language: { type: 'string', enum: ['python', 'javascript'], description: '代码语言，默认 python' },
-            files: { type: 'array', items: { type: 'string' }, description: '需要注入到代码工作目录的对话文件名列表，如 ["data.csv"]。系统提示中会列出可用文件，只传代码实际需要的文件' },
+            files: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, base64: { type: 'string' } } }, description: '临时文件列表，代码中可直接用文件名引用' },
           },
           required: ['code'],
         },
@@ -2716,53 +2716,6 @@ async function init() {
     generate_image: 1, generate_video: 1, text_to_speech: 1, generate_music: 1,
   };
 
-  // ==================== 工具模式分类 ====================
-  // system: 运维管理类，纯净模式下隐藏
-  // utility: 通用工具，两种模式都可用
-  // generative: 多模态生成，两种模式都可用
-  const TOOL_CATEGORY = {
-    // system: 运维管理
-    get_system_status: 'system', get_providers: 'system', get_provider: 'system',
-    get_proxies: 'system', get_proxy: 'system', get_usage_stats: 'system',
-    get_recent_requests: 'system', get_system_logs: 'system', get_key_health: 'system',
-    get_settings: 'system', get_config_history: 'system', check_health: 'system',
-    create_provider: 'system', update_provider: 'system', delete_provider: 'system',
-    test_provider_keys: 'system', get_provider_models: 'system',
-    create_proxy: 'system', update_proxy: 'system', delete_proxy: 'system',
-    start_proxy: 'system', stop_proxy: 'system', start_all_proxies: 'system', stop_all_proxies: 'system',
-    get_mcp_servers: 'system', add_mcp_server: 'system', update_mcp_server: 'system',
-    delete_mcp_server: 'system', connect_mcp_server: 'system', disconnect_mcp_server: 'system',
-    get_mcp_tools: 'system',
-    get_skills: 'system', create_skill: 'system', update_skill: 'system', delete_skill: 'system',
-    export_config: 'system', import_config: 'system', rollback_config: 'system',
-    reconstruct_config: 'system', get_config_diff: 'system', update_settings: 'system',
-    trigger_key_health_check: 'system',
-    get_exec_policy: 'system', test_exec_policy: 'system',
-    get_exec_policy_rules: 'system', add_exec_policy_rule: 'system', remove_exec_policy_rule: 'system',
-    get_autostart_status: 'system', toggle_autostart: 'system',
-    detect_client_config: 'system', preview_client_config: 'system', write_client_config: 'system',
-    test_client_connection: 'system', list_client_backups: 'system', restore_client_backup: 'system',
-    create_agent: 'system', update_agent: 'system', delete_agent: 'system',
-    reload_agents: 'system', list_multimodal_services: 'system',
-    create_multimodal_service: 'system', update_multimodal_service: 'system', delete_multimodal_service: 'system',
-    list_conversations: 'system', delete_conversation: 'system',
-    clear_conversation: 'system', clear_all_conversations: 'system',
-    // utility: 通用工具
-    read_file: 'utility', write_file: 'utility', list_directory: 'utility',
-    search_files: 'utility', execute_command: 'utility', execute_code: 'utility',
-    parse_document: 'utility', edit_file: 'utility', grep_search: 'utility',
-    invoke_skill: 'utility',
-    save_memory: 'utility', get_memory: 'utility', edit_memory: 'utility',
-    read_memory: 'utility', search_memory: 'utility',
-    delegate_task: 'utility', list_agents: 'utility', list_tasks: 'utility',
-    get_task: 'utility', stop_task: 'utility', message_task: 'utility', update_soul: 'utility',
-    get_agent: 'utility', get_mcp_presets: 'utility',
-    access_file: 'utility', audio_analyze: 'utility',
-    // generative: 多模态生成
-    generate_image: 'generative', generate_video: 'generative',
-    text_to_speech: 'generative', generate_music: 'generative',
-  };
-
   // 工具审批等待机制
   const pendingApprovals = new Map();
   const TOOL_APPROVAL_TIMEOUT_MS = 60000;
@@ -3024,19 +2977,22 @@ async function init() {
       try {
         fs.mkdirSync(tmpDir, { recursive: true });
 
-        // 按需注入指定的对话文件
-        if (args._convId && files.length > 0) {
-          const convDir = getConvFilesPath(args._convId);
-          let injected = 0;
-          for (const fname of files) {
-            if (typeof fname !== 'string' || !fname) continue;
-            const src = path.join(convDir, fname);
-            if (fs.existsSync(src)) {
-              fs.copyFileSync(src, path.join(tmpDir, fname));
-              injected++;
+        // 写入显式传入的临时文件
+        for (const f of files) {
+          if (f.name && f.base64) {
+            fs.writeFileSync(path.join(tmpDir, f.name), Buffer.from(f.base64, 'base64'));
+          }
+        }
+
+        // 自动注入对话中上传的文件
+        if (args._convId) {
+          const convFiles = loadConvFiles(args._convId);
+          for (const f of convFiles) {
+            if (!fs.existsSync(path.join(tmpDir, f.name))) {
+              fs.writeFileSync(path.join(tmpDir, f.name), Buffer.from(f.base64, 'base64'));
             }
           }
-          if (injected > 0) logger.log(`[execute_code] 注入 ${injected} 个对话文件`);
+          if (convFiles.length > 0) logger.log(`[execute_code] 注入 ${convFiles.length} 个对话文件`);
         }
 
         // 写入代码文件
@@ -3864,7 +3820,7 @@ async function init() {
           defaultModel: args.model || _chatProxy.defaultModel,
           toolDefinitions: (() => { const s = new Set(['delegate_task']); return [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => { const n = d.function?.name || d.name; if (s.has(n)) return false; s.add(n); return true; }); })(),
           toolHandlers: Object.fromEntries(Object.entries({ ...TOOL_HANDLERS, ..._mmSub.handlers }).filter(([k]) => k !== 'delegate_task')),
-          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name), chatMode }),
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name) }),
           parentTaskId: null,
           maxRounds: args.maxRounds,
           sendSSE: _chatProxy.safeSSE,
@@ -3943,7 +3899,7 @@ async function init() {
           defaultModel: _chatProxy.defaultModel,
           toolDefinitions: (() => { const s = new Set(['delegate_task']); return [...TOOL_DEFINITIONS, ..._mmSub.definitions, ...mcpClient.getToolDefinitions()].filter(d => { const n = d.function?.name || d.name; if (s.has(n)) return false; s.add(n); return true; }); })(),
           toolHandlers: Object.fromEntries(Object.entries({ ...TOOL_HANDLERS, ..._mmSub.handlers }).filter(([k]) => k !== 'delegate_task')),
-          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name), chatMode }),
+          systemPrompt: promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, multimodalToolNames: _mmSub.definitions.map(d => d.function?.name || d.name) }),
           maxRounds: args.maxRounds,
           config: getAgentConfig(configStore.getSettings()),
         });
@@ -5439,7 +5395,6 @@ async function init() {
 
   const skillStore = require('./lib/skill-store');
   skillStore.init();
-  skillStore.loadEnabledSkills(configStore.getSettings());
 
   const agentStore = require('./lib/agent-store');
   agentStore.init();
@@ -5459,8 +5414,7 @@ async function init() {
 
   // 会话管理 API
   app.get('/api/assistant/conversations', (req, res) => {
-    const filterChatMode = req.query.chatMode || undefined;
-    res.json({ conversations: conversationStore.list(filterChatMode) });
+    res.json({ conversations: conversationStore.list() });
   });
 
   app.delete('/api/assistant/conversations/:id', (req, res) => {
@@ -5471,10 +5425,9 @@ async function init() {
     res.json({ success: true });
   });
 
-  // 清空历史会话（可选 ?chatMode=assistant|pure 仅清空指定模式）
+  // 清空所有历史会话
   app.delete('/api/assistant/conversations', (req, res) => {
-    const filterChatMode = req.query.chatMode || undefined;
-    const all = conversationStore.list(filterChatMode);
+    const all = conversationStore.list();
     const count = all.length;
     for (const conv of all) {
       conversationStore.remove(conv.id);
@@ -5499,7 +5452,7 @@ async function init() {
     // 返回消息历史（过滤掉 system 消息，前端不需要显示）
     const messages = (conv.messages || []).filter(m => m.role !== 'system');
     const compressionSummary = conv.compressionSummary || null;
-    res.json({ id: conv.id, proxyId: conv.proxyId, chatMode: conv.chatMode || 'assistant', messages, compressionSummary });
+    res.json({ id: conv.id, proxyId: conv.proxyId, messages, compressionSummary });
   });
 
   // 删除会话中的某条消息（成对删除：删除 user 时连带删除后续 assistant/tool，删除 assistant 时连带删除前面 user 及后续 tool）
@@ -5592,23 +5545,6 @@ async function init() {
   // ========== Skill API ==========
   app.get('/api/skills', (req, res) => {
     res.json({ skills: skillStore.list() });
-  });
-
-  // 获取技能列表（含纯净模式启用状态）
-  app.get('/api/skills-status', (req, res) => {
-    res.json({ skills: skillStore.getSkillsWithStatus() });
-  });
-
-  // 切换技能在纯净模式下的启用状态
-  app.put('/api/skills/:name/pure-toggle', (req, res) => {
-    const skill = skillStore.get(req.params.name);
-    if (!skill) return res.status(404).json({ error: '技能不存在' });
-    if (skill.category === 'system') return res.status(400).json({ error: '系统技能不支持纯净模式切换' });
-    const enabled = !!req.body.enabled;
-    skillStore.setSkillEnabled(req.params.name, enabled);
-    // 持久化
-    configStore.setSetting('pureModeSkills', skillStore.getEnabledSkillNames());
-    res.json({ name: req.params.name, pureModeEnabled: enabled });
   });
 
   app.get('/api/skills/:name', (req, res) => {
@@ -5954,7 +5890,7 @@ async function init() {
 
   app.post('/api/assistant/chat', async (req, res) => {
     logger.log(`[assistant] chat request received: conv=${req.body.conversationId}, httpVersion=${req.httpVersion}, connection=${req.headers.connection || 'keep-alive'}`);
-    const { proxyId, conversationId, message, compress, providerId, model, thinkingEffort, mode, windowSize, chatMode } = req.body;
+    const { proxyId, conversationId, message, compress, providerId, model, thinkingEffort, mode, windowSize } = req.body;
     if (!proxyId || (!compress && !message)) {
       return res.status(400).json({ error: '需要 proxyId 和 message' });
     }
@@ -5978,7 +5914,7 @@ async function init() {
     }
     if (!conv) {
       const maxConvs = parseInt(settings.maxConversations) || 0;
-      conv = conversationStore.create(proxyId, maxConvs, chatMode);
+      conv = conversationStore.create(proxyId, maxConvs);
       convId = conv.id;
     }
 
@@ -6034,8 +5970,7 @@ async function init() {
         if (slashMatch) {
           const skillName = slashMatch[1];
           const skill = skillStore.get(skillName);
-          const skillAvailable = skill && (chatMode !== 'pure' || skill.category !== 'system' || skillStore.getEnabledSkillNames().includes(skill.name));
-          if (skillAvailable) {
+          if (skill) {
             activeSkill = skill;
             // 将用户消息中的参数部分保留，无参数时生成触发消息
             const args = slashMatch[2]?.trim();
@@ -6155,7 +6090,7 @@ async function init() {
     try {
       // 请求级别缓存 system prompt（避免每轮重建导致 prompt cache 失效）
       const convFilesList = (() => { try { return fs.readdirSync(getConvFilesPath(convId)).filter(f => fs.statSync(path.join(getConvFilesPath(convId), f)).isFile()); } catch { return []; } })();
-      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, convFiles: convFilesList, multimodalToolNames: _mmTools.definitions.map(d => d.function?.name || d.name), chatMode });
+      const systemPrompt = promptBuilder.buildSystemPrompt({ skillStore, mcpClient, memoryManager, agentStore, convFiles: convFilesList, multimodalToolNames: _mmTools.definitions.map(d => d.function?.name || d.name) });
       const buildMessages = () => {
         // 将所有 system 内容合并为一条消息，避免某些模型（如 MiniMax）不支持多条 system 消息
         const systemParts = [systemPrompt];
@@ -6254,13 +6189,10 @@ async function init() {
               stream: true,
               tools: (() => {
                 const seen = new Set();
-                const isPure = chatMode === 'pure';
                 return [...TOOL_DEFINITIONS, ..._mmTools.definitions, ...mcpClient.getToolDefinitions()].filter(d => {
                   const name = d.function?.name || d.name;
                   if (seen.has(name)) return false;
                   seen.add(name);
-                  // 纯净模式：隐藏 system 类工具
-                  if (isPure && TOOL_CATEGORY[name] === 'system') return false;
                   return true;
                 });
               })(),
@@ -6930,16 +6862,6 @@ async function init() {
   // 启动
   logger.init();
   writePid();
-
-  // 清理上次残留的代码执行沙箱
-  try {
-    const tmpBase = os.tmpdir();
-    for (const entry of fs.readdirSync(tmpBase)) {
-      if (entry.startsWith('pp-code-')) {
-        fs.rmSync(path.join(tmpBase, entry), { recursive: true, force: true });
-      }
-    }
-  } catch {}
 
   // 启动所有已配置的代理
   const proxies = configStore.getProxies();
