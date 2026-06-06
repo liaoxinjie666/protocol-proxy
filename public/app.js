@@ -3304,8 +3304,16 @@ async function sendAssistantMessage() {
     }
     attachRetryButtonToLast();
   } finally {
-    if (assistantConvControllers.get(convId) === myController) assistantConvControllers.delete(convId);
-    assistantStreamingConvs.delete(convId);
+    // convId may have been migrated to a real server ID by the 'conversation' SSE event;
+    // fall back to scanning by value if the original temporary key no longer exists.
+    let cleanupKey = convId;
+    if (!assistantConvControllers.has(convId) || assistantConvControllers.get(convId) !== myController) {
+      for (const [k, v] of assistantConvControllers) {
+        if (v === myController) { cleanupKey = k; break; }
+      }
+    }
+    if (assistantConvControllers.get(cleanupKey) === myController) assistantConvControllers.delete(cleanupKey);
+    assistantStreamingConvs.delete(cleanupKey);
     setSendBtnState(false);
     updateSidebarBadges(); // 同步移除 badge
   }
@@ -3890,8 +3898,16 @@ async function retryLastMessage() {
     }
     attachRetryButtonToLast();
   } finally {
-    if (assistantConvControllers.get(convId) === myController) assistantConvControllers.delete(convId);
-    assistantStreamingConvs.delete(convId);
+    // convId may have been migrated to a real server ID by the 'conversation' SSE event;
+    // fall back to scanning by value if the original temporary key no longer exists.
+    let cleanupKey = convId;
+    if (!assistantConvControllers.has(convId) || assistantConvControllers.get(convId) !== myController) {
+      for (const [k, v] of assistantConvControllers) {
+        if (v === myController) { cleanupKey = k; break; }
+      }
+    }
+    if (assistantConvControllers.get(cleanupKey) === myController) assistantConvControllers.delete(cleanupKey);
+    assistantStreamingConvs.delete(cleanupKey);
     setSendBtnState(false);
     updateSidebarBadges(); // 同步移除 badge
   }
