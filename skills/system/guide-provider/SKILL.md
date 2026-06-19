@@ -23,7 +23,7 @@ trigger: 用户询问怎么添加供应商、API Key 配置、密钥轮换、供
 | **API 地址** | 供应商的 API 端点，必须以 `/v1` 或完整路径结尾 | `https://api.openai.com/v1`<br>`https://api.siliconflow.cn/v1`<br>`https://api.anthropic.com` |
 | **模型列表** | 该供应商支持的模型名称，支持模型路由 | 输入模型名后按回车添加，如 `gpt-4`、`claude-3-opus` |
 | **API Keys** | 访问供应商的密钥，支持多 Key 轮换 | 点击「+ 添加 Key」添加 |
-| **适配器** | 国内模型适配器，自动处理协议差异 | `qwen`、`deepseek`、`kimi`、`doubao`、`zhipu`、`minimax` |
+| **适配器** | 国内模型适配器，自动处理协议差异 | `qwen`、`deepseek`、`kimi`、`doubao`、`zhipu`、`minimax`、`mimo` |
 | **能力标签** | 该供应商支持的能力列表 | `tools`、`vision`、`json` 等 |
 | **Azure 部署** | Azure OpenAI 部署名称 | 仅 Azure OpenAI 需要 |
 | **Azure API 版本** | Azure OpenAI API 版本 | 如 `2024-02-01` |

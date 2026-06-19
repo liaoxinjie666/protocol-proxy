@@ -43,6 +43,7 @@ Protocol Proxy 是一个 AI API 统一网关，让用户在 Claude Code、Codex 
 | **记忆系统** | 跨对话保持上下文和用户偏好 |
 | **子智能体** | 复杂任务自动拆分，多子代理并行执行 |
 | **MCP 集成** | 接入 MCP 服务器扩展工具能力 |
+| **多模态服务** | 文生图、文生视频、语音合成、文生音乐，按配置动态生成工具 |
 
 ## 典型使用场景
 
@@ -76,4 +77,5 @@ Protocol Proxy 是一个 AI API 统一网关，让用户在 Claude Code、Codex 
 | MCP 扩展 | `/guide-mcp` | 接入 MCP 服务器扩展工具 |
 | 智控助手 | `/guide-assistant` | 对话管理、技能系统、子智能体 |
 | 监控日志 | `/guide-monitoring` | 用量统计、请求日志、系统日志 |
+| 多模态服务 | `/guide-multimodal` | 文生图、文生视频、语音合成、文生音乐 |
 | 系统设置 | `/guide-settings` | 配置管理、主题、记忆系统 |
