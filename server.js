@@ -1479,7 +1479,7 @@ async function init() {
       type: 'function',
       function: {
         name: 'search_files',
-        description: '按文件名模式搜索文件，支持通配符（如 *.js、**/*.log）。',
+        description: '按文件名模式搜索文件，支持通配符（如 *.js、**/*.log）。会自动跳过 node_modules 和 .git 目录。最多返回 200 条匹配（matches 字段），完整数量见返回的 total 字段。',
         parameters: {
           type: 'object',
           properties: {
@@ -1494,13 +1494,13 @@ async function init() {
       type: 'function',
       function: {
         name: 'execute_command',
-        description: '执行 shell 命令并返回输出。可以执行任意命令。',
+        description: '执行 shell 命令。受执行策略引擎控制：forbidden 类命令会被直接拒绝，prompt 类命令需用户确认后才执行，allow 类直接执行。可用 get_exec_policy_rules 查看规则、test_exec_policy 预测决策。返回 { exitCode, stdout, stderr }。',
         parameters: {
           type: 'object',
           properties: {
             command: { type: 'string', description: '要执行的 shell 命令' },
             cwd: { type: 'string', description: '工作目录，默认为当前工作目录' },
-            timeout: { type: 'number', description: '超时时间（毫秒），默认 30000' },
+            timeout: { type: 'number', description: '超时时间（毫秒），默认 30000，上限 120000' },
           },
           required: ['command'],
         },
@@ -1786,7 +1786,7 @@ async function init() {
       type: 'function',
       function: {
         name: 'add_mcp_server',
-        description: '添加新的 MCP 服务器。本地进程用 command，远程服务用 url。',
+        description: '添加新的 MCP 服务器。本地进程（stdio）和远程 HTTP 两种方式互斥：本地用 command/args/env，远程用 url/headers，不要同时填写两组。',
         parameters: {
           type: 'object',
           properties: {
@@ -1805,7 +1805,7 @@ async function init() {
       type: 'function',
       function: {
         name: 'update_mcp_server',
-        description: '更新 MCP 服务器配置。',
+        description: '更新 MCP 服务器配置。本地进程与远程方式互斥：传 url 会清除原有 command/args/env，传 command 会清除原有 url/headers。仅切换 enabled 时两组配置都不受影响。按 name 定位目标服务。',
         parameters: {
           type: 'object',
           properties: {
