@@ -43,7 +43,7 @@
     "express": "^4.19.2",
     "jszip": "^3.10.1",
     "pdfjs-dist": "^4.4.168",
-    "ws": "^8.20.1"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "pkg": "^5.8.1"
